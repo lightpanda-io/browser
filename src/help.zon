@@ -113,8 +113,8 @@
     \\                                 which need the DOM.
     \\              pdf                Text-only rendering of the page as a
     \\                                 PDF file (base64 with --json).
-    \\              png                Text-only rendering of the page as a
-    \\                                 PNG image (base64 with --json).
+    \\              png                Rendering of the page as a PNG image
+    \\                                 (base64 with --json); see --png-mode.
     \\              semantic_tree      JSON-serialized semantic tree.
     \\              semantic_tree_text Pruned plain-text semantic tree.
     \\              structured_data    JSON-LD, OpenGraph, Twitter card, meta
@@ -160,6 +160,12 @@
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.
     \\          Defaults to false.
+    \\  --png-mode <MODE>
+    \\          How --dump png draws the page. Allowed values:
+    \\              layout    How the layout engine sees the page. Matching the
+    \\                        positions reported by getBoundingClientRect.
+    \\              reader    The page's text in one readable column.
+    \\          Defaults to layout.
     \\  --strip-mode <STRIP>
     \\          Tag group to remove from dump. Can be passed multiple times.
     \\          Defaults to stripping nothing.

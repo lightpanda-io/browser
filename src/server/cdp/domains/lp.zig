@@ -216,7 +216,7 @@ fn dump(cmd: anytype) !void {
             if (params.maxBytes != null) {
                 return error.InvalidParams;
             }
-            const opts: lp.screenshot.Opts = .fromViewport(cmd.cdp.browser.getViewport(), true);
+            const opts: lp.screenshot.Opts = .fromViewport(cmd.cdp.browser.getViewport(), true, .layout);
             const prepared = try lp.screenshot.preparePng(cmd.arena, state, opts, frame);
             return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
         },

@@ -524,7 +524,7 @@ fn getPageSource(cmd: *BiDi.Command) !void {
 // GET /session/{id}/screenshot.
 fn takeScreenshot(cmd: *BiDi.Command) !void {
     const frame = (try currentFrame(cmd)) orelse return;
-    const opts: lp.screenshot.Opts = .fromViewport(cmd.bidi.browser.getViewport(), false);
+    const opts: lp.screenshot.Opts = .fromViewport(cmd.bidi.browser.getViewport(), false, .layout);
     const shot = try lp.screenshot.preparePng(cmd.arena, .{ .root = frame.window._document.asNode() }, opts, frame);
     return cmd.sendResult(shot);
 }

@@ -24,6 +24,7 @@ const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
+const page_layout = @import("layout.zig");
 const Viewport = @import("Viewport.zig");
 const RenderTree = @import("RenderTree.zig");
 const StyleManager = @import("StyleManager.zig");
@@ -35,11 +36,19 @@ const Slot = @import("webapi/element/html/Slot.zig");
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 
+pub const Mode = enum {
+    reader,
+    layout,
+};
+
 pub const Opts = struct {
     width: u32,
     height: u32 = 0,
     clip: ?Clip = null,
     scale: f32 = 1.0,
+    mode: Mode = .reader,
+    // Layout mode: draw each box's edges, to see where the layout put it.
+    outline: bool = false,
 
     const Clip = struct {
         x: f32,
@@ -49,11 +58,12 @@ pub const Opts = struct {
     };
 
     /// Height 0 renders the whole content instead of one viewport.
-    pub fn fromViewport(viewport: Viewport, full_page: bool) Opts {
+    pub fn fromViewport(viewport: Viewport, full_page: bool, mode: Mode) Opts {
         return .{
             .width = viewport.width,
             .height = if (full_page) 0 else viewport.height,
             .scale = viewport.scale,
+            .mode = mode,
         };
     }
 };
@@ -182,8 +192,8 @@ pub fn png(arena: Allocator, state: RenderTree.State, opts: Opts, writer: *std.I
 }
 
 /// The height a render at `width` would have.
-pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
-    const prepared = try preparePng(arena, .{ .root = node }, .{ .width = width }, frame);
+pub fn contentHeight(arena: Allocator, node: *Node, width: u32, mode: Mode, frame: *Frame) !u32 {
+    const prepared = try preparePng(arena, .{ .root = node }, .{ .width = width, .mode = mode }, frame);
     return prepared.measure();
 }
 
@@ -196,7 +206,10 @@ pub fn preparePng(arena: Allocator, state: RenderTree.State, opts: Opts, frame: 
     }
     return .{
         .opts = opts,
-        .blocks = try collect(arena, state, frame),
+        .content = switch (opts.mode) {
+            .reader => .{ .reader = try collect(arena, state, frame) },
+            .layout => .{ .layout = try collectBoxes(arena, state, opts, frame) },
+        },
         .renderer = try rendererFor(frame),
     };
 }
@@ -229,8 +242,13 @@ fn renderFailed(comptime what: []const u8, rc: i32) error{WriteFailed} {
 
 pub const Prepared = struct {
     opts: Opts,
-    blocks: []const LpBlock,
+    content: Content,
     renderer: *Renderer,
+
+    const Content = union(Mode) {
+        reader: []const LpBlock,
+        layout: []const LpBox,
+    };
 
     pub fn write(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!u32 {
         return self.render(writer, 0);
@@ -257,7 +275,7 @@ pub const Prepared = struct {
         const clip = opts.clip orelse Opts.Clip{ .x = 0, .y = 0, .width = 0, .height = 0 };
         var content_height: u32 = 0;
         var sink: Sink = .{ .writer = writer };
-        const rc = lp_render_png(self.renderer, self.blocks.ptr, self.blocks.len, .{
+        const render_opts: LpRenderOpts = .{
             .width = opts.width,
             .height = opts.height,
             .clip_x = clip.x,
@@ -266,7 +284,11 @@ pub const Prepared = struct {
             .clip_h = clip.height,
             .scale = opts.scale,
             .flags = flags,
-        }, &content_height, &sink, Sink.write);
+        };
+        const rc = switch (self.content) {
+            .reader => |blocks| lp_render_png(self.renderer, blocks.ptr, blocks.len, render_opts, &content_height, &sink, Sink.write),
+            .layout => |boxes| lp_render_boxes_png(self.renderer, boxes.ptr, boxes.len, render_opts, &content_height, &sink, Sink.write),
+        };
 
         if (rc == RC_OK) {
             return content_height;
@@ -335,6 +357,20 @@ pub const LpBlock = extern struct {
         rule = 3,
     };
 };
+
+// A box placed by the page's layout, in CSS px from the output's top-left.
+const LpBox = extern struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    spans: [*]const LpSpan,
+    spans_len: usize,
+    font_size: f32,
+    flags: u32,
+};
+
+const BOX_OUTLINE: u32 = 1 << 0;
 
 const LpRenderOpts = extern struct {
     width: u32,
@@ -492,6 +528,18 @@ const LpAbi = extern struct {
     block_quote_depth: u32,
     block_flags: u32,
 
+    box_size: u32,
+    box_align: u32,
+    box_x: u32,
+    box_y: u32,
+    box_width: u32,
+    box_height: u32,
+    box_spans: u32,
+    box_spans_len: u32,
+    box_font_size: u32,
+    box_flags: u32,
+    box_outline: u32,
+
     opts_size: u32,
     opts_align: u32,
     opts_width: u32,
@@ -617,6 +665,15 @@ extern "c" fn lp_render_png(
     r: *Renderer,
     blocks: [*]const LpBlock,
     blocks_len: usize,
+    opts: LpRenderOpts,
+    content_height: *u32,
+    ctx: *anyopaque,
+    write: *const fn (ctx: *anyopaque, data: [*]const u8, len: usize) callconv(.c) bool,
+) i32;
+extern "c" fn lp_render_boxes_png(
+    r: *Renderer,
+    boxes: [*]const LpBox,
+    boxes_len: usize,
     opts: LpRenderOpts,
     content_height: *u32,
     ctx: *anyopaque,
@@ -1107,6 +1164,356 @@ fn isBlockTag(tag: Element.Tag) bool {
     };
 }
 
+// The layout render: a box for every element the page's layout places on its
+// own, where layout.zig puts it, with the text of the inline content in it.
+// Layout has no positions for the text on a line, so an element's inline
+// text starts at its box's top-left corner and wraps at its width; text
+// after a block child starts below that child.
+pub fn collectBoxes(arena: Allocator, state: RenderTree.State, opts: Opts, frame: *Frame) ![]const LpBox {
+    var collector: BoxCollector = .{
+        .frame = frame,
+        .arena = arena,
+        .tree = .{ .frame = frame, .state = state },
+        .box_flags = if (opts.outline) BOX_OUTLINE else 0,
+    };
+    const root = state.root;
+    if (root.is(Element)) |el| {
+        // A node's render starts at its own corner
+        collector.origin_x = el.horizontalPosition(frame);
+        collector.origin_y = page_layout.boxTop(el, el.ownerFrame(frame) orelse frame);
+    } else if (opts.height != 0 and opts.clip == null) {
+        // One viewport: the one scrolled to
+        collector.origin_x = @floatFromInt(frame.window.getScrollX());
+        collector.origin_y = @floatFromInt(frame.window.getScrollY());
+    }
+    try collector.render(root, @floatFromInt(opts.width));
+    return collector.boxes.items;
+}
+
+// Iterative else large trees will stackoverflow
+const BoxCollector = struct {
+    frame: *Frame,
+    arena: Allocator,
+    tree: RenderTree,
+    origin_x: f64 = 0,
+    origin_y: f64 = 0,
+    // Of an element's box; the text after a block child never has any
+    box_flags: u32,
+
+    boxes: std.ArrayList(LpBox) = .empty,
+    // Content still to render, followed by what closes the element.
+    stack: std.ArrayList(Open) = .empty,
+    // The text being collected for each open box, innermost last.
+    segments: std.ArrayList(Segment) = .empty,
+    // The segments' unfinished spans and the text of their unfinished span,
+    // stacked like the segments are: only the innermost one grows.
+    spans: std.ArrayList(LpSpan) = .empty,
+    text: std.ArrayList(u8) = .empty,
+
+    // Inline style nesting.
+    bold: u8 = 0,
+    italic: u8 = 0,
+    link: u8 = 0,
+    mono: u8 = 0,
+    pre: u8 = 0,
+
+    const Error = Allocator.Error;
+
+    const Open = struct {
+        iter: RenderTree.Slotted,
+        close: Close,
+    };
+
+    const Close = union(enum) {
+        none,
+        // an element folded into its box's text
+        inline_element: Style,
+        box: BoxClose,
+    };
+
+    const BoxClose = struct {
+        style: Style,
+        // A block: the text after it goes below it
+        breaks: bool,
+        index: u32,
+    };
+
+    const Style = packed struct {
+        bold: bool = false,
+        italic: bool = false,
+        link: bool = false,
+        mono: bool = false,
+        pre: bool = false,
+
+        fn of(el: *Element, tag: Element.Tag) Style {
+            return .{
+                .bold = switch (tag) {
+                    .b, .strong, .th, .h1, .h2, .h3, .h4, .h5, .h6 => true,
+                    else => false,
+                },
+                .italic = switch (tag) {
+                    .i, .em, .dfn => true,
+                    else => false,
+                },
+                .link = tag == .a and el.getAttributeInterned("href") != null,
+                .mono = switch (tag) {
+                    .code, .kbd, .samp => true,
+                    else => false,
+                },
+                .pre = tag == .pre,
+            };
+        }
+    };
+
+    // The inline text of one box, up to the next block child. Text after
+    // that goes in a box of its own (without an outline), below the child.
+    const Segment = struct {
+        // In `boxes`; null until text arrives
+        box: ?u32,
+        x: f32,
+        width: f32,
+        // Where a new box for the text starts
+        next_y: f32,
+        font_size: f32,
+        // Where its own start in the collector's `spans` and `text`
+        spans_start: u32,
+        text_start: u32,
+        text_flags: u32 = 0,
+        pending_space: bool = false,
+    };
+
+    fn render(self: *BoxCollector, root: *Node, width: f32) Error!void {
+        try self.segments.append(self.arena, .{ .box = null, .x = 0, .width = width, .next_y = 0, .font_size = 16, .spans_start = 0, .text_start = 0 });
+        switch (root._type) {
+            .document, .document_fragment => try self.open(.init(self.tree.children(root, false)), .none),
+            else => if (self.tree.classify(root, .{})) |child| try self.renderChild(child),
+        }
+
+        while (self.stack.items.len > 0) {
+            // renderChild can grow the stack, so we can't re-use top on continue
+            const top = &self.stack.items[self.stack.items.len - 1];
+            if (top.iter.next()) |child| {
+                try self.renderChild(child);
+                continue;
+            }
+            try self.close(self.stack.pop().?.close);
+        }
+        try self.endSegment(self.segment());
+    }
+
+    fn open(self: *BoxCollector, iter: RenderTree.Slotted, close_with: Close) Error!void {
+        return self.stack.append(self.arena, .{ .iter = iter, .close = close_with });
+    }
+
+    fn segment(self: *BoxCollector) *Segment {
+        return &self.segments.items[self.segments.items.len - 1];
+    }
+
+    fn renderChild(self: *BoxCollector, child: RenderTree.Child) Error!void {
+        if (child.separated) self.segment().pending_space = true;
+        switch (child.what) {
+            .element => |display| try self.renderElement(child.node.as(Element), display),
+            .text => |text| try self.renderText(text),
+        }
+    }
+
+    fn renderElement(self: *BoxCollector, el: *Element, display: StyleManager.Display) Error!void {
+        const tag = el.getTag();
+        switch (tag) {
+            .br => return self.append(self.segment(), "\n"),
+            .slot => return self.open(self.tree.slotted(el.as(Slot)), .none),
+            else => {},
+        }
+        const owner = el.ownerFrame(self.frame) orelse self.frame;
+        const style_manager = &owner._style_manager;
+        const role = style_manager.flowRole(el);
+        if (role == .none) {
+            return;
+        }
+        const style: Style = .of(el, tag);
+        const content = self.tree.content(el, display == .flex or display == .grid);
+
+        // Lays out as a box of its own: a block, a positioned box, a flex
+        // row's item or a table cell, a grid item, a replaced element
+        const owns_box = role != .line or isReplaced(tag) or switch (style_manager.alongside(el)) {
+            .row, .grid => true,
+            .block, .line => false,
+        };
+        if (owns_box == false) {
+            self.applyStyle(style, 1);
+            return self.open(.init(content), .{ .inline_element = style });
+        }
+
+        const breaks = role == .block;
+        if (breaks) {
+            try self.endSegment(self.segment());
+        }
+        const x = finite(el.horizontalPosition(self.frame) - self.origin_x);
+        const y = finite(page_layout.boxTop(el, owner) - self.origin_y);
+        const width = finite(page_layout.boxWidth(el, owner));
+        const font_size = finite(style_manager.computedFontSize(el));
+        const index: u32 = @intCast(self.boxes.items.len);
+        try self.boxes.append(self.arena, .{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = finite(page_layout.boxHeight(el, owner)),
+            .spans = &.{},
+            .spans_len = 0,
+            .font_size = font_size,
+            .flags = self.box_flags,
+        });
+        try self.segments.append(self.arena, .{
+            .box = index,
+            .x = x,
+            .width = width,
+            .next_y = y,
+            .font_size = font_size,
+            .spans_start = @intCast(self.spans.items.len),
+            .text_start = @intCast(self.text.items.len),
+        });
+
+        self.applyStyle(style, 1);
+        if (tag == .img) {
+            if (el.getAttributeInterned("alt")) |alt| {
+                self.italic += 1;
+                try self.renderText(alt);
+                self.italic -= 1;
+            }
+        }
+        return self.open(.init(content), .{ .box = .{ .style = style, .breaks = breaks, .index = index } });
+    }
+
+    fn close(self: *BoxCollector, close_with: Close) Error!void {
+        switch (close_with) {
+            .none => {},
+            .inline_element => |style| self.applyStyle(style, -1),
+            .box => |b| {
+                self.applyStyle(b.style, -1);
+                try self.endSegment(self.segment());
+                _ = self.segments.pop();
+                if (b.breaks) {
+                    const child = self.boxes.items[b.index];
+                    self.segment().next_y = child.y + child.height;
+                }
+            },
+        }
+    }
+
+    fn applyStyle(self: *BoxCollector, style: Style, comptime delta: i2) void {
+        inline for (.{ "bold", "italic", "link", "mono", "pre" }) |name| {
+            if (@field(style, name)) {
+                if (delta > 0) {
+                    @field(self, name) += 1;
+                } else {
+                    @field(self, name) -= 1;
+                }
+            }
+        }
+    }
+
+    fn currentFlags(self: *const BoxCollector) u32 {
+        var flags: u32 = 0;
+        if (self.bold > 0) flags |= SPAN_BOLD;
+        if (self.italic > 0) flags |= SPAN_ITALIC;
+        if (self.link > 0) flags |= SPAN_UNDERLINE | SPAN_HAS_COLOR;
+        if (self.mono > 0 or self.pre > 0) flags |= SPAN_MONO;
+        return flags;
+    }
+
+    fn renderText(self: *BoxCollector, text: []const u8) Error!void {
+        if (text.len == 0) return;
+        const seg = self.segment();
+        if (self.pre > 0) {
+            return self.append(seg, text);
+        }
+        if (isAllWhitespace(text)) {
+            seg.pending_space = true;
+            return;
+        }
+        if (std.ascii.isWhitespace(text[0])) {
+            seg.pending_space = true;
+        }
+        var it = std.mem.tokenizeAny(u8, text, " \t\n\r");
+        while (it.next()) |word| {
+            if (seg.pending_space and (self.text.items.len > seg.text_start or self.spans.items.len > seg.spans_start)) {
+                // In the run before it, so a link's underline doesn't
+                // start at the gap
+                try self.text.append(self.arena, ' ');
+            }
+            try self.append(seg, word);
+            seg.pending_space = true;
+        }
+        seg.pending_space = std.ascii.isWhitespace(text[text.len - 1]);
+    }
+
+    fn append(self: *BoxCollector, seg: *Segment, text: []const u8) Error!void {
+        if (seg.box == null) {
+            // Text after a block child: a box of its own below it
+            seg.box = @intCast(self.boxes.items.len);
+            try self.boxes.append(self.arena, .{
+                .x = seg.x,
+                .y = seg.next_y,
+                .width = seg.width,
+                .height = 0,
+                .spans = &.{},
+                .spans_len = 0,
+                .font_size = seg.font_size,
+                .flags = 0,
+            });
+        }
+        const flags = self.currentFlags();
+        if (self.text.items.len > seg.text_start and flags != seg.text_flags) {
+            try self.flushSpan(seg);
+        }
+        seg.text_flags = flags;
+        try self.text.appendSlice(self.arena, text);
+    }
+
+    fn flushSpan(self: *BoxCollector, seg: *Segment) Error!void {
+        if (self.text.items.len == seg.text_start) return;
+        const copy = try self.arena.dupe(u8, self.text.items[seg.text_start..]);
+        try self.spans.append(self.arena, .{
+            .text = copy.ptr,
+            .len = copy.len,
+            .flags = seg.text_flags,
+            .color = if (seg.text_flags & SPAN_HAS_COLOR != 0) LINK_COLOR else 0,
+            .href = "",
+            .href_len = 0,
+        });
+        self.text.shrinkRetainingCapacity(seg.text_start);
+    }
+
+    // Hands the segment's text to its box; more text starts a new box.
+    fn endSegment(self: *BoxCollector, seg: *Segment) Error!void {
+        try self.flushSpan(seg);
+        if (seg.box) |index| {
+            if (self.spans.items.len > seg.spans_start) {
+                const spans = try self.arena.dupe(LpSpan, self.spans.items[seg.spans_start..]);
+                const b = &self.boxes.items[index];
+                b.spans = spans.ptr;
+                b.spans_len = spans.len;
+            }
+        }
+        self.spans.shrinkRetainingCapacity(seg.spans_start);
+        seg.box = null;
+        seg.pending_space = false;
+    }
+
+    // The Rust side refuses a box with a non-finite edge
+    fn finite(value: f64) f32 {
+        const v: f32 = @floatCast(value);
+        return if (std.math.isFinite(v)) v else 0;
+    }
+
+    fn isReplaced(tag: Element.Tag) bool {
+        return switch (tag) {
+            .img, .input, .textarea, .select, .button, .iframe, .video, .audio, .canvas, .svg, .object, .embed => true,
+            else => false,
+        };
+    }
+};
+
 const testing = @import("../testing.zig");
 test "browser.screenshot: rust abi matches" {
     var got: LpAbi = undefined;
@@ -1135,6 +1542,18 @@ test "browser.screenshot: rust abi matches" {
         .block_list_depth = @offsetOf(LpBlock, "list_depth"),
         .block_quote_depth = @offsetOf(LpBlock, "quote_depth"),
         .block_flags = @offsetOf(LpBlock, "flags"),
+
+        .box_size = @sizeOf(LpBox),
+        .box_align = @alignOf(LpBox),
+        .box_x = @offsetOf(LpBox, "x"),
+        .box_y = @offsetOf(LpBox, "y"),
+        .box_width = @offsetOf(LpBox, "width"),
+        .box_height = @offsetOf(LpBox, "height"),
+        .box_spans = @offsetOf(LpBox, "spans"),
+        .box_spans_len = @offsetOf(LpBox, "spans_len"),
+        .box_font_size = @offsetOf(LpBox, "font_size"),
+        .box_flags = @offsetOf(LpBox, "flags"),
+        .box_outline = BOX_OUTLINE,
 
         .opts_size = @sizeOf(LpRenderOpts),
         .opts_align = @alignOf(LpRenderOpts),
@@ -1290,7 +1709,7 @@ test "browser.screenshot: fixed height, clip and scale" {
     try testing.expectEqual(600, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(100, std.mem.readInt(u32, aw.written()[20..24], .big));
 
-    try testing.expectEqual(content_height, try contentHeight(frame.call_arena, div.asNode(), 300, frame));
+    try testing.expectEqual(content_height, try contentHeight(frame.call_arena, div.asNode(), 300, .reader, frame));
 
     aw.clearRetainingCapacity();
     _ = try png(frame.call_arena, .{ .root = div.asNode() }, .{
@@ -1309,7 +1728,7 @@ test "browser.screenshot: a clip past the viewport extends the strip" {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p>");
 
-    const full = try contentHeight(testing.arena_allocator, div.asNode(), 300, frame);
+    const full = try contentHeight(testing.arena_allocator, div.asNode(), 300, .reader, frame);
     try testing.expectEqual(true, full > 100);
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
@@ -1676,6 +2095,82 @@ test "browser.screenshot: deep nesting doesn't overflow the native stack" {
     try testing.expectEqual(1, blocks.len);
     try testing.expectEqual(1, blocks[0].spans_len);
     try testing.expectEqual("deep", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
+}
+
+fn layoutTestBody(frame: *Frame, html: []const u8) !*Node {
+    const doc = frame.document;
+    const root = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(root, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try root.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, html);
+    return body;
+}
+
+fn boxText(b: LpBox, arena: Allocator) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (b.spans[0..b.spans_len]) |span| {
+        try out.appendSlice(arena, span.text[0..span.len]);
+    }
+    return out.items;
+}
+
+test "browser.screenshot: layout boxes sit where the layout puts them" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const body = try layoutTestBody(frame,
+        \\<div style="height: 40px">one</div><p style="width: 100px">two <b>words</b></p><div><span>before</span><p>mid</p>after</div>
+    );
+    const browser = frame.page.session.browser;
+    browser.setViewportOverride(.{ .width = 400, .height = 300, .scale = 1 });
+    defer browser.setViewportOverride(null);
+
+    const arena = testing.arena_allocator;
+    const boxes = try collectBoxes(arena, .{ .root = frame.document.asNode() }, .{ .width = 400, .mode = .layout, .outline = true }, frame);
+
+    // html, body, div, p, div, p, and the text after the inner p
+    try testing.expectEqual(7, boxes.len);
+
+    const first = body.firstChild().?.as(Element);
+    const p = first.asNode().nextSibling().?.as(Element);
+    const wrapper = p.asNode().nextSibling().?.as(Element);
+    const inner_p = wrapper.asNode().firstChild().?.nextSibling().?.as(Element);
+    for ([_]*Element{ first, p, wrapper, inner_p }, [_]usize{ 2, 3, 4, 5 }) |el, i| {
+        const b = boxes[i];
+        try testing.expectEqual(BOX_OUTLINE, b.flags);
+        try testing.expectEqual(@as(f32, @floatCast(page_layout.boxTop(el, frame))), b.y);
+        try testing.expectEqual(@as(f32, @floatCast(el.horizontalPosition(frame))), b.x);
+        try testing.expectEqual(@as(f32, @floatCast(page_layout.boxWidth(el, frame))), b.width);
+        try testing.expectEqual(@as(f32, @floatCast(page_layout.boxHeight(el, frame))), b.height);
+    }
+    try testing.expectEqual(40, boxes[3].y);
+    try testing.expectEqual(100, boxes[3].width);
+
+    try testing.expectEqual("one", try boxText(boxes[2], arena));
+    try testing.expectEqual("two words", try boxText(boxes[3], arena));
+    try testing.expectEqual(SPAN_BOLD, boxes[3].spans[1].flags);
+    // The inline text before a block stays in its parent's box...
+    try testing.expectEqual("before", try boxText(boxes[4], arena));
+    try testing.expectEqual("mid", try boxText(boxes[5], arena));
+    // ...the text after it goes below it, unoutlined
+    try testing.expectEqual(0, boxes[6].flags);
+    try testing.expectEqual(boxes[5].y + boxes[5].height, boxes[6].y);
+    try testing.expectEqual("after", try boxText(boxes[6], arena));
+}
+
+test "browser.screenshot: layout png" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    _ = try layoutTestBody(frame, "<div style='height: 500px'>tall</div><p>below</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const height = try png(testing.arena_allocator, .{ .root = frame.document.asNode() }, .{ .width = 320, .mode = .layout }, &aw.writer, frame);
+    try testing.expectEqual("\x89PNG\r\n\x1a\n", aw.written()[0..8]);
+    try testing.expectEqual(320, std.mem.readInt(u32, aw.written()[16..20], .big));
+    // Down to the bottom of the last box
+    try testing.expectEqual(true, height > 500);
+    try testing.expectEqual(height, std.mem.readInt(u32, aw.written()[20..24], .big));
+    try testing.expectEqual(height, try contentHeight(testing.arena_allocator, frame.document.asNode(), 320, .layout, frame));
 }
 
 test "browser.screenshot: --render-font faces fill what DejaVu lacks" {

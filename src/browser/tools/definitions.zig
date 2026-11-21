@@ -122,7 +122,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .screenshot => .{
-            .description = std.fmt.comptimePrint("Render the page, or one node, as a PNG: the text layout Lightpanda computes, not a pixel-accurate browser rendering (no images, fonts or CSS colours). With `path`, writes the file at full size and returns its location; without it, returns the image inline where the client can display one, at most {d}px wide and {d}px tall. Use it to see spatial layout; read content with `markdown`/`tree`.", .{ inline_image_max_width, inline_image_max_height }),
+            .description = std.fmt.comptimePrint("Render the page, or one node, as a PNG. Not a pixel-accurate browser rendering (no images, fonts or CSS colours). Mode `reader` (default) flows the text into one readable column; mode `layout` outlines every box where the page's layout places it, with its text, at the coordinates clicks and hit-testing use. With `path`, writes the file at full size and returns its location; without it, returns the image inline where the client can display one, at most {d}px wide and {d}px tall. Use it to see spatial layout; read content with `markdown`/`tree`.", .{ inline_image_max_width, inline_image_max_height }),
             .summary = "Screenshot of the page or a node",
             .input_schema = minify(
                 \\{
@@ -132,6 +132,7 @@ pub fn of(tool: Tool) Definition {
                 \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, render only that element." },
                 \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
                 \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
+                \\    "mode": { "type": "string", "enum": ["reader", "layout"], "description": "Optional. `reader` (default): the text in one readable column. `layout`: boxes where the page's layout places them." },
                 \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the render; same groups as the html tool's strip (`js`, `css`, `ui`, `invisible`, `shell`, `clutter`).", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
                 \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering. An empty string is treated as omitted." },
                 \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
