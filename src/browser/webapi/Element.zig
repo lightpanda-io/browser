@@ -1675,11 +1675,12 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }
     }
 
-    // Root containers span the document, see Document.extent.
+    // Root containers span the document, see Document.extent
     if (root) {
+        const doc = self.asNode().ownerDocument(frame) orelse return .{ .value = 0.0 };
         return .{ .value = switch (axis) {
             .width => 1920.0,
-            .height => if (self.asNode().ownerDocument(frame)) |doc| doc.extent().height else 0.0,
+            .height => if (tag == .body) doc.bodyHeight(self) else doc.extent().height,
         } };
     }
 

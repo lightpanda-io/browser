@@ -513,13 +513,12 @@ pub fn extent(self: *Document) Extent {
     const style_manager = &frame._style_manager;
     var size: Extent = .{ .width = 0, .height = 0 };
 
-    // Content heights only: html's and body's own heights are this extent.
+    // html's own height is this extent
     const html_body = if (self.is(HTMLDocument) != null) self.getBody() else null;
     if (html_body) |b| {
         const body = b.asElement();
-        // Only grows it: positions laid out past a shorter one must still fit
-        const declared = @max(style_manager.rootHeight(body) orelse 0, if (self.getDocumentElement()) |html| style_manager.rootHeight(html) orelse 0 else 0);
-        size.height = @max(layout.contentHeight(body, frame), declared);
+        const html_declared = if (self.getDocumentElement()) |html| style_manager.rootHeight(html) orelse 0 else 0;
+        size.height = @max(self.bodyHeight(body), html_declared);
         size.width = style_manager.inlineSize(body, .width) orelse 0;
         var children: TreeWalker.FlatChildren = .init(body.asNode(), .{ .frame = frame });
         while (children.next()) |node| {
@@ -529,7 +528,7 @@ pub fn extent(self: *Document) Extent {
             }
         }
     } else if (self.getDocumentElement()) |root| {
-        size.height = layout.contentHeight(root, frame);
+        size.height = @max(layout.contentHeight(root, frame), style_manager.rootHeight(root) orelse 0);
     }
 
     // Whole pixels, like scroll offsets
@@ -539,6 +538,15 @@ pub fn extent(self: *Document) Extent {
         .extent = size,
     };
     return size;
+}
+
+/// The root body's height: its content, or its declared height when taller (a
+/// declared height only grows it, so positions laid out past it still fit).
+/// Not html's: `html { height: 100% }` leaves an empty body 0px tall.
+pub fn bodyHeight(self: *Document, body: *Element) f64 {
+    const frame = self._frame orelse return 0;
+    const declared = frame._style_manager.rootHeight(body) orelse 0;
+    return @ceil(@max(layout.contentHeight(body, frame), declared));
 }
 
 /// What the viewport scrolls over: the document, at least viewport-sized.
