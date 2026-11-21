@@ -7,7 +7,6 @@
 
 <script id=body_keeps_its_own_height>
 {
-  // From #4724's review: html's height isn't body's
   testing.expectEqual(innerHeight, document.documentElement.offsetHeight);
   testing.expectEqual(0, document.body.offsetHeight);
   testing.expectEqual(0, document.body.getBoundingClientRect().height);

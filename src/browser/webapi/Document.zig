@@ -513,7 +513,6 @@ pub fn extent(self: *Document) Extent {
     const style_manager = &frame._style_manager;
     var size: Extent = .{ .width = 0, .height = 0 };
 
-    // html's own height is this extent
     const html_body = if (self.is(HTMLDocument) != null) self.getBody() else null;
     if (html_body) |b| {
         const body = b.asElement();
@@ -540,9 +539,7 @@ pub fn extent(self: *Document) Extent {
     return size;
 }
 
-/// The root body's height: its content, or its declared height when taller (a
-/// declared height only grows it, so positions laid out past it still fit).
-/// Not html's: `html { height: 100% }` leaves an empty body 0px tall.
+/// A declared height only grows it: positions laid out past it must still fit.
 pub fn bodyHeight(self: *Document, body: *Element) f64 {
     const frame = self._frame orelse return 0;
     const declared = frame._style_manager.rootHeight(body) orelse 0;
