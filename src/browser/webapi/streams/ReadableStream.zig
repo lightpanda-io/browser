@@ -52,6 +52,8 @@ _stored_error: ?js.Value.Global,
 _pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
 _pull_again: bool = false,
+/// Set until what the source's start() returned settles. No pull before that.
+_starting: bool = false,
 _cancel_fn: ?js.Function.Global = null,
 _collected: bool = false,
 _disturbed: bool = false, // once cancelled, cannot be consumed again
@@ -82,19 +84,46 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const 
     self._controller = try ReadableStreamDefaultController.init(self, strategy.highWaterMark, exec);
 
     if (src_) |src| {
-        if (src.start) |start| {
-            try start.callRethrow(void, .{self._controller});
-        }
-
         self._cancel_fn = src.cancel;
-
-        if (src.pull) |pull| {
-            self._pull_fn = pull;
-            try self.callPullIfNeeded();
-        }
+        self._pull_fn = src.pull;
+        try self.start(src.start);
     }
 
     return self;
+}
+
+/// As in the spec, the first pull waits for what start() returned to settle,
+/// and a rejection errors the stream. When start() is missing or returns
+/// nothing, the spec still waits a microtask, but this pulls right away:
+/// Request and clone() read a stream body synchronously, so a pull-only body
+/// has to be filled by then.
+fn start(self: *ReadableStream, start_fn: ?js.Function) !void {
+    // no pull while start() runs, even if it enqueues
+    self._starting = true;
+    const result = if (start_fn) |f| try f.callRethrow(js.Value, .{self._controller}) else null;
+    const value = result orelse return self.onStartFulfilled();
+    if (value.isUndefined()) {
+        return self.onStartFulfilled();
+    }
+
+    const local = self._execution.js.local.?;
+    const started = if (value.isPromise()) value.toPromise() else try local.resolvePromise(value);
+    const then_fn = local.newCallback(onStartFulfilled, self);
+    const catch_fn = local.newCallback(onStartRejected, self);
+    _ = try started.thenAndCatch(then_fn, catch_fn);
+}
+
+fn onStartFulfilled(self: *ReadableStream) void {
+    self._starting = false;
+    self.callPullIfNeeded() catch |err| {
+        log.warn(.js, "stream start", .{ .err = err });
+    };
+}
+
+fn onStartRejected(self: *ReadableStream, reason: js.Value) void {
+    self._controller.fail(reason.local, reason) catch |err| {
+        log.warn(.js, "stream start rejected", .{ .err = err });
+    };
 }
 
 pub fn initWithData(data: []const u8, exec: *const Execution) !*ReadableStream {
@@ -261,7 +290,7 @@ fn shouldCallPull(self: *const ReadableStream) bool {
         return false;
     }
 
-    if (self._pull_fn == null) {
+    if (self._pull_fn == null or self._starting) {
         return false;
     }
 
