@@ -26,6 +26,9 @@ const ReadableStreamDefaultReader = @This();
 
 _stream: ?*ReadableStream,
 _execution: *const Execution,
+/// Backs `closed`. Created on first access, since readers used internally
+/// (pipeTo, tee, async iteration) never look at it.
+_closed: ?js.PromiseResolver.Global = null,
 
 pub fn init(stream: *ReadableStream, exec: *const Execution) !*ReadableStreamDefaultReader {
     return exec._factory.create(ReadableStreamDefaultReader{
@@ -82,20 +85,79 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
 }
 
 pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
-    if (self._stream) |stream| {
-        stream.releaseReader();
-        self._stream = null;
+    const stream = self._stream orelse return;
+    stream.releaseReader();
+    self._stream = null;
+
+    // As in the spec, a pending `closed` rejects. A settled one is dropped,
+    // so the next access gets a rejected one.
+    const closed = self._closed orelse return;
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+    const resolver = ls.toLocal(closed);
+    if (resolver.promise().state() == .pending) {
+        rejectReleased(&ls.local, resolver);
+    } else {
+        closed.release();
+        self._closed = null;
     }
 }
 
+/// Like the spec, the reader keeps its lock: `closed` resolves and later
+/// reads are done.
 pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?js.Value, exec: *const Execution) !js.Promise {
     const stream = self._stream orelse {
         return exec.js.typeError("Reader has been released");
     };
-
-    self.releaseLock();
-
     return stream.cancel(reason_, exec);
+}
+
+pub fn getClosed(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self._closed) |closed| {
+        return local.toLocal(closed).promise();
+    }
+
+    const resolver = local.createPromiseResolver();
+    self._closed = try resolver.persist();
+    if (self._stream) |stream| {
+        switch (stream._state) {
+            .readable => {},
+            .closed => if (stream._controller._queue.items.len == 0) {
+                resolver.resolve("ReadableStreamDefaultReader.closed", {});
+            },
+            .errored => rejectClosed(resolver, local.toLocal(stream._stored_error.?)),
+        }
+    } else {
+        rejectReleased(local, resolver);
+    }
+    return resolver.promise();
+}
+
+/// The stream closed and its queue is drained.
+pub fn streamClosed(self: *ReadableStreamDefaultReader) void {
+    const closed = self._closed orelse return;
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+    ls.toLocal(closed).resolve("ReadableStreamDefaultReader.closed", {});
+}
+
+pub fn streamErrored(self: *ReadableStreamDefaultReader, reason: js.Value) void {
+    const closed = self._closed orelse return;
+    rejectClosed(reason.local.toLocal(closed), reason);
+}
+
+/// Like the spec, `closed` rejecting is never reported as unhandled.
+fn rejectClosed(resolver: js.PromiseResolver, reason: js.Value) void {
+    resolver.promise().markAsHandled();
+    resolver.reject("ReadableStreamDefaultReader.closed", reason);
+}
+
+fn rejectReleased(local: *const js.Local, resolver: js.PromiseResolver) void {
+    const err = local.isolate.createTypeError("Reader has been released");
+    rejectClosed(resolver, .{ .local = local, .handle = err });
 }
 
 pub const JsApi = struct {
@@ -109,4 +171,5 @@ pub const JsApi = struct {
     pub const read = bridge.function(ReadableStreamDefaultReader.read, .{});
     pub const cancel = bridge.function(ReadableStreamDefaultReader.cancel, .{});
     pub const releaseLock = bridge.function(ReadableStreamDefaultReader.releaseLock, .{});
+    pub const closed = bridge.accessor(ReadableStreamDefaultReader.getClosed, null, .{});
 };
