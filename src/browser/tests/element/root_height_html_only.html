@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<style>html { height: 100%; }</style>
+<body>
+<script src="../testing.js"></script>
+
+<script id=body_keeps_its_own_height>
+{
+  testing.expectEqual(innerHeight, document.documentElement.offsetHeight);
+  testing.expectEqual(0, document.body.offsetHeight);
+  testing.expectEqual(0, document.body.getBoundingClientRect().height);
+}
+</script>
+</body>
