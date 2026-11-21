@@ -515,7 +515,7 @@ test "completion: fish" {
         "complete -c lp -n __fish_use_subcommand -a fetch -d 'fetches the specified URL'\n",
         "complete -c lp -n '__fish_seen_subcommand_from fetch' -l with-base -d ",
         "complete -c lp -n '__fish_seen_subcommand_from fetch' -l cookie -r -F -d ",
-        "complete -c lp -n '__fish_seen_subcommand_from fetch' -l dump -x -a 'html\\t\"Serialized HTML of the DOM\" markdown\\t\"Converts content to Markdown\" png\\t\"Text-only rendering of the page as a PNG image (base64 with --json)\" ",
+        "complete -c lp -n '__fish_seen_subcommand_from fetch' -l dump -x -a 'html\\t\"Serialized HTML of the DOM\" markdown\\t\"Converts content to Markdown\" png\\t\"Rendering of the page as a PNG image (base64 with --json); see --png-mode\" ",
         "complete -c lp -n '__fish_seen_subcommand_from fetch' -l load-resources -x -a '(__lp_list image\\t\"<img> sources, so that load/error reflects the real HTTP status\" iframe\\t\"When enabled, <iframe> elements are fully loaded\" worker\\t\"Enable loading dedicated and shared workers\" stylesheet\\t",
         "complete -c lp -n '__fish_seen_subcommand_from agent' -l attach -s a -r -F -d ",
         "complete -c lp -n '__fish_seen_subcommand_from run' -F\n",
