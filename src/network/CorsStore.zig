@@ -155,16 +155,17 @@ fn matches(entry: Entry, method: http.Method, authored_headers: []const []const 
     if (!isSafelistedMethod(method) and !entry.methods_wildcard and !entry.methods.contains(method)) {
         return false;
     }
-    for (authored_headers) |name| {
-        if (entry.headers_wildcard) continue;
-        var found = false;
-        for (entry.headers) |allowed| {
-            if (std.ascii.eqlIgnoreCase(allowed, name)) {
-                found = true;
-                break;
+    if (!entry.headers_wildcard) {
+        for (authored_headers) |name| {
+            var found = false;
+            for (entry.headers) |allowed| {
+                if (std.ascii.eqlIgnoreCase(allowed, name)) {
+                    found = true;
+                    break;
+                }
             }
+            if (!found) return false;
         }
-        if (!found) return false;
     }
     return true;
 }

@@ -378,18 +378,17 @@ const CorsPreflightContext = struct {
             };
 
             const headers_wildcard = std.mem.eql(u8, allow_headers, "*") and !self.wants_credentials;
-
-            for (self.request_headers) |name| {
-                if (headers_wildcard) continue;
-
-                if (!headerAllowed(allow_headers, name)) {
-                    log.debug(.cors, "preflight blocked", .{
-                        .url = self.url,
-                        .reason = "header not allowed",
-                        .allow_headers = allow_headers,
-                        .header = name,
-                    });
-                    return false;
+            if (!headers_wildcard) {
+                for (self.request_headers) |name| {
+                    if (!headerAllowed(allow_headers, name)) {
+                        log.debug(.cors, "preflight blocked", .{
+                            .url = self.url,
+                            .reason = "header not allowed",
+                            .allow_headers = allow_headers,
+                            .header = name,
+                        });
+                        return false;
+                    }
                 }
             }
         }
