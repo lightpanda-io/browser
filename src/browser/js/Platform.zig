@@ -76,4 +76,10 @@ pub fn deinit(self: Platform) void {
     v8.v8__Platform__DELETE(self.handle);
 }
 
+pub fn setDefaultTimeZone(id: [:0]const u8) error{UnknownTimeZone}!void {
+    if (!v8.v8__V8__SetDefaultTimeZone(id)) {
+        return error.UnknownTimeZone;
+    }
+}
+
 extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, override: c_int) c_int;

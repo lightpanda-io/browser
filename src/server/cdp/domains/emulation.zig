@@ -248,7 +248,10 @@ fn setTimezoneOverride(cmd: *CDP.Command) !void {
     var buf: [65]u8 = undefined;
     @memcpy(buf[0..id.len], id);
     buf[id.len] = 0;
-    browser.setTimezoneOverride(buf[0..id.len :0]) catch return cmd.sendError(-32602, "Invalid timezone id", .{});
+    browser.setTimezoneOverride(buf[0..id.len :0]) catch |err| switch (err) {
+        error.UnknownTimeZone => return cmd.sendError(-32602, "Invalid timezone id", .{}),
+        error.AlreadyOverridden => return cmd.sendError(-32000, "Timezone override is already in effect", .{}),
+    };
 
     return cmd.sendResult(null, .{});
 }
@@ -329,6 +332,31 @@ test "cdp.Emulation: setTimezoneOverride moves Date and Intl" {
     try ctx.expectSentResult(null, .{ .id = 5 });
     v = try ls.local.exec("zone() + ' ' + offset() === host", null);
     try testing.expect(v.toBool());
+    try testing.expectEqual(false, ctx.cdp().app.timezone_override_held.load(.monotonic));
+}
+
+test "cdp.Emulation: setTimezoneOverride is refused while another browser holds it" {
+    const opts = &testing.base.test_config.mode.serve;
+    opts.cdp_allow_timezone_override = true;
+    defer opts.cdp_allow_timezone_override = false;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-TZ4", .url = "hi.html" });
+
+    // Another connection's browser holds the override.
+    const held = &ctx.cdp().app.timezone_override_held;
+    held.store(true, .monotonic);
+    defer held.store(false, .monotonic);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Asia/Tokyo" } });
+    try ctx.expectSentError(-32000, "Timezone override is already in effect", .{ .id = 1 });
+    try testing.expectEqual(false, ctx.cdp().browser.timezone_overridden);
+
+    // Clearing what this browser never set leaves the holder alone.
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(true, held.load(.monotonic));
 }
 
 test "cdp.Emulation: setTimezoneOverride is ignored without --cdp-allow-timezone-override" {

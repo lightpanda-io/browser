@@ -30,9 +30,8 @@
     \\  --cdp-allow-timezone-override
     \\          Let the CDP command Emulation.setTimezoneOverride change the
     \\          time zone at runtime. The zone is one per process: an override
-    \\          set on one connection is also seen by the others, until it is
-    \\          cleared or its browser context ends. Without this flag the
-    \\          command is accepted and ignored; see also --timezone.
+    \\          set on one connection is also seen by the others Without this flag
+    \\          the command is accepted and ignored; see also --timezone.
     \\          Defaults to false.
     \\  --cdp-max-connections <INT>
     \\          Maximum number of simultaneous CDP connections.

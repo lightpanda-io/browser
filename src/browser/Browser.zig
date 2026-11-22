@@ -251,10 +251,16 @@ pub fn getViewport(self: *const Browser) Viewport {
 
 // ICU has one default time zone per process, so the override reaches every
 // isolate; only this one is told to drop its cached offsets.
-pub fn setTimezoneOverride(self: *Browser, id: [:0]const u8) error{UnknownTimeZone}!void {
-    if (!js.v8.v8__V8__SetDefaultTimeZone(id)) {
-        return error.UnknownTimeZone;
+pub fn setTimezoneOverride(self: *Browser, id: [:0]const u8) error{ UnknownTimeZone, AlreadyOverridden }!void {
+    const acquired = !self.timezone_overridden;
+    if (acquired and self.app.timezone_override_held.cmpxchgStrong(false, true, .acquire, .monotonic) != null) {
+        return error.AlreadyOverridden;
     }
+    errdefer if (acquired) {
+        self.app.timezone_override_held.store(false, .release);
+    };
+
+    try js.Platform.setDefaultTimeZone(id);
     self.timezone_overridden = true;
     self.env.isolate.timeZoneChanged(.skip);
 }
@@ -265,6 +271,7 @@ pub fn clearTimezoneOverride(self: *Browser) void {
     }
     self.timezone_overridden = false;
     self.env.isolate.timeZoneChanged(.redetect);
+    self.app.timezone_override_held.store(false, .release);
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {
