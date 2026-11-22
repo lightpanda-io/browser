@@ -38,6 +38,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         disown,
         addPreloadScript,
         removePreloadScript,
+        getRealms,
     }, action) orelse return error.UnknownCommand;
 
     switch (command) {
@@ -46,7 +47,62 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         .disown => return disown(cmd),
         .addPreloadScript => return addPreloadScript(cmd),
         .removePreloadScript => return removePreloadScript(cmd),
+        .getRealms => return getRealms(cmd),
     }
+}
+
+const WindowRealmInfo = struct {
+    realm: []const u8,
+    origin: []const u8,
+    type: []const u8 = "window",
+    context: []const u8,
+};
+
+// We only have the window realm of our one context: no workers, no iframe
+// realms, no sandboxes.
+fn getRealms(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: ?[]const u8 = null,
+        // Every script.RealmType, so an unknown one is an invalid argument
+        // while one we don't have (a worker) is a filter matching nothing.
+        type: ?enum {
+            window,
+            @"dedicated-worker",
+            @"shared-worker",
+            @"service-worker",
+            worker,
+            @"paint-worklet",
+            @"audio-worklet",
+            worklet,
+        } = null,
+    });
+
+    const bidi = cmd.bidi;
+    const none: []const WindowRealmInfo = &.{};
+
+    const ctx = blk: {
+        if (p.context) |id| {
+            break :blk (try browsing_context.requireContext(cmd, id)) orelse return;
+        }
+        break :blk &(bidi.browsing_context orelse return cmd.sendResult(.{ .realms = none }));
+    };
+
+    if (p.type) |t| {
+        if (t != .window) {
+            return cmd.sendResult(.{ .realms = none });
+        }
+    }
+
+    const frame = bidi.user_context.session.currentFrame() orelse {
+        return cmd.sendResult(.{ .realms = none });
+    };
+
+    const realms = [_]WindowRealmInfo{.{
+        .realm = &ctx.realm_id,
+        .origin = browsing_context.realmOrigin(cmd.arena, frame),
+        .context = &ctx.id,
+    }};
+    return cmd.sendResult(.{ .realms = &realms });
 }
 
 // Addresses the realm to run in. We only have the one, so a `realm` is
@@ -1537,6 +1593,59 @@ test "bidi.script: target validation" {
         .params = .{ .expression = "1", .target = .{ .realm = realm } },
     });
     try ctx.expectSentResult(.{ .type = "success", .realm = realm }, .{ .id = 4 });
+}
+
+test "bidi.script: getRealms" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // No browsing context yet, so no realm.
+    try ctx.startSession();
+    try ctx.processMessage(.{ .id = 1, .method = "script.getRealms", .params = struct {}{} });
+    try ctx.expectSentResult(.{ .realms = &[_]struct {}{} }, .{ .id = 1 });
+
+    const context_id = try ctx.createContext(.{ .url = "bidi/values.html" });
+    const bc = &(ctx.bidi().browsing_context orelse return error.NoBrowsingContext);
+    const realm1 = try testing.arena.dupe(u8, &bc.realm_id);
+    const expected = .{ .realms = .{.{
+        .realm = realm1,
+        .origin = "http://127.0.0.1:9582",
+        .type = "window",
+        .context = context_id,
+    }} };
+
+    try ctx.processMessage(.{ .id = 2, .method = "script.getRealms", .params = struct {}{} });
+    try ctx.expectSentResult(expected, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "script.getRealms", .params = .{ .context = context_id } });
+    try ctx.expectSentResult(expected, .{ .id = 3 });
+
+    try ctx.processMessage(.{ .id = 4, .method = "script.getRealms", .params = .{ .type = "window" } });
+    try ctx.expectSentResult(expected, .{ .id = 4 });
+
+    // A realm type we never have is a filter matching nothing, not an error.
+    try ctx.processMessage(.{ .id = 5, .method = "script.getRealms", .params = .{ .type = "dedicated-worker" } });
+    try ctx.expectSentResult(.{ .realms = &[_]struct {}{} }, .{ .id = 5 });
+
+    // A type that isn't a script.RealmType is rejected.
+    try ctx.processMessage(.{ .id = 9, .method = "script.getRealms", .params = .{ .type = "foo" } });
+    try ctx.expectSentError("invalid argument", "invalid params", .{ .id = 9 });
+
+    try ctx.processMessage(.{ .id = 6, .method = "script.getRealms", .params = .{ .context = "nope" } });
+    try ctx.expectSentError("no such frame", "unknown context", .{ .id = 6 });
+
+    // A navigation is a new document, so a new realm.
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "browsingContext.navigate",
+        .params = .{ .context = context_id, .url = testing.test_server ++ "bidi/values.html", .wait = "complete" },
+    });
+    try ctx.wait();
+    const realm2 = try testing.arena.dupe(u8, &bc.realm_id);
+    try testing.expect(std.mem.eql(u8, realm1, realm2) == false);
+
+    try ctx.processMessage(.{ .id = 8, .method = "script.getRealms", .params = struct {}{} });
+    try ctx.expectSentResult(.{ .realms = .{.{ .realm = realm2, .context = context_id }} }, .{ .id = 8 });
 }
 
 test "bidi.script: commands need a session" {
