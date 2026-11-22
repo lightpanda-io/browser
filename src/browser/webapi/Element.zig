@@ -2088,8 +2088,8 @@ pub const LineCursor = struct {
     next: ?*Node,
     frame: *Frame,
     x: f64 = 0,
-    // Text before the box on its line, unwrapped. A row's text is an item of
-    // its own we don't place.
+    // Text before the box, unwrapped: on its line, or in a row the
+    // anonymous item a run of it makes.
     text: ?layout.LineText(.full) = null,
 
     pub const Mode = enum {
@@ -2111,10 +2111,8 @@ pub const LineCursor = struct {
 
     pub fn init(parent: *Node, mode: Mode, frame: *Frame) LineCursor {
         var self: LineCursor = .{ .mode = mode, .next = parent.flatFirstChild(frame), .frame = frame };
-        if (mode == .line) {
-            if (parent.is(Element)) |p| {
-                self.text = .{ .parent = p };
-            }
+        if (parent.is(Element)) |p| {
+            self.text = .{ .parent = p };
         }
         return self;
     }
@@ -2178,9 +2176,24 @@ pub const LineCursor = struct {
             if (comptime lp.IS_TEST) {
                 style_manager.line_steps += 1;
             }
+            if (self.mode == .row) {
+                // The text since the last item is an item of its own
+                self.x += self.textItem();
+            }
             self.x += layout.boxWidth(sibling, owner);
         }
+        if (self.mode == .row) {
+            self.x += self.textItem();
+            return self.x;
+        }
         return self.x + if (self.text) |*t| t.widthBefore() else 0;
+    }
+
+    // Snapped to Chrome's 1/64px layout unit, like an element item. It's
+    // never shrunk: the row's sizing doesn't see it.
+    fn textItem(self: *LineCursor) f64 {
+        const t = &(self.text orelse return 0);
+        return @round(t.end() * 64) / 64;
     }
 };
 
