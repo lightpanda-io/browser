@@ -2777,6 +2777,41 @@ test "MCP - waitForScript: truthy returns, falsy times out" {
     try testing.expect(std.mem.find(u8, out.written(), "Timeout") != null);
 }
 
+test "MCP - detectForms explains a rejected field without triggering validation" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_form_validation.html", &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"detectForms","arguments":{}}}
+    );
+    const ordinary = try testToolText(aa, out.written());
+    try testing.expect(std.mem.find(u8, ordinary, "validationMessage") == null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"detectForms","arguments":{"includeValidation":true}}}
+    );
+    const Field = struct { backendNodeId: u32, validationMessage: ?[]const u8 = null };
+    const Form = struct { fields: []Field };
+    const forms = try std.json.parseFromSliceLeaky([]Form, aa, try testToolText(aa, out.written()), .{ .ignore_unknown_fields = true });
+    try testing.expectEqual(1, forms.len);
+    const fields = forms[0].fields;
+    try testing.expectEqual(6, fields.len);
+    try testing.expectEqual("Outside delivery area", fields[0].validationMessage.?);
+    try testing.expectEqual("Please enter a valid value.", fields[1].validationMessage.?);
+    try testing.expectEqual("Please enter a value that matches the step.", fields[2].validationMessage.?);
+    try testing.expectEqual(null, fields[3].validationMessage);
+    try testing.expectEqual("Please select an item in the list.", fields[4].validationMessage.?);
+    try testing.expectEqual("Please fill out this field.", fields[5].validationMessage.?);
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"window.invalidEvents"}}}
+    );
+    try testing.expectEqual("0", try testToolText(aa, out.written()));
+}
+
 test "MCP - press Enter on form input triggers submit (lowercase alias)" {
     const aa = testing.arena_allocator;
     var out: std.Io.Writer.Allocating = .init(aa);
