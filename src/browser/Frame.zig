@@ -419,7 +419,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     }
 
     const window_template = Window{
-        ._frame = self,
+        ._frame = undefined,
         ._proto = undefined,
         ._document = self.document,
         ._location = undefined,
@@ -458,7 +458,8 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     errdefer browser.env.destroyContext(self.js);
     self.main_js = self.js;
     self.window._performance.attach(self.js);
-    self.window._history._exec = &self.main_js.execution;
+    self.window._frame = self.handle();
+    self.window._history._frame = self.window._frame;
 
     const location = try Location.init("about:blank", self);
     // We're holding a reference in Zig-side.
@@ -586,6 +587,16 @@ pub fn deinit(self: *Frame) void {
 
     self._call_arena.release();
     self._local_arena.release();
+}
+
+pub fn handle(self: *const Frame) JS.FrameHandle {
+    return .{ .anchor = self.main_js.anchor };
+}
+
+// The frame of the window that opened `window`, while it has one.
+fn openerFrame(window: *const Window) ?*Frame {
+    const opener = window._opener orelse return null;
+    return opener._frame.get();
 }
 
 // Frees what local_arena holds. For Zig code that runs outside a JS call

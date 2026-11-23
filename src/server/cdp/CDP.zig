@@ -970,6 +970,7 @@ pub const IsolatedWorld = struct {
             .call_arena = call_arena.allocator(),
             .local_arena = local_arena.allocator(),
             .debug_name = "IsolatedContext",
+            .main_world = frame.main_js,
         });
         errdefer browser.env.destroyContext(ctx);
         try ctx.setOrigin(frame.origin);
