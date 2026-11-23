@@ -82,6 +82,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         locateNodes,
         setViewport,
         handleUserPrompt,
+        captureScreenshot,
     }, action) orelse return error.UnknownCommand;
 
     switch (command) {
@@ -94,6 +95,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         .locateNodes => return locateNodes(cmd),
         .setViewport => return setViewport(cmd),
         .handleUserPrompt => return handleUserPrompt(cmd),
+        .captureScreenshot => return captureScreenshot(cmd),
     }
 }
 
@@ -637,6 +639,70 @@ fn setViewport(cmd: *BiDi.Command) !void {
     return cmd.sendDone();
 }
 
+fn captureScreenshot(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: []const u8,
+        origin: enum { viewport, document } = .viewport,
+        format: struct {
+            type: []const u8 = "image/png",
+            // ignored: PNG is lossless
+            quality: ?f32 = null,
+        } = .{},
+        // BoxClipRectangle or ElementClipRectangle, flattened.
+        clip: ?struct {
+            type: enum { box, element },
+            x: f32 = 0,
+            y: f32 = 0,
+            width: f32 = 0,
+            height: f32 = 0,
+            element: std.json.Value = .null,
+        } = null,
+    });
+
+    _ = (try requireContext(cmd, p.context)) orelse return;
+    if (std.mem.eql(u8, p.format.type, "image/png") == false) {
+        log.debug(.not_implemented, "bidi.captureScreenshot", .{ .format = p.format.type });
+        return cmd.sendError("unsupported operation", "unsupported screenshot format");
+    }
+
+    const bidi = cmd.bidi;
+    const frame = bidi.user_context.session.currentFrame() orelse {
+        return cmd.sendError("no such frame", "no frame");
+    };
+
+    var root = frame.window._document.asNode();
+    var opts: lp.screenshot.Opts = .fromViewport(bidi.browser.getViewport(), p.origin == .document);
+
+    if (p.clip) |clip| switch (clip.type) {
+        // Passed through like CDP's Page.captureScreenshot: a clip past the
+        // viewport extends the image, up to the end of the content.
+        .box => opts.clip = .{ .x = clip.x, .y = clip.y, .width = clip.width, .height = clip.height },
+        .element => {
+            const shared_id = switch (clip.element) {
+                .object => |o| o.get("sharedId") orelse .null,
+                else => .null,
+            };
+            const node = remote_value.nodeFromSharedId(&bidi.node_registry, shared_id) catch {
+                return cmd.sendError("no such node", "unknown element");
+            };
+            if (node.is(Node.Element) == null) {
+                return cmd.sendError("no such element", "clip target is not an element");
+            }
+            // The text layout has no element boxes to crop to: render the
+            // element's subtree on its own, like an element-scoped LP.getMarkdown png.
+            root = node;
+            opts.height = 0;
+        },
+    };
+
+    const shot = lp.screenshot.preparePng(cmd.arena, .{ .root = root }, opts, frame) catch |err| switch (err) {
+        error.InvalidScreenshotOptions => return cmd.sendError("invalid argument", "invalid screenshot options"),
+        else => return err,
+    };
+    // Prepared streams itself as base64 straight into the outgoing message.
+    return cmd.sendResult(.{ .data = shot });
+}
+
 // A parameter that's left alone when absent, and reset to its default by null.
 fn Setting(comptime T: type) type {
     return union(enum) {
@@ -1119,4 +1185,112 @@ test "bidi.browsing_context: handleUserPrompt" {
     try ctx.expectSentError("no such frame", null, .{ .id = 1 });
     try ctx.processMessage(.{ .id = 2, .method = "browsingContext.handleUserPrompt", .params = .{ .context = context_id, .accept = true } });
     try ctx.expectSentError("no such alert", null, .{ .id = 2 });
+}
+
+test "bidi.browsing_context: captureScreenshot" {
+    testing.silenceLog(&.{.not_implemented});
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{ .url = "bidi/locate.html" });
+
+    {
+        try ctx.processMessage(.{ .id = 1, .method = "browsingContext.captureScreenshot", .params = .{ .context = context_id } });
+        const png = try screenshotResult(&ctx, 1);
+        try testing.expectEqual(Viewport.default.width, pngWidth(png));
+        try testing.expectEqual(Viewport.default.height, pngHeight(png));
+    }
+
+    {
+        try ctx.processMessage(.{
+            .id = 2,
+            .method = "browsingContext.setViewport",
+            .params = .{ .context = context_id, .viewport = .{ .width = 300, .height = 200 }, .devicePixelRatio = 2 },
+        });
+        try ctx.expectSentResult(null, .{ .id = 2 });
+        try ctx.processMessage(.{ .id = 3, .method = "browsingContext.captureScreenshot", .params = .{ .context = context_id } });
+        const png = try screenshotResult(&ctx, 3);
+        try testing.expectEqual(600, pngWidth(png));
+        try testing.expectEqual(400, pngHeight(png));
+    }
+
+    // document origin: the whole content, which is shorter than the viewport
+    {
+        const frame = try ctx.frame();
+        const content_height = try lp.screenshot.contentHeight(testing.arena, frame.window._document.asNode(), 300, frame);
+        try ctx.processMessage(.{ .id = 4, .method = "browsingContext.captureScreenshot", .params = .{ .context = context_id, .origin = "document" } });
+        const png = try screenshotResult(&ctx, 4);
+        try testing.expectEqual(600, pngWidth(png));
+        try testing.expectEqual(content_height * 2, pngHeight(png));
+    }
+
+    {
+        try ctx.processMessage(.{
+            .id = 5,
+            .method = "browsingContext.captureScreenshot",
+            .params = .{ .context = context_id, .clip = .{ .type = "box", .x = 10, .y = 10, .width = 100, .height = 40 } },
+        });
+        const png = try screenshotResult(&ctx, 5);
+        try testing.expectEqual(200, pngWidth(png));
+        try testing.expectEqual(80, pngHeight(png));
+    }
+
+    // element clip renders the element's own subtree
+    {
+        try ctx.processMessage(.{
+            .id = 9,
+            .method = "browsingContext.locateNodes",
+            .params = .{ .context = context_id, .locator = .{ .type = "css", .value = "#other" } },
+        });
+        try ctx.expectSentResult(.{ .nodes = .{.{ .type = "node", .sharedId = "1" }} }, .{ .id = 9 });
+        try ctx.processMessage(.{
+            .id = 10,
+            .method = "browsingContext.captureScreenshot",
+            .params = .{ .context = context_id, .clip = .{ .type = "element", .element = .{ .sharedId = "1" } } },
+        });
+        const png = try screenshotResult(&ctx, 10);
+        try testing.expectEqual(600, pngWidth(png));
+        try testing.expect(pngHeight(png) < 400);
+    }
+
+    try ctx.processMessage(.{
+        .id = 11,
+        .method = "browsingContext.captureScreenshot",
+        .params = .{ .context = context_id, .clip = .{ .type = "element", .element = .{ .sharedId = "999" } } },
+    });
+    try ctx.expectSentError("no such node", null, .{ .id = 11 });
+
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "browsingContext.captureScreenshot",
+        .params = .{ .context = context_id, .format = .{ .type = "image/jpeg", .quality = 0.5 } },
+    });
+    try ctx.expectSentError("unsupported operation", null, .{ .id = 12 });
+
+    try ctx.processMessage(.{ .id = 13, .method = "browsingContext.captureScreenshot", .params = .{ .context = "nope" } });
+    try ctx.expectSentError("no such frame", null, .{ .id = 13 });
+}
+
+// The decoded PNG of the reply to `id`.
+fn screenshotResult(ctx: *testing.TestContext, id: i64) ![]const u8 {
+    // matching first reads every pending message into ctx.received
+    try ctx.expectSent(.{ .type = "success", .id = id });
+    for (ctx.received.items) |msg| {
+        const got = msg.object.get("id") orelse continue;
+        if (got != .integer or got.integer != id) continue;
+        const data = msg.object.get("result").?.object.get("data").?.string;
+        const decoder = std.base64.standard.Decoder;
+        const out = try testing.arena.alloc(u8, try decoder.calcSizeForSlice(data));
+        try decoder.decode(out, data);
+        try testing.expectEqual("\x89PNG\r\n\x1a\n", out[0..8]);
+        return out;
+    }
+    return error.MessageNotFound;
+}
+
+// IHDR width and height, big-endian at offsets 16 and 20.
+fn pngWidth(png: []const u8) u32 {
+    return std.mem.readInt(u32, png[16..20], .big);
+}
+fn pngHeight(png: []const u8) u32 {
+    return std.mem.readInt(u32, png[20..24], .big);
 }
