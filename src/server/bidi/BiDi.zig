@@ -512,7 +512,7 @@ pub const Command = struct {
 
 // An event is delivered when its name is subscribed exactly, or its module
 // is ("browsingContext" covers "browsingContext.load").
-fn subscribed(self: *const BiDi, name: []const u8) bool {
+pub fn subscribed(self: *const BiDi, name: []const u8) bool {
     for (self.subscriptions.items) |sub| {
         if (std.mem.eql(u8, sub.event, name)) {
             return true;
