@@ -104,7 +104,7 @@ const Filters = union(Mode) {
 // If the DOM version is unchanged and the new index >= the last one, we can do
 // not have to reset our TreeWalker. This optimizes the common case of accessing
 // the collection via incrementing indexes.
-// The element that walk returned is kept alongside its index (see Cursor), so
+// The element that walk returned is kept alongside its index (see _cursor_element), so
 // re-reading the same index - `coll[i].a` then `coll[i].b` - is free too.
 
 pub fn NodeLive(comptime mode: Mode) type {
@@ -120,25 +120,27 @@ pub fn NodeLive(comptime mode: Mode) type {
     return struct {
         _tw: TW,
         _filter: Filter,
-        _cursor: ?Cursor,
-        _last_length: ?u32,
+        // The cursor is the last element we handed out, and the index it was
+        // handed out for. The TreeWalker is parked immediately after it, so the
+        // next element it yields is the one at `_cursor_index + 1`. A null
+        // element means there is no cursor: the TreeWalker is back at its start
+        // position and _cursor_index is meaningless.
+        _cursor_element: ?*Element,
+        // A collection's length is a u32, so an index always fits.
+        _cursor_index: u32,
+        // no_length until the length has been counted.
+        _last_length: u32,
         _cached_version: usize,
 
         const Self = @This();
 
-        // The last element we handed out, and the index it was handed out for.
-        // The TreeWalker is parked immediately after it, so the next element it
-        // yields is the one at `index + 1`. A null cursor means the TreeWalker
-        // is back at its start position.
-        const Cursor = struct {
-            index: usize,
-            element: *Element,
-        };
+        const no_length = std.math.maxInt(u32);
 
         pub fn init(root: *Node, filter: Filter, frame: *Frame) Self {
             return .{
-                ._cursor = null,
-                ._last_length = null,
+                ._cursor_element = null,
+                ._cursor_index = 0,
+                ._last_length = no_length,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
                 ._cached_version = frame.page.dom_version,
@@ -149,23 +151,23 @@ pub fn NodeLive(comptime mode: Mode) type {
             if (self.versionCheck(frame)) {
                 // the DOM version hasn't changed, use the cached version if
                 // we have one
-                if (self._last_length) |cached_length| {
-                    return cached_length;
+                if (self._last_length != no_length) {
+                    return self._last_length;
                 }
                 // not ideal, but this can happen if list[x] is called followed
                 // by list.length.
                 self._tw.reset();
-                self._cursor = null;
+                self._cursor_element = null;
             }
             // If we're here, it means it's either the first time we're called
             // or the DOM version has changed. Either way, the _tw should be
-            // at the start position. It's important that self._cursor == null
+            // at the start position. It's important that there is no cursor
             // (which it always should be in these cases), because we're going to
             // reset _tw at the end of this, the cursor should always be null when
             // _tw is reset. Again, this should always be the case, but we're
             // asserting to make sure, else we'll have weird behavior, namely
             // the wrong item being returned for the wrong index.
-            lp.assert(self._cursor == null, "NodeLives.length", .{ .index = if (self._cursor) |c| c.index else 0 });
+            lp.assert(self._cursor_element == null, "NodeLives.length", .{ .index = self._cursor_index });
 
             var tw = &self._tw;
             defer tw.reset();
@@ -183,24 +185,26 @@ pub fn NodeLive(comptime mode: Mode) type {
             _ = self.versionCheck(frame);
 
             var current: usize = 0;
-            if (self._cursor) |cursor| {
-                if (index == cursor.index) {
+            if (self._cursor_element) |cursor_element| {
+                const cursor_index: usize = self._cursor_index;
+                if (index == cursor_index) {
                     // asking for the element we just handed out
-                    return cursor.element;
+                    return cursor_element;
                 }
-                if (index > cursor.index) {
-                    // the walker is parked after cursor.element
-                    current = cursor.index + 1;
+                if (index > cursor_index) {
+                    // the walker is parked after cursor_element
+                    current = cursor_index + 1;
                 } else {
                     self._tw.reset();
-                    self._cursor = null;
+                    self._cursor_element = null;
                 }
             }
 
             const tw = &self._tw;
             while (self.nextTw(tw)) |el| {
                 if (index == current) {
-                    self._cursor = .{ .index = current, .element = el };
+                    self._cursor_index = @intCast(current);
+                    self._cursor_element = el;
                     return el;
                 }
                 current += 1;
@@ -209,7 +213,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             // Out of range, and the walker is now spent. Rewind, so that a
             // null cursor keeps meaning "the walker is at its start".
             tw.reset();
-            self._cursor = null;
+            self._cursor_element = null;
             return null;
         }
 
@@ -246,8 +250,8 @@ pub fn NodeLive(comptime mode: Mode) type {
         // that this can be mixed with getAtIndex.
         pub fn next(self: *Self) ?*Element {
             const el = self.nextTw(&self._tw) orelse return null;
-            const index = if (self._cursor) |cursor| cursor.index + 1 else 0;
-            self._cursor = .{ .index = index, .element = el };
+            self._cursor_index = if (self._cursor_element == null) 0 else self._cursor_index + 1;
+            self._cursor_element = el;
             return el;
         }
 
@@ -440,8 +444,8 @@ pub fn NodeLive(comptime mode: Mode) type {
             }
 
             self._tw.reset();
-            self._cursor = null;
-            self._last_length = null;
+            self._cursor_element = null;
+            self._last_length = no_length;
             self._cached_version = current;
             return false;
         }
