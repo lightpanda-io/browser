@@ -32,6 +32,7 @@ const Lock = @import("Lock.zig");
 // https://w3c.github.io/web-locks/#api-lock-manager
 const LockManager = @This();
 
+_exec: js.ExecutionHandle,
 _locks: std.ArrayList(*LockRequest) = .empty,
 
 pub const Options = struct {
@@ -51,7 +52,9 @@ pub const LockRequest = struct {
     state: LockState,
     cb: js.Function.Global,
     resolver: js.PromiseResolver.Global,
-    exec: *Execution,
+    /// The realm that made the request; this isn't always the manager's,
+    /// though. A script can call another window's `navigator.locks`.
+    exec: js.ExecutionHandle,
     client_id: []const u8,
 
     granted: bool,
@@ -76,8 +79,9 @@ pub const LockRequest = struct {
     fn onFulfilled(self: *LockRequest, value: ?js.Value) void {
         if (self.finished) return;
 
+        const context = self.exec.js() orelse return;
         var ls: js.Local.Scope = undefined;
-        self.exec.js.localScope(&ls);
+        context.localScope(&ls);
         defer ls.deinit();
 
         const resolver = self.resolver.local(&ls.local);
@@ -88,8 +92,9 @@ pub const LockRequest = struct {
     fn onRejected(self: *LockRequest, value: ?js.Value) void {
         if (self.finished) return;
 
+        const context = self.exec.js() orelse return;
         var ls: js.Local.Scope = undefined;
-        self.exec.js.localScope(&ls);
+        context.localScope(&ls);
         defer ls.deinit();
 
         const resolver = self.resolver.local(&ls.local);
@@ -99,12 +104,11 @@ pub const LockRequest = struct {
 
     fn fireCallbackWith(self: *LockRequest, lock: ?Lock) void {
         if (self.finished) return;
+        const context = self.exec.js() orelse return;
         self.granted = lock != null;
 
-        const exec = self.exec;
-
         var ls: js.Local.Scope = undefined;
-        exec.js.localScope(&ls);
+        context.localScope(&ls);
         defer ls.deinit();
 
         const local = &ls.local;
@@ -161,7 +165,8 @@ pub const LockRequest = struct {
     }
 
     fn scheduleFireCallback(self: *LockRequest) void {
-        self.exec.js.scheduler.add(self, runFireCallback, 0, .{
+        const context = self.exec.js() orelse return;
+        context.scheduler.add(self, runFireCallback, 0, .{
             .name = "weblocks.fireCallback",
             .finalizer = cancelled,
         }) catch |err| {
@@ -176,7 +181,8 @@ pub const LockRequest = struct {
     }
 
     fn scheduleFireCallbackWithNull(self: *LockRequest) void {
-        self.exec.js.scheduler.add(self, runFireCallbackWithNull, 0, .{
+        const context = self.exec.js() orelse return;
+        context.scheduler.add(self, runFireCallbackWithNull, 0, .{
             .name = "weblocks.fireCallbackWithNull",
             .finalizer = cancelled,
         }) catch |err| {
@@ -252,6 +258,10 @@ pub fn request(
     cb3: ?js.Function,
     exec: *Execution,
 ) !js.Promise {
+    if (self.detached()) {
+        return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidStateError } });
+    }
+
     const resolver = exec.js.local.?.createPromiseResolver();
     const promise = resolver.promise();
 
@@ -299,7 +309,7 @@ pub fn request(
         .state = .pending,
         .cb = try cb.persist(),
         .resolver = try resolver.persist(),
-        .exec = exec,
+        .exec = exec.handle(),
         .client_id = try std.fmt.allocPrint(exec.page_arena, "{d}", .{exec.frameId()}),
         .granted = false,
     };
@@ -312,7 +322,17 @@ pub fn request(
             if (lr.state == .held and lr.name.eql(owned_name)) {
                 _ = self._locks.orderedRemove(i);
 
-                const lock_resolver = lr.resolver.local(lr.exec.js.local.?);
+                // The holder can be another realm than the stealing script's,
+                // one that isn't running JS.
+                var ls: js.Local.Scope = undefined;
+                if (lr.exec.js()) |context| {
+                    context.localScope(&ls);
+                } else {
+                    exec.js.localScope(&ls);
+                }
+                defer ls.deinit();
+
+                const lock_resolver = lr.resolver.local(&ls.local);
                 const exception = DOMException.fromError(error.AbortError) orelse unreachable;
                 if (lock_resolver.local.zigValueToJs(exception, .{})) |js_val| {
                     // Use rejectValue (no microtask drain): the stealing
@@ -366,6 +386,10 @@ pub fn request(
 
 // https://w3c.github.io/web-locks/#dom-lockmanager-query
 pub fn query(self: *const LockManager, exec: *Execution) !js.Promise {
+    if (self.detached()) {
+        return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidStateError } });
+    }
+
     var held: std.ArrayList(LockInfo) = .empty;
     var pending: std.ArrayList(LockInfo) = .empty;
     for (self._locks.items) |lr| {
@@ -418,6 +442,13 @@ fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
         lr.state = .held;
         lr.scheduleFireCallback();
     }
+}
+
+// https://w3c.github.io/web-locks/#dom-lockmanager-request step 2: the
+// document of the manager's global isn't fully active anymore. Its requests
+// went with it.
+fn detached(self: *const LockManager) bool {
+    return self._exec.global() == null;
 }
 
 pub const JsApi = struct {
