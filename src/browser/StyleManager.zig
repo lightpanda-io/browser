@@ -1327,6 +1327,7 @@ const BoxReach = enum(u8) {
             const fields = @field(declared, group);
             inline for (@typeInfo(@TypeOf(fields)).@"struct".field_names) |field| {
                 const moves: BoxReach = comptime moves: {
+                    @setEvalBranchQuota(10_000);
                     if (std.mem.eql(u8, group, "touch_action")) {
                         break :moves .none;
                     }
@@ -3551,6 +3552,25 @@ pub const GridColumn = struct {
 pub fn gridColumn(self: *StyleManager, el: *Element) GridColumn {
     const grid = self.gridProps(el);
     return .{ .start = grid.column_start, .end = grid.column_end, .span = grid.column_span };
+}
+
+/// The gap between a flex or grid container's columns (.width) or its rows
+/// (.height), in px. A percentage is no gap: it's of the content box, which
+/// the gaps size.
+pub fn gap(self: *StyleManager, el: *Element, comptime axis: Element.Axis) f64 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return 0;
+    switch (self.visibilityProps(el).display) {
+        .flex, .grid => {},
+        .none, .other => return 0,
+    }
+    const field = switch (axis) {
+        .width => "column_gap",
+        .height => "row_gap",
+    };
+    const length = self.grid.ownProp(self.arena.allocator(), el, field, self.frame);
+    // a calc() can go below 0, a gap can't
+    return @max(0, length.resolve(self, el) orelse 0);
 }
 
 fn gridProps(self: *StyleManager, el: *Element) Grid.Computed {
@@ -6682,11 +6702,12 @@ const Flow = struct {
 };
 
 /// A grid container's column tracks, and where an item sits among them.
-/// Rows aren't modelled: an item's row is where the columns wrap.
+/// Rows aren't modelled: an item's row is where the columns wrap. The gaps
+/// are a flex container's too.
 const Grid = struct {
     const Declared = struct {
         // A shorthand comes before its longhands, so a later longhand wins
-        const names = [_][]const u8{ "grid", "grid-template", "grid-template-columns", "grid-auto-flow", "grid-area", "grid-column", "grid-column-start", "grid-column-end" };
+        const names = [_][]const u8{ "grid", "grid-template", "grid-template-columns", "grid-auto-flow", "grid-area", "grid-column", "grid-column-start", "grid-column-end", "gap", "grid-gap", "row-gap", "grid-row-gap", "column-gap", "grid-column-gap" };
 
         tracks: ?u8 = null,
         fill_px: ?u16 = null,
@@ -6694,9 +6715,20 @@ const Grid = struct {
         column_start: ?i8 = null,
         column_end: ?i8 = null,
         column_span: ?u8 = null,
+        row_gap: ?Length = null,
+        column_gap: ?Length = null,
 
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
+                // row [column]
+                .gap, .@"grid-gap" => {
+                    var it: Geometry.Declared.Components = .{ .value = value };
+                    const row = it.next() orelse return;
+                    self.row_gap = .parse(row);
+                    self.column_gap = .parse(it.next() orelse row);
+                },
+                .@"row-gap", .@"grid-row-gap" => self.row_gap = .parse(value),
+                .@"column-gap", .@"grid-column-gap" => self.column_gap = .parse(value),
                 // [rows / columns], or one side auto-flow: `auto-flow /
                 // columns` flows by row, `rows / auto-flow` by column
                 .grid, .@"grid-template" => {
@@ -6880,13 +6912,16 @@ const Grid = struct {
         }
     };
 
-    const Computed = packed struct(u49) {
+    const Computed = packed struct(u121) {
         tracks: u8 = 0,
         fill_px: u16 = 0,
         flow_column: bool = false,
         column_start: i8 = 0,
         column_end: i8 = 0,
         column_span: u8 = 0,
+        // `normal` is auto: no gap
+        row_gap: Length = .{},
+        column_gap: Length = .{},
     };
 };
 
@@ -9002,6 +9037,35 @@ test "StyleManager: a viewport change drops the layout" {
     try testing.expectEqual(100, layout.boxTop(p, frame));
     try testing.expectEqual(110, doc.extent().height);
     try testing.expectEqual(p, (try doc.hitTestVertical(105, frame)).?);
+}
+
+test "StyleManager: the root's width follows the viewport" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const browser = frame.page.session.browser;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p style='width: 50%'></p></div>");
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+
+    try testing.expectEqual(1920, layout.boxWidth(body.as(Element), frame));
+
+    browser.setViewportOverride(.{ .width = 400, .height = 800, .scale = 1 });
+    defer browser.setViewportOverride(null);
+    try testing.expectEqual(400, layout.boxWidth(html.as(Element), frame));
+    try testing.expectEqual(400, layout.boxWidth(body.as(Element), frame));
+    try testing.expectEqual(400, layout.boxWidth(div, frame));
+    try testing.expectEqual(200, layout.boxWidth(p, frame));
+
+    browser.setViewportOverride(.{ .width = 300, .height = 800, .scale = 1 });
+    try testing.expectEqual(300, layout.boxWidth(body.as(Element), frame));
+    try testing.expectEqual(150, layout.boxWidth(p, frame));
 }
 
 test "StyleManager: hit bands: a scoped change drops them" {
