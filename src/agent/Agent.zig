@@ -260,6 +260,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         });
         return error.ConflictingFlags;
     }
+    if (opts.temperature) |t| if (t < 0) {
+        log.fatal(.app, "invalid --temperature", .{ .value = t, .hint = "temperature must be non-negative" });
+        return error.InvalidArgument;
+    };
     if (opts.no_llm and opts.provider != null) {
         log.warn(.app, "ignoring --provider", .{ .reason = "--no-llm takes precedence" });
     }
