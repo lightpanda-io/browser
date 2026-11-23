@@ -161,6 +161,10 @@ pub const String = extern struct {
         };
     }
 
+    pub fn isInline(self: *const String) bool {
+        return self.len <= 12;
+    }
+
     pub fn str(self: *const String) []const u8 {
         const l = self.len;
         if (l < 0) {

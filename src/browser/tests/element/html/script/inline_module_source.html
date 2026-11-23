@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<!--
+An inline module runs after parsing, with the source it had when the parser
+inserted it. Changing its text before then must not change what runs.
+-->
+
+<script type=module id=m_replaced>window.source_seen = (window.source_seen || '') + 'replaced-original;';</script>
+<script type=module id=m_appended>window.source_seen = (window.source_seen || '') + 'appended-original;';</script>
+<script type=module id=m_short>window.s=1</script>
+
+<script id=inline_module_keeps_its_source>
+  document.getElementById('m_replaced').firstChild.data = "window.source_seen = 'changed by a later script';";
+  document.getElementById('m_appended').firstChild.appendData("window.source_seen += 'appended-extra;';");
+  document.getElementById('m_short').firstChild.data = 'window.s=2';
+  testing.onload(() => {
+    testing.expectEqual('replaced-original;appended-original;', window.source_seen);
+    testing.expectEqual(1, window.s);
+  });
+</script>

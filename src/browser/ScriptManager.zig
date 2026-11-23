@@ -26,6 +26,7 @@ const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
 const ScriptManagerBase = @import("ScriptManagerBase.zig");
 
+const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 
 const log = lp.log;
@@ -479,24 +480,41 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 // module during parsing, which waits its turn in defer_scripts.
 fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, from_parser: bool, kind: Script.Extra.FrameExtra.Kind) !void {
     const node = script_element.asElement().asNode();
+    const first = node.firstChild() orelse {
+        // nothing to execute, but script_element._executed is still false, so
+        // if new content is added, it can still be executed later.
+        return;
+    };
 
-    const source_len = node.childTextContentLen();
+    const frame = self.frame;
+
+    const borrowed: ?[]const u8 = blk: {
+        // In most cases, we should be able to reference the text node's data
+        // directly, avoiding the dupe.
+        if (first.nextSibling() != null) {
+            // normally text nodes should be normalized/joined, but I'm not
+            // sure that's always the case.
+            break :blk null;
+        }
+        const text = first.is(Node.CData.Text) orelse break :blk null;
+        const data = &text.asCData()._data;
+        break :blk if (data.isInline()) null else data.str();
+    };
+
+    const source_len = if (borrowed) |b| b.len else node.childTextContentLen();
     if (source_len == 0) {
-        // if content is appended later, we'll execute it then since
-        // script_element._executed is still false
+        // children, but none of them text: same as no content
         return;
     }
 
-    const frame = self.frame;
-    const arena = try frame.getArena(source_len + @sizeOf(Script) + 1, "SM.addInlineScript");
+    const arena = try frame.getArena(@sizeOf(Script) + if (borrowed == null) source_len else 0, "SM.addInlineScript");
     errdefer arena.release();
 
-    const source = blk: {
-        const buf = try arena.alloc(u8, source_len + 1);
+    const source = borrowed orelse blk: {
+        const buf = try arena.alloc(u8, source_len);
         var writer: std.Io.Writer = .fixed(buf);
         try node.getChildTextContent(&writer);
-        buf[source_len] = 0;
-        break :blk buf[0..source_len :0];
+        break :blk buf;
     };
 
     script_element._executed = true;
