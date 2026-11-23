@@ -1247,11 +1247,13 @@ impl<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>>
         } else {
             0
         };
-        while let Some((start, end)) = xml::next_cdata(&self.text, offset) {
-            self.feed(offset, start);
+        while let Some((content_start, end)) = xml::next_cdata(&self.text, offset) {
+            // The tokenizer can keep a preceding character reference pending
+            // until it sees '<'. Flush it before collecting the section.
+            self.feed(offset, content_start);
             let sink = &self.tokenizer.sink;
             sink.cdata.replace(Some(StrTendril::new()));
-            self.feed(start, end);
+            self.feed(content_start, end);
             let data = sink.cdata.take().unwrap();
             if sink.depth.get() == 0 {
                 sink.tb.sink.parse_error(std::borrow::Cow::Borrowed(

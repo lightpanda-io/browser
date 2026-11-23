@@ -774,6 +774,15 @@ test "browser.markdown: basic" {
     try testMarkdownHTML("Hello world", "Hello world\n");
 }
 
+test "browser.markdown: XHTML CDATA" {
+    var page = try testing.pageTest("frames/support/xhtml_page.xhtml", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(.{ .root = frame.document.asNode() }, .{}, &aw.writer, frame);
+    try testing.expect(std.mem.find(u8, aw.written(), "Visible CDATA") != null);
+}
+
 test "browser.markdown: whitespace" {
     try testMarkdownHTML("<span>A</span> <span>B</span>", "A B\n");
 }

@@ -69,12 +69,14 @@ impl XmlState {
 // every byte still goes through xml5ever for validation and CR/LF handling.
 // Incomplete markup is left to the tokenizer's normal EOF/error handling.
 pub fn next_cdata(text: &str, mut offset: usize) -> Option<(usize, usize)> {
+    const OPEN: &str = "<![CDATA[";
     while let Some(relative) = text[offset..].find('<') {
         let start = offset + relative;
         let rest = &text[start..];
-        if let Some(content) = rest.strip_prefix("<![CDATA[") {
-            let end = start + 9 + content.find("]]>")? + 3;
-            return Some((start, end));
+        if let Some(content) = rest.strip_prefix(OPEN) {
+            let content_start = start + OPEN.len();
+            let end = content_start + content.find("]]>")? + 3;
+            return Some((content_start, end));
         }
         if let Some(content) = rest.strip_prefix("<!--") {
             offset = start + 4 + content.find("-->")? + 3;

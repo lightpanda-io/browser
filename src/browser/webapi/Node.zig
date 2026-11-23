@@ -158,6 +158,12 @@ pub fn is(self: *Node, comptime T: type) ?*T {
     return null;
 }
 
+/// An exclusive Text node, as used by normalize() and parser text coalescing.
+pub fn exclusiveText(self: *Node) ?*CData.Text {
+    const cd = self.is(CData) orelse return null;
+    return if (cd._type == .text) cd.subtype(CData.Text) else null;
+}
+
 /// Which "insert adjacent" flavor is asking. insertAdjacentHTML throws
 /// NoModificationAllowedError for a null or document parent, while
 /// insertAdjacentElement/Text return null for a null parent and otherwise
@@ -431,7 +437,7 @@ pub fn getTextContentAlloc(self: *Node, allocator: Allocator) error{WriteFailed}
 /// of all the Text node children of the node, in tree order.
 /// This differs from textContent which includes all descendant text.
 /// See: https://dom.spec.whatwg.org/#concept-child-text-content
-pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!void {
+pub fn getChildTextContent(self: *const Node, writer: *std.Io.Writer) error{WriteFailed}!void {
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (child.is(CData.Text)) |text| {
@@ -442,7 +448,7 @@ pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFaile
 
 // The byte length of what getChildTextContent writes; lets callers size a
 // buffer (or arena) before extracting.
-pub fn childTextContentLen(self: *Node) usize {
+pub fn childTextContentLen(self: *const Node) usize {
     var len: usize = 0;
     var it = self.childrenIterator();
     while (it.next()) |child| {
@@ -1069,7 +1075,7 @@ pub fn format(self: *Node, writer: *std.Io.Writer) !void {
 
 // Returns an iterator the can be used to iterate through the node's children
 // For internal use.
-pub fn childrenIterator(self: *Node) NodeIterator {
+pub fn childrenIterator(self: *const Node) NodeIterator {
     return .{ .node = self._first_child };
 }
 
@@ -1364,7 +1370,7 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
     while (child) |current_node| {
         var next_node = current_node.nextSibling();
 
-        const text_node = current_node.is(CData.Text) orelse {
+        const text_node = current_node.exclusiveText() orelse {
             child = next_node;
             continue;
         };
@@ -1376,11 +1382,11 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
         }
 
         if (next_node) |next| {
-            if (next.is(CData.Text)) |_| {
+            if (next.exclusiveText() != null) {
                 try buffer.appendSlice(allocator, text_node.ownData());
 
                 while (next_node) |node_to_merge| {
-                    const next_text_node = node_to_merge.is(CData.Text) orelse break;
+                    const next_text_node = node_to_merge.exclusiveText() orelse break;
                     try buffer.appendSlice(allocator, next_text_node.ownData());
 
                     const to_remove = node_to_merge;

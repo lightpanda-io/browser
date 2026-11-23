@@ -574,6 +574,18 @@
 }
 </script>
 
+<script id=xml-entity-before-cdata>
+{
+  const root = new DOMParser().parseFromString('<r>&lt;<![CDATA[x]]>y<!--stop-->z</r>', 'application/xml').documentElement;
+  const nodes = Array.from(root.childNodes);
+  testing.expectEqual([3, 4, 3, 8, 3], nodes.map(n => n.nodeType));
+  testing.expectEqual(['<', 'x', 'y', 'stop', 'z'], nodes.map(n => n.data));
+  testing.expectEqual(['<xy', '<xy', '<xy'], nodes.slice(0, 3).map(n => n.wholeText));
+  root.normalize();
+  testing.expectEqual([3, 4, 3, 8, 3], Array.from(root.childNodes, n => n.nodeType));
+}
+</script>
+
 <script id=xml-parsererror>
 {
   const p = new DOMParser();

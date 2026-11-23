@@ -880,7 +880,7 @@ pub const Writer = struct {
             },
             .textarea => blk: {
                 const textarea = el.as(DOMNode.Element.Html.TextArea);
-                const val = textarea.getValue();
+                const val = try textarea.getValue(self.frame.local_arena);
                 if (val.len == 0) break :blk null;
                 break :blk val;
             },
@@ -1237,7 +1237,7 @@ fn writeName(
         .cdata => {
             const cd = node.subtype(DOMNode.CData);
             switch (cd._type) {
-                .text => {
+                .text, .cdata_section => {
                     try writeString(cd._data.str(), w);
                     return .contents;
                 },
@@ -1376,7 +1376,7 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *c
         switch (child._type) {
             .cdata => {
                 const cd = child.subtype(DOMNode.CData);
-                if (cd._type == .text) {
+                if (cd.is(DOMNode.CData.Text) != null) {
                     const content = std.mem.trim(u8, cd._data.str(), &std.ascii.whitespace);
                     if (content.len > 0) {
                         try writer.writeAll(content);

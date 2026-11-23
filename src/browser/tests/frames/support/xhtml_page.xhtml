@@ -4,10 +4,12 @@
 <head><title>XHTML page</title></head>
 <body>
 <div id="root">
-  <script>window.sawAfter = document.getElementById('after') !== null;</script>
+  <script id="probe"><![CDATA[window.sawAfter = document.getElementById('after') !== null;]]></script>
   <script/>
   <div id="empty"/>
   <p id="after">a&nbsp;b&amp;c</p>
+  <p id="visible"><![CDATA[Visible CDATA]]></p>
+  <textarea id="input">a<![CDATA[b]]><!-- ignored -->c</textarea>
   <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect id="rect"/></svg>
 </div>
 </body>

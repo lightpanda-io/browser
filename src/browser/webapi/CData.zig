@@ -235,6 +235,9 @@ pub fn asNode(self: *CData) *Node {
 }
 
 pub fn is(self: *CData, comptime T: type) ?*T {
+    if (T == Text and self._type == .cdata_section) {
+        return self.subtype(Text);
+    }
     if (self._type != comptime tagOf(T)) {
         return null;
     }

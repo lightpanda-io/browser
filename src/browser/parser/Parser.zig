@@ -180,7 +180,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
     }
 
     if (parent.lastChild()) |sibling| {
-        if (sibling.is(CData.Text)) |tn| {
+        if (sibling.exclusiveText()) |tn| {
             // Existing text sibling without a matching pending_text. Seed the
             // buf from its _data and register pending so subsequent chunks
             // accumulate cheaply.

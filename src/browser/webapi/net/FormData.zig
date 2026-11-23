@@ -955,7 +955,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
             }
 
             if (element.is(Form.TextArea)) |textarea| {
-                break :blk textarea.getValue();
+                break :blk try textarea.getValue(arena);
             }
 
             if (submitter_) |submitter| {

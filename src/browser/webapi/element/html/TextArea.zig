@@ -71,13 +71,13 @@ pub fn asConstNode(self: *const TextArea) *const Node {
     return self.asConstElement().asConstNode();
 }
 
-pub fn getValue(self: *const TextArea) []const u8 {
-    return self._value orelse self.getDefaultValue();
+pub fn getValue(self: *const TextArea, arena: std.mem.Allocator) ![]const u8 {
+    return self._value orelse self.childText(arena);
 }
 
 pub fn setValue(self: *TextArea, raw_value: []const u8, frame: *Frame) !void {
     const value = try normalizeNewlines(raw_value, frame.call_arena);
-    const changed = std.mem.eql(u8, self.getValue(), value) == false;
+    const changed = std.mem.eql(u8, try self.getValue(frame.local_arena), value) == false;
     if (changed == false and self._value != null) {
         // _value itself isn't changing (not to be mixed up with setValue
         // being called with the same as the default value, which would need
@@ -130,28 +130,24 @@ pub fn setUserValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     self._user_edited = true;
 }
 
-fn getDefaultValue(self: *const TextArea) []const u8 {
+fn childText(self: *const TextArea, arena: std.mem.Allocator) ![]const u8 {
     const node = self.asConstNode();
-    if (node.firstChild()) |child| {
-        if (child.is(Node.CData.Text)) |txt| {
-            return txt.ownData();
-        }
+    const first = node.firstChild() orelse return "";
+    if (first.nextSibling() == null) {
+        const text = first.is(Node.CData.Text) orelse return "";
+        return text.ownData();
     }
-    return "";
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    try node.getChildTextContent(&buf.writer);
+    return buf.written();
+}
+
+fn getDefaultValue(self: *const TextArea, frame: *Frame) ![]const u8 {
+    return self.childText(frame.local_arena);
 }
 
 fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
-    const node = self.asNode();
-    if (node.firstChild()) |child| {
-        if (child.is(Node.CData.Text)) |txt| {
-            txt.asCData()._data = try frame.dupeSSO(value);
-            return;
-        }
-    }
-
-    // No text child exists, create one
-    const text_node = try Frame.node_factory.createTextNode(node.getDocument(frame), value);
-    _ = try node.appendChild(text_node, frame);
+    try self.asNode().setTextContent(value, frame);
 }
 
 pub fn getMaxLength(self: *const TextArea) i32 {
@@ -186,12 +182,12 @@ pub fn selectionAvailable(_: *const TextArea) bool {
 }
 
 // Non-null unlike input
-fn getSelectionStart(self: *const TextArea) u32 {
-    return entry.selectionOffsetToJs(self, self._selection_start);
+fn getSelectionStart(self: *const TextArea, frame: *Frame) !u32 {
+    return entry.selectionOffsetToJs(try self.getValue(frame.local_arena), self._selection_start);
 }
 
-fn getSelectionEnd(self: *const TextArea) u32 {
-    return entry.selectionOffsetToJs(self, self._selection_end);
+fn getSelectionEnd(self: *const TextArea, frame: *Frame) !u32 {
+    return entry.selectionOffsetToJs(try self.getValue(frame.local_arena), self._selection_end);
 }
 
 pub fn getForm(self: *TextArea) ?*Form {
@@ -249,7 +245,8 @@ pub fn hasCustomValidity(self: *const TextArea) bool {
 pub fn suffersValueMissing(self: *const TextArea) bool {
     if (!self.getWillValidate()) return false;
     if (!self.getRequired()) return false;
-    return self.getValue().len == 0;
+    if (self._value) |value| return value.len == 0;
+    return self.asConstNode().childTextContentLen() == 0;
 }
 
 pub fn suffersTooLong(self: *const TextArea) bool {
@@ -289,7 +286,7 @@ pub fn getScrollHeight(self: *TextArea, frame: *Frame) f64 {
     // Without a CSS width, the cols attribute sets the line width.
     const line_width = if (width.explicit) width.value else text_measure.width("0", font_size) * @as(f64, @floatFromInt(self.cols()));
 
-    const value = self.getValue();
+    const value = self.getValue(frame.local_arena) catch return height;
     const lines = text_measure.layout(value, font_size, line_width, style_manager.whiteSpace(el));
     // A trailing newline opens an empty last line.
     const trailing: u32 = @intFromBool(std.mem.endsWith(u8, value, "\n"));
@@ -338,7 +335,7 @@ pub const JsApi = struct {
         if (self._value) |v| {
             return v;
         }
-        return normalizeNewlines(self.getDefaultValue(), frame.call_arena);
+        return normalizeNewlines(try self.getDefaultValue(frame), frame.call_arena);
     }
 
     pub const textLength = bridge.accessor(struct {

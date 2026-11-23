@@ -23,10 +23,23 @@
       testing.expectEqual('application/xhtml+xml', doc.contentType);
       testing.expectEqual('XHTML page', doc.title);
       testing.expectEqual('http://www.w3.org/1999/xhtml', doc.documentElement.namespaceURI);
-      testing.expectEqual(true, doc.body instanceof f.contentWindow.HTMLBodyElement);
 
       // Scripts run as they're parsed.
       testing.expectEqual(false, f.contentWindow.sawAfter);
+      testing.expectEqual(true, doc.body instanceof f.contentWindow.HTMLBodyElement);
+      const script = doc.getElementById('probe');
+      testing.expectEqual(4, script.firstChild.nodeType);
+      testing.expectEqual("window.sawAfter = document.getElementById('after') !== null;", script.text);
+      testing.expectEqual('Visible CDATA', doc.getElementById('visible').innerText);
+      const input = doc.getElementById('input');
+      testing.expectEqual('abc', input.defaultValue);
+      testing.expectEqual('abc', input.value);
+      input.setSelectionRange(1, 2);
+      input.setRangeText('X');
+      testing.expectEqual('aXc', input.value);
+      input.defaultValue = 'new';
+      testing.expectEqual('new', input.textContent);
+      testing.expectEqual('aXc', input.value);
 
       // Self-closing non-void elements are empty, not left open.
       testing.expectEqual(0, doc.getElementById('empty').childNodes.length);

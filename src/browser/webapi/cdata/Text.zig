@@ -48,21 +48,20 @@ pub fn ownData(self: *const Text) []const u8 {
     return self.asCData()._data.str();
 }
 
-// The concatenated data of the contiguous exclusive Text nodes (adjacent
-// Text siblings on both sides of this one), in tree order.
+// The data of all contiguous Text siblings, including CDATA sections.
 fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
     const node = self.asCData().asNode();
 
     var first = node;
     while (first.previousSibling()) |prev| {
-        if (!isExclusiveTextNode(prev)) {
+        if (prev.is(Text) == null) {
             break;
         }
         first = prev;
     }
 
     // Common case: no adjacent text nodes, return our data directly.
-    const has_next_text = if (node.nextSibling()) |next| isExclusiveTextNode(next) else false;
+    const has_next_text = if (node.nextSibling()) |next| next.is(Text) != null else false;
     if (first == node and !has_next_text) {
         return Factory.protoOf(self)._data.str();
     }
@@ -74,10 +73,6 @@ fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
         try buf.appendSlice(frame.local_arena, text.ownData());
     }
     return buf.items;
-}
-
-fn isExclusiveTextNode(node: *Node) bool {
-    return node.is(Text) != null;
 }
 
 fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {

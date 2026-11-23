@@ -30,6 +30,11 @@ const InputEvent = @import("../event/InputEvent.zig");
 
 pub fn TextEntry(comptime T: type) type {
     return struct {
+        fn editingValue(self: *const T, frame: *Frame) ![]const u8 {
+            if (T == @import("html/TextArea.zig")) return self.getValue(frame.call_arena);
+            return self.getValue();
+        }
+
         /// Whether typing edits the control's value. Checkbox and radio share
         /// Input's value machinery but no text goes into them.
         pub fn acceptsTextEntry(self: *const T) bool {
@@ -64,15 +69,15 @@ pub fn TextEntry(comptime T: type) type {
             if (tracksSelection(self) == false) {
                 return;
             }
-            const len: u32 = @intCast(self.getValue().len);
+            const len: u32 = @intCast((try editingValue(self, frame)).len);
             try applySelectionRange(self, 0, len, .none, frame);
             try frame.queueElementEvent(self.asHtml(), .select);
         }
 
         pub fn innerInsert(self: *T, str: []const u8, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
-            const current_value = self.getValue();
+            const current_value = try editingValue(self, frame);
             const value_len: u32 = @intCast(current_value.len);
-            const start: u32, const end: u32 = switch (howSelected(self)) {
+            const start: u32, const end: u32 = switch (howSelected(self, value_len)) {
                 .full => .{ 0, value_len },
                 .partial => |range| range,
                 .none => blk: {
@@ -91,7 +96,7 @@ pub fn TextEntry(comptime T: type) type {
 
             if (tracksSelection(self)) {
                 // the sanitized value can be shorter than what was inserted
-                const new_pos: u32 = @intCast(@min(start + str.len, self.getValue().len));
+                const new_pos: u32 = @intCast(@min(start + str.len, (try editingValue(self, frame)).len));
                 self._selection_start = new_pos;
                 self._selection_end = new_pos;
                 self._selection_direction = .none;
@@ -103,12 +108,12 @@ pub fn TextEntry(comptime T: type) type {
         // forward == delete
         // !forward == backspace
         pub fn innerDelete(self: *T, forward: bool, input_type: []const u8, frame: *Frame) !void {
-            const current_value = self.getValue();
+            const current_value = try editingValue(self, frame);
             const value_len: u32 = @intCast(current_value.len);
 
             var start: u32 = undefined;
             var end: u32 = undefined;
-            switch (howSelected(self)) {
+            switch (howSelected(self, value_len)) {
                 .full => {
                     start = 0;
                     end = value_len;
@@ -158,7 +163,7 @@ pub fn TextEntry(comptime T: type) type {
             if (self._value_before_edit != null) {
                 return;
             }
-            const value = self.getValue();
+            const value = try editingValue(self, frame);
             // _value is never mutated in place, so it can be kept as is. A
             // textarea without one shows its text child's data, which can change.
             if (@hasField(T, "_input_type") or self._value != null) {
@@ -174,7 +179,7 @@ pub fn TextEntry(comptime T: type) type {
         pub fn dispatchChangeIfEdited(self: *T, frame: *Frame) !void {
             const before = self._value_before_edit orelse return;
             self._value_before_edit = null;
-            if (std.mem.eql(u8, before, self.getValue())) {
+            if (std.mem.eql(u8, before, try editingValue(self, frame))) {
                 return;
             }
             const event = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
@@ -187,7 +192,7 @@ pub fn TextEntry(comptime T: type) type {
             if (tracksSelection(self) == false) {
                 return;
             }
-            const len: u32 = @intCast(self.getValue().len);
+            const len: u32 = @intCast((try editingValue(self, frame)).len);
             try applySelectionRange(self, len, len, .none, frame);
         }
 
@@ -202,7 +207,7 @@ pub fn TextEntry(comptime T: type) type {
             if (tracksSelection(self) == false) {
                 return;
             }
-            const value = self.getValue();
+            const value = try editingValue(self, frame);
             const len: u32 = @intCast(value.len);
             const start = @min(self._selection_start, len);
             const end = @min(self._selection_end, len);
@@ -276,13 +281,12 @@ pub fn TextEntry(comptime T: type) type {
 
         // Selection offsets are kept as byte offsets into the UTF-8 value, while
         // the JS API counts UTF-16 code units.
-        pub fn selectionOffsetToJs(self: *const T, offset: u32) u32 {
-            const value = self.getValue();
+        pub fn selectionOffsetToJs(value: []const u8, offset: u32) u32 {
             return @intCast(CData.utf16Len(value[0..@min(offset, value.len)]));
         }
 
-        fn selectionOffsetFromJs(self: *const T, offset: u32) u32 {
-            return @intCast(CData.utf16OffsetToUtf8Floor(self.getValue(), offset));
+        fn selectionOffsetFromJs(value: []const u8, offset: u32) u32 {
+            return @intCast(CData.utf16OffsetToUtf8Floor(value, offset));
         }
 
         pub fn setSelectionStart(self: *T, value: u32, frame: *Frame) !void {
@@ -290,7 +294,7 @@ pub fn TextEntry(comptime T: type) type {
                 return error.InvalidStateError;
             }
             // Spec: the end is raised to the new start, then set-range runs.
-            const start = selectionOffsetFromJs(self, value);
+            const start = selectionOffsetFromJs(try editingValue(self, frame), value);
             return applySelectionRange(self, start, @max(start, self._selection_end), self._selection_direction, frame);
         }
 
@@ -298,7 +302,7 @@ pub fn TextEntry(comptime T: type) type {
             if (self.selectionAvailable() == false) {
                 return error.InvalidStateError;
             }
-            return applySelectionRange(self, self._selection_start, selectionOffsetFromJs(self, value), self._selection_direction, frame);
+            return applySelectionRange(self, self._selection_start, selectionOffsetFromJs(try editingValue(self, frame), value), self._selection_direction, frame);
         }
 
         pub fn setSelectionRange(
@@ -318,7 +322,8 @@ pub fn TextEntry(comptime T: type) type {
                 } else break :blk .none;
             };
 
-            return applySelectionRange(self, selectionOffsetFromJs(self, selection_start), selectionOffsetFromJs(self, selection_end), direction, frame);
+            const value = try editingValue(self, frame);
+            return applySelectionRange(self, selectionOffsetFromJs(value, selection_start), selectionOffsetFromJs(value, selection_end), direction, frame);
         }
 
         const SelectionMode = enum { select, start, end, preserve };
@@ -349,10 +354,10 @@ pub fn TextEntry(comptime T: type) type {
             // Offsets are in UTF-16 code units, like the spec, and only become
             // byte offsets against a given value: setValue can sanitize the new
             // one (newlines, CRLF), so its byte offsets differ from the concat's.
-            const value = self.getValue();
+            const value = try editingValue(self, frame);
             const value_len: u32 = @intCast(CData.utf16Len(value));
-            const sel_start = selectionOffsetToJs(self, self._selection_start);
-            const sel_end = selectionOffsetToJs(self, self._selection_end);
+            const sel_start = selectionOffsetToJs(value, self._selection_start);
+            const sel_end = selectionOffsetToJs(value, self._selection_end);
 
             // setRangeText(replacement) replaces the selection
             var start = sel_start;
@@ -367,8 +372,8 @@ pub fn TextEntry(comptime T: type) type {
             }
 
             {
-                const byte_start = selectionOffsetFromJs(self, start);
-                const byte_end = selectionOffsetFromJs(self, end);
+                const byte_start = selectionOffsetFromJs(value, start);
+                const byte_end = selectionOffsetFromJs(value, end);
                 const scratch = try frame.getArena(value.len + replacement.len, "TextEntry.setRangeText");
                 defer scratch.release();
                 const new_value = try std.mem.concat(scratch.allocator(), u8, &.{ value[0..byte_start], replacement, value[byte_end..] });
@@ -407,7 +412,8 @@ pub fn TextEntry(comptime T: type) type {
                     }
                 },
             }
-            return applySelectionRange(self, selectionOffsetFromJs(self, new_start), selectionOffsetFromJs(self, new_sel_end), .none, frame);
+            const updated = try editingValue(self, frame);
+            return applySelectionRange(self, selectionOffsetFromJs(updated, new_start), selectionOffsetFromJs(updated, new_sel_end), .none, frame);
         }
 
         fn applySelectionRange(
@@ -417,7 +423,7 @@ pub fn TextEntry(comptime T: type) type {
             direction: Selection.SelectionDirection,
             frame: *Frame,
         ) !void {
-            const len_u32: u32 = @intCast(self.getValue().len);
+            const len_u32: u32 = @intCast((try editingValue(self, frame)).len);
             var start: u32 = if (selection_start > len_u32) len_u32 else selection_start;
             const end: u32 = if (selection_end > len_u32) len_u32 else selection_end;
 
@@ -438,11 +444,10 @@ pub fn TextEntry(comptime T: type) type {
 
         const HowSelected = union(enum) { partial: struct { u32, u32 }, full, none };
 
-        fn howSelected(self: *const T) HowSelected {
+        fn howSelected(self: *const T, value_len: u32) HowSelected {
             if (tracksSelection(self) == false) {
                 return .none;
             }
-            const value_len: u32 = @intCast(self.getValue().len);
             const start = @min(self._selection_start, value_len);
             const end = @min(self._selection_end, value_len);
 

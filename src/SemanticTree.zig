@@ -604,7 +604,7 @@ fn visitNode(
                 options = try extractDataListOptions(list_id, self.frame, self.arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
-            value = textarea.getValue();
+            value = try textarea.getValue(self.arena);
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(self.frame);
             options = try extractSelectOptions(el.asNode(), self.frame, self.arena);
@@ -1236,7 +1236,7 @@ pub fn nodeDetails(self: Self) !NodeDetails {
                 options = try extractDataListOptions(list_id, frame, arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
-            value = textarea.getValue();
+            value = try textarea.getValue(arena);
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(frame);
             options = try extractSelectOptions(el.asNode(), frame, arena);
@@ -1417,6 +1417,18 @@ test "SemanticTree max_depth" {
     const text_str = aw.written();
 
     try testing.expect(std.mem.find(u8, text_str, "other") == null);
+}
+
+test "SemanticTree: XHTML CDATA" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+    var page = try testing.pageTest("frames/support/xhtml_page.xhtml", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const st: Self = try .init(testing.arena_allocator, frame.document.asNode(), .{ .persisted = &registry }, frame, .{ .prune = false });
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try st.textStringify(&aw.writer);
+    try testing.expect(std.mem.find(u8, aw.written(), "Visible CDATA") != null);
 }
 
 test "SemanticTree: a slotted element inherits its slot's display" {
