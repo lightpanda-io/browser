@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub const NodeLive = @import("collections/node_live.zig").NodeLive;
+pub const NodeList = @import("collections/NodeList.zig");
 pub const ChildNodes = @import("collections/ChildNodes.zig");
 pub const DOMTokenList = @import("collections/DOMTokenList.zig");
 pub const DOMStringList = @import("collections/DOMStringList.zig");
