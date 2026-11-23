@@ -267,9 +267,6 @@ pub const Session = struct {
     // is used when we're calling a function to turn the Div into a Node, which is
     // what TaggedOpaque.fromJS does.
     pub fn getNodePtr(self: *const Session, allocator: Allocator, object_id: []const u8, local: *js.Local) !*anyopaque {
-        // just to indicate that the caller is responsible for ensuring there's a local environment
-        _ = local;
-
         const unwrapped = try self.unwrapObject(allocator, object_id);
         // The values context and groupId are not used here
         const js_val = unwrapped.value;
@@ -279,7 +276,7 @@ pub const Session = struct {
 
         const Node = @import("../webapi/Node.zig");
         // Cast to *const v8.Object for typeTaggedAnyOpaque
-        return TaggedOpaque.fromJS(*Node, @ptrCast(js_val)) catch return error.ObjectIdIsNotANode;
+        return TaggedOpaque.fromJS(*Node, local.isolate.handle, @ptrCast(js_val)) catch return error.ObjectIdIsNotANode;
     }
 
     // Retrieves the RemoteObject for a given value.
@@ -374,7 +371,7 @@ pub fn getTaggedOpaque(value: *const v8.Value) ?TaggedOpaque {
     if (!v8.v8__Value__IsObject(value)) {
         return null;
     }
-    return TaggedOpaque.fromObject(@ptrCast(value));
+    return TaggedOpaque.fromObjectNoIsolate(@ptrCast(value));
 }
 
 fn cZigStringToString(s: v8.CZigString) ?[]const u8 {

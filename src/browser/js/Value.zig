@@ -206,7 +206,7 @@ pub fn isBufferSource(self: Value) bool {
 
 pub fn taggedOpaque(self: Value) ?TaggedOpaque {
     // caller must ensure self.isObject()
-    return TaggedOpaque.fromObject(@ptrCast(self.handle));
+    return TaggedOpaque.fromObject(self.local.isolate.handle, @ptrCast(self.handle));
 }
 
 // === for JS values: identity for objects, value equality for primitives.
@@ -663,12 +663,12 @@ const CloneDelegate = struct {
     // our wrapped Zig instances. Serialize it if its type (or a prototype)
     // is in cloneable_types, otherwise throw a DataCloneError. V8 asserts
     // has_exception() after a false return, so we must throw here.
-    fn writeHostObject(data: ?*anyopaque, _: ?*v8.Isolate, object: ?*const v8.Object) callconv(.c) v8.MaybeBool {
+    fn writeHostObject(data: ?*anyopaque, isolate: ?*v8.Isolate, object: ?*const v8.Object) callconv(.c) v8.MaybeBool {
         const ctx: *SerializeContext = @ptrCast(@alignCast(data.?));
 
         blk: {
             const obj = object orelse break :blk;
-            const tao = TaggedOpaque.fromObject(obj) orelse break :blk;
+            const tao = TaggedOpaque.fromObject(isolate.?, obj) orelse break :blk;
 
             if (tao.as(MessagePort)) |port| {
                 const index = std.mem.findScalar(*MessagePort, ctx.transfer, port) orelse break :blk;

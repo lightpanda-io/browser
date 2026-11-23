@@ -110,7 +110,7 @@ pub fn init(comptime T: type, value: *T) TaggedOpaque {
 
 // Reverses the mapZigInstanceToJs, making sure that our TaggedOpaque
 // contains a ptr to the correct type.
-pub fn fromJS(comptime R: type, js_obj_handle: *const v8.Object) !R {
+pub fn fromJS(comptime R: type, isolate: *v8.Isolate, js_obj_handle: *const v8.Object) !R {
     const ti = @typeInfo(R);
     if (ti != .pointer) {
         @compileError("non-pointer Zig parameter type: " ++ @typeName(R));
@@ -126,7 +126,7 @@ pub fn fromJS(comptime R: type, js_obj_handle: *const v8.Object) !R {
         return @constCast(@as(*const T, &.{}));
     }
 
-    const tao = fromObject(js_obj_handle) orelse return error.InvalidArgument;
+    const tao = fromObject(isolate, js_obj_handle) orelse return error.InvalidArgument;
     return tao.as(T) orelse error.InvalidArgument;
 }
 
@@ -171,7 +171,16 @@ pub fn store(self: TaggedOpaque, js_obj_handle: *const v8.Object, arena: Allocat
 }
 
 // Read the tag back from a JS object. Null if it isn't one of ours.
-pub fn fromObject(js_obj_handle: *const v8.Object) ?TaggedOpaque {
+pub fn fromObject(isolate: *v8.Isolate, js_obj_handle: *const v8.Object) ?TaggedOpaque {
+    if (v8.v8__Object__InternalFieldCount(js_obj_handle) == 0) {
+        return null;
+    }
+    const ptr = v8.v8__Object__GetAlignedPointerFromInternalField__Isolate(js_obj_handle, isolate, 0) orelse return null;
+    return decode(@intFromPtr(ptr));
+}
+
+// fromObject for the few callers that have no isolate at hand.
+pub fn fromObjectNoIsolate(js_obj_handle: *const v8.Object) ?TaggedOpaque {
     if (v8.v8__Object__InternalFieldCount(js_obj_handle) == 0) {
         return null;
     }

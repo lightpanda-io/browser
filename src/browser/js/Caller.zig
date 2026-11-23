@@ -221,7 +221,7 @@ pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle
 fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = idx;
     if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
@@ -243,7 +243,7 @@ pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
@@ -265,7 +265,7 @@ pub fn setIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, js_val
 fn _setIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = idx;
     @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
     if (@typeInfo(F).@"fn".param_types.len == 4) {
@@ -288,7 +288,7 @@ pub fn deleteOrDefineIndex(self: *Caller, comptime T: type, func: anytype, idx: 
 fn _deleteOrDefineIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = idx;
     if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
@@ -310,7 +310,7 @@ pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
     if (@typeInfo(F).@"fn".param_types.len == 4) {
@@ -333,7 +333,7 @@ pub fn deleteOrDefineNamedIndex(self: *Caller, comptime T: type, func: anytype, 
 fn _deleteOrDefineNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
@@ -355,7 +355,7 @@ pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *co
 fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     if (@typeInfo(F).@"fn".param_types.len == 2) {
         @field(args, "1") = getGlobalArg(@TypeOf(args.@"1"), local.ctx);
     }
@@ -376,7 +376,7 @@ pub fn getIndexQuery(self: *Caller, comptime T: type, func: anytype, idx: u32, h
 fn _getIndexQuery(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = idx;
     if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
@@ -397,7 +397,7 @@ pub fn getNamedQuery(self: *Caller, comptime T: type, func: anytype, name: *cons
 fn _getNamedQuery(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo) !u32 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
     @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".param_types.len == 3) {
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
@@ -542,7 +542,7 @@ const Receiver = struct {
 fn receiverNode(comptime T: type) *const fn (FunctionCallbackInfo) ?*Node {
     return &struct {
         fn get(info: FunctionCallbackInfo) ?*Node {
-            const instance = TaggedOpaque.fromJS(*T, info.getThis()) catch return null;
+            const instance = TaggedOpaque.fromJS(*T, v8.v8__FunctionCallbackInfo__GetIsolate(info.handle).?, info.getThis()) catch return null;
             return protoNode(T, instance);
         }
     }.get;
@@ -948,7 +948,7 @@ pub const Function = struct {
             @field(args, "0") = @ptrCast(@alignCast(info.getData() orelse unreachable));
         } else {
             args = try getArgs(F, 1, local, info);
-            @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+            @field(args, "0") = try TaggedOpaque.fromJS(*T, local.isolate.handle, info.getThis());
         }
         const res = @call(.auto, func, args);
         const js_value = try local.zigValueToJs(res, .{
