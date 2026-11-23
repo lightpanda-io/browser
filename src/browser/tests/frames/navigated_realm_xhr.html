@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+XMLHttpRequests of an iframe that has since navigated, kept by its parent. A
+request is made by, and its events fire in, the realm it was created in, which
+is gone.
+-->
+
+<script id=xhr type=module>
+  const state = await testing.async();
+
+  const url = testing.BASE_URL + 'frames/support/page.html';
+  const kept = await navigatedRealm('iframe', (w) => {
+    const unsent = new w.XMLHttpRequest();
+    const opened = new w.XMLHttpRequest();
+    opened.open('GET', url);
+    // in flight when its realm goes away
+    const sent = new w.XMLHttpRequest();
+    sent.open('GET', url);
+    sent.send();
+    return { unsent, opened, sent };
+  });
+
+  const events = [];
+  for (const xhr of [kept.unsent, kept.opened]) {
+    for (const type of ['readystatechange', 'loadstart', 'load', 'loadend', 'error', 'abort']) {
+      xhr.addEventListener(type, () => events.push(type));
+    }
+  }
+
+  const name = (fn) => {
+    try {
+      fn();
+      return null;
+    } catch (e) {
+      return e.name;
+    }
+  };
+
+  const open_error = name(() => kept.unsent.open('GET', url));
+  // Like Chrome: nothing is fetched for a document that is gone.
+  const unsent_send_error = name(() => kept.unsent.send());
+  const opened_send_error = name(() => kept.opened.send());
+
+  // None of these needs the realm.
+  const upload = kept.unsent.upload;
+  kept.unsent.timeout = 5;
+  kept.unsent.abort();
+  kept.opened.abort();
+  kept.sent.abort();
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('NetworkError', unsent_send_error);
+    testing.expectEqual('NetworkError', opened_send_error);
+    testing.expectEqual(true, upload === kept.unsent.upload);
+    testing.expectEqual(5, kept.unsent.timeout);
+    testing.expectEqual([], events);
+    testing.diverges('Chrome ignores open(), where the spec throws: the document is not fully active', () => {
+      testing.expectEqual('InvalidStateError', open_error);
+    });
+  });
+</script>
+</body>

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+An Animation of an iframe that has since navigated, kept by its parent. Its
+document's timeline is inactive: like Chrome, it can be played but never
+progresses, and fires nothing.
+-->
+
+<script id=animation type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', (w) => {
+    const events = [];
+    const animation = w.document.body.animate(null, { duration: 1 });
+    animation.cancel();
+    return { animation, events, state: animation.playState };
+  });
+
+  const { animation, events } = kept;
+  animation.onfinish = () => events.push('finish');
+  animation.oncancel = () => events.push('cancel');
+  animation.addEventListener('finish', () => events.push('finish'));
+
+  // The transition to finished is a task of whoever calls play(): us.
+  animation.play();
+  const played = animation.playState;
+  await new Promise((r) => setTimeout(r, 50));
+  const later = animation.playState;
+
+  animation.pause();
+  animation.play();
+  animation.finish();
+  animation.cancel();
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('idle', kept.state);
+    testing.expectEqual('running', played);
+    testing.expectEqual('running', later);
+    testing.expectEqual([], events);
+  });
+</script>
+</body>

@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<body>
+<script>
+  // Tells the window that opened or embeds us which document has loaded.
+  (window.opener || window.parent).postMessage({ realm: location.search.slice(1) }, '*');
+</script>
+</body>

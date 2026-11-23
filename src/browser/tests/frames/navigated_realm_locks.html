@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+The LockManager of an iframe that has since navigated, kept by its parent, with
+requests of that iframe still held and queued. Their realm is gone: the
+callbacks can't run, and the manager's document is not fully active anymore.
+-->
+
+<script>
+  // 'pending' when the promise hasn't settled after a few tasks.
+  function outcome(promise) {
+    return Promise.race([
+      promise.then((v) => 'fulfilled ' + v, (e) => 'rejected ' + e.name),
+      new Promise((r) => setTimeout(() => r('pending'), 30)),
+    ]);
+  }
+</script>
+
+<script id=web_locks type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', async (w) => {
+    const locks = w.navigator.locks;
+    const controller = new w.AbortController();
+    const calls = [];
+    // Held for as long as the realm lives.
+    await new Promise((granted) => {
+      locks.request('navigated_realm', () => {
+        calls.push('held');
+        granted();
+        return new w.Promise(() => {});
+      });
+    });
+    // Queued behind it.
+    locks.request('navigated_realm', () => { calls.push('queued'); });
+    locks.request('navigated_realm', { signal: controller.signal }, () => { calls.push('abortable'); }).catch(() => {});
+    return { locks, controller, calls };
+  });
+
+  const calls_before = kept.calls.slice();
+  // A queued request of the realm, aborted from here.
+  kept.controller.abort();
+
+  const results = {
+    query: await outcome(kept.locks.query().then((s) => s.held.length + s.pending.length)),
+    request: await outcome(kept.locks.request('navigated_realm', () => 'granted')),
+    other: await outcome(kept.locks.request('navigated_realm_other', () => 'granted')),
+    steal: await outcome(kept.locks.request('navigated_realm', { steal: true }, () => 'stolen')),
+    if_available: await outcome(kept.locks.request('navigated_realm', { ifAvailable: true }, (lock) => lock === null)),
+  };
+  // A request of ours isn't stuck behind what the realm held.
+  const own = await outcome(navigator.locks.request('navigated_realm', () => 'granted'));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['held'], calls_before);
+    // What the realm queued never runs.
+    testing.expectEqual(['held'], kept.calls);
+    testing.expectEqual('fulfilled granted', own);
+    testing.diverges("Chrome's promises belong to the realm that is gone, and never settle", () => {
+      // https://w3c.github.io/web-locks/#dom-lockmanager-request step 2
+      const rejected = 'rejected InvalidStateError';
+      testing.expectEqual({ query: rejected, request: rejected, other: rejected, steal: rejected, if_available: rejected }, results);
+    });
+  });
+</script>
+</body>
