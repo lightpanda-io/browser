@@ -1818,15 +1818,6 @@ pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
     };
 }
 
-pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
-    if (!self.isVisible(frame)) {
-        return &.{};
-    }
-    const rects = try frame.local_arena.alloc(*DOMRect, 1);
-    rects[0] = try DOMRect.create(self.boundingClientRectValuesForVisible(frame), frame._factory);
-    return rects;
-}
-
 // Scroll events fire in the element's own frame — not the caller's, which
 // differs when a same-origin script scrolls an element in another frame (e.g.
 // inside an iframe). All scroll accessors resolve the owner frame first so the
@@ -2981,7 +2972,16 @@ pub const JsApi = struct {
     pub const offsetWidth = bridge.accessor(Element.getOffsetWidth, null, .{});
     pub const offsetHeight = bridge.accessor(Element.getOffsetHeight, null, .{});
     pub const offsetParent = bridge.accessor(Element.getOffsetParent, null, .{});
-    pub const getClientRects = bridge.function(Element.getClientRects, .{});
+    pub const getClientRects = bridge.function(struct {
+        fn wrap(self: *Element, frame: *Frame) ![]js.NoIdentity(DOMRect) {
+            if (!self.isVisible(frame)) {
+                return &.{};
+            }
+            const rects = try frame.local_arena.alloc(js.NoIdentity(DOMRect), 1);
+            rects[0] = .wrap(try DOMRect.create(self.boundingClientRectValuesForVisible(frame), frame._factory));
+            return rects;
+        }
+    }.wrap, .{});
     pub const getBoundingClientRect = bridge.function(struct {
         fn wrap(self: *Element, frame: *Frame) !js.NoIdentity(DOMRect) {
             return .wrap(try DOMRect.create(self.boundingClientRectValues(frame), frame._factory));

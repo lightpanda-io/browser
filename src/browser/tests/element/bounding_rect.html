@@ -60,5 +60,22 @@
   testing.expectEqual(r1.height, copy.height);
   testing.expectEqual(12, structuredClone(r1).x);
   testing.expectEqual(12, r1.toJSON().x);
+
+  const c1 = el.getClientRects();
+  const c2 = el.getClientRects();
+  testing.expectEqual(1, c1.length);
+  testing.expectTrue(c1[0] !== c2[0]);
+  testing.expectTrue(c1[0] instanceof DOMRect);
+  testing.expectEqual(r2.width, DOMRect.fromRect(c1[0]).width);
+
+  const range = document.createRange();
+  range.selectNode(el);
+  const b1 = range.getBoundingClientRect();
+  testing.expectTrue(b1 !== range.getBoundingClientRect());
+  testing.expectEqual(b1.width, DOMRect.fromRect(b1).width);
+  const rr = range.getClientRects();
+  testing.expectTrue(rr.length > 0);
+  testing.expectTrue(rr[0] instanceof DOMRect);
+  testing.expectTrue(rr[0] !== range.getClientRects()[0]);
 }
 </script>
