@@ -81,6 +81,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         close,
         locateNodes,
         setViewport,
+        handleUserPrompt,
     }, action) orelse return error.UnknownCommand;
 
     switch (command) {
@@ -92,6 +93,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         .close => return close(cmd),
         .locateNodes => return locateNodes(cmd),
         .setViewport => return setViewport(cmd),
+        .handleUserPrompt => return handleUserPrompt(cmd),
     }
 }
 
@@ -359,6 +361,19 @@ fn close(cmd: *BiDi.Command) !void {
     const ctx = (try requireContext(cmd, p.context)) orelse return;
     try destroy(cmd, ctx);
     return cmd.sendResult(struct {}{});
+}
+
+// alert(), confirm() and prompt() never block: they return as soon as they're
+// called. So there's never a prompt open to act on. This matches CDP's
+// Page.handleJavaScriptDialog.
+fn handleUserPrompt(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: []const u8,
+        accept: ?bool = null,
+        userText: ?[]const u8 = null,
+    });
+    _ = (try requireContext(cmd, p.context)) orelse return;
+    return cmd.sendError("no such alert", "no user prompt is open");
 }
 
 // Closes the page behind `ctx` and reports it gone.
@@ -1093,4 +1108,15 @@ test "bidi.browsing_context: traverseHistory and reload" {
     try ctx.processMessage(.{ .id = 8, .method = "browsingContext.reload", .params = .{ .context = context_id, .wait = "complete" } });
     try ctx.wait();
     try ctx.expectSentResult(.{ .url = testing.test_server ++ "bidi/values.html" }, .{ .id = 8 });
+}
+
+test "bidi.browsing_context: handleUserPrompt" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{});
+
+    try ctx.processMessage(.{ .id = 1, .method = "browsingContext.handleUserPrompt", .params = .{ .context = "nope" } });
+    try ctx.expectSentError("no such frame", null, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 2, .method = "browsingContext.handleUserPrompt", .params = .{ .context = context_id, .accept = true } });
+    try ctx.expectSentError("no such alert", null, .{ .id = 2 });
 }
