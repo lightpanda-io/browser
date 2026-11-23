@@ -1081,13 +1081,6 @@ pub const FastFunction = struct {
         static: bool = false,
     };
 
-    /// The C type a fast callback declares for a Zig parameter type: objects
-    /// arrive as V8 values, primitives as themselves.
-    fn Arg(comptime ParamTypeEntry: ?type) type {
-        const T = ParamTypeEntry.?;
-        return if (comptime reflect.isJavaScriptObject(T)) ?*const v8.Value else T;
-    }
-
     fn toCTypeEnum(comptime T: type) v8.CTypeInfo {
         // Treat pointers as V8 values; we can change this in the future.
         if (comptime reflect.isJavaScriptObject(T)) {
@@ -1125,16 +1118,6 @@ pub const FastFunction = struct {
     fn canReceiverMismatch(comptime Receiver: type) bool {
         const T = @typeInfo(Receiver).pointer.child;
         return bridge.inheritsOrIs(T.JsApi, HtmlElement.JsApi);
-    }
-
-    /// Mirrors `.optional` / `.pointer` branches from `Local.jsValueToZig`.
-    fn toZigObject(comptime T: type, handle: ?*const v8.Value) error{InvalidArgument}!T {
-        const value = handle.?;
-        if (@typeInfo(T) == .optional) {
-            if (v8.v8__Value__IsNullOrUndefined(value)) return null;
-        }
-        if (!v8.v8__Value__IsObject(value)) return error.InvalidArgument;
-        return TaggedOpaque.fromJS(reflect.UnwrapOptional(T), @ptrCast(value));
     }
 
     /// Creates a constant `v8.CFunction` for getter-by-field. Like `create`,
