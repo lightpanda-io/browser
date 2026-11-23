@@ -186,13 +186,17 @@ fn announceRealm(bidi: *BiDi, frame: *const Frame) !void {
     }
     ctx.realm_announced = true;
 
-    const origin = (URL.getOrigin(bidi.message_arena.allocator(), frame.url) catch null) orelse "null";
     return bidi.sendEvent("script.realmCreated", .{
         .realm = &ctx.realm_id,
-        .origin = origin,
+        .origin = realmOrigin(bidi.message_arena.allocator(), frame),
         .type = "window",
         .context = &ctx.id,
     });
+}
+
+// The window realm's origin, "null" for an opaque one (about:blank).
+pub fn realmOrigin(arena: std.mem.Allocator, frame: *const Frame) []const u8 {
+    return (URL.getOrigin(arena, frame.url) catch null) orelse "null";
 }
 
 fn bidiNavigate(cmd: *BiDi.Command) !void {
