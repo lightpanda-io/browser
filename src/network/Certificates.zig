@@ -64,17 +64,8 @@ fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
 
     switch (comptime @import("builtin").os.tag) {
         .linux, .openbsd, .netbsd, .freebsd => blk: {
-            // Iterate over known directories; this may or may not succeed.
-            const cwd = std.Io.Dir.cwd();
-            inline for ([_][]const u8{
-                "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
-                "/etc/pki/tls/certs", // Fedora/RHEL
-            }) |dir_path| {
-                count += try loadFromDirectory(allocator, store, cwd, dir_path);
-                if (count > 0) break :blk;
-            }
-
-            // Iterate over known files.
+            // A bundle holds every system cert once; the directories below
+            // hold them again under several names, so they are the fallback.
             inline for ([_][*:0]const u8{
                 "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu/Gentoo
                 "/etc/pki/tls/certs/ca-bundle.crt", // Fedora/RHEL 6
@@ -87,6 +78,15 @@ fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
                     count += 1;
                     break :blk;
                 }
+            }
+
+            const cwd = std.Io.Dir.cwd();
+            inline for ([_][]const u8{
+                "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
+                "/etc/pki/tls/certs", // Fedora/RHEL
+            }) |dir_path| {
+                count += try loadFromDirectory(allocator, store, cwd, dir_path);
+                if (count > 0) break :blk;
             }
         },
         else => {
