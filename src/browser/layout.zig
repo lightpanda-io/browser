@@ -142,6 +142,68 @@ pub fn contentStart(self: *Element, comptime axis: Element.Axis, owner: *Frame) 
     return @max(0, padding.of(containingBlockWidth(self, owner)));
 }
 
+/// The box's margin on one side: its left one moves it from where the flow
+/// puts it. One with no box (display: contents) has no margins, and neither
+/// does a table's cell or row.
+pub fn marginOn(self: *Element, comptime side: StyleManager.Side, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    switch (style_manager.margin(self, side)) {
+        .auto => return if (side == .left) autoMarginLeft(self, owner) else 0,
+        .length => |margin| {
+            if (margin.fraction == 0 and margin.px == 0) {
+                return 0;
+            }
+            if (style_manager.takesMargins(self) == false) {
+                return 0;
+            }
+            return resolveMargin(self, margin, owner);
+        },
+    }
+}
+
+/// The box's left and right margins together, an auto one 0: with its width,
+/// the room it takes on its line.
+pub fn inlineMargins(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    const margin = style_manager.inlineMarginSum(self);
+    if (margin.fraction == 0 and margin.px == 0) {
+        return 0;
+    }
+    if (style_manager.takesMargins(self) == false) {
+        return 0;
+    }
+    return resolveMargin(self, margin, owner);
+}
+
+fn resolveMargin(self: *Element, margin: StyleManager.Percent, owner: *Frame) f64 {
+    if (margin.fraction == 0) {
+        return margin.px;
+    }
+    return margin.of(containingBlockWidth(self, owner));
+}
+
+// A block narrower than its containing block: an auto left margin takes the
+// room left over, or half of it when the right one is auto too (centred). A
+// flex row shares its free space among its items' auto margins instead (see
+// rowSpace); on a line, and for a box the flow doesn't place, auto is 0.
+fn autoMarginLeft(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.alongside(self) != .block) {
+        return 0;
+    }
+    const containing = containingBlockWidth(self, owner);
+    return autoMarginShare(self, containing - boxWidth(self, owner), containing, owner);
+}
+
+// What an auto left margin takes of `free`, the room its box leaves before
+// its right margin.
+fn autoMarginShare(self: *Element, free: f64, containing: f64, owner: *Frame) f64 {
+    return switch (owner._style_manager.margin(self, .right)) {
+        .auto => @max(0, free) / 2,
+        .length => |right| @max(0, free - right.of(containing)),
+    };
+}
+
 /// The box's size as getComputedStyle resolves it: the box `box-sizing` names.
 pub fn declaredBoxSize(self: *Element, comptime axis: Element.Axis, owner: *Frame) f64 {
     const size = switch (axis) {
@@ -244,58 +306,187 @@ fn flexMinWidth(self: *Element, base: f64, padding: f64, owner: *Frame) f64 {
 // rest share what they couldn't give (CSS Flexbox §9.7). A wrapping row moves
 // items to a new line instead, so it shrinks nothing.
 fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
+    const fit = rowFit(self, owner);
+    return if (fit >= 0 and fit <= 1) fit else 0;
+}
+
+/// Where a flex row's free space goes: before its first item, between each
+/// two, and into each auto margin.
+pub const RowSpace = struct {
+    lead: f64 = 0,
+    between: f64 = 0,
+    auto: f64 = 0,
+};
+
+/// A row with room left over gives it to its items' auto margins, in equal
+/// shares; without any, justify-content places it (CSS Flexbox §9.5). Null
+/// when there's none to place, and for a parent that isn't a flex row. A
+/// wrapping row's lines aren't modelled: it places its space only when
+/// justify-content asks, and its items fit on one line.
+pub fn rowSpace(self: *Element, owner: *Frame) ?RowSpace {
+    const style_manager = &owner._style_manager;
+    const row = style_manager.flexRow(self) orelse return null;
+    if (row.wraps and row.justify == .start) {
+        return null;
+    }
+    const fit = rowFit(self, owner);
+    if (fit >= 0 and fit <= 1) {
+        return null;
+    }
+    if (fit < 0) {
+        return .{ .auto = -fit };
+    }
+    const space = fit - 1;
+    return switch (row.justify) {
+        .start => null,
+        .center, .end => .{ .lead = space },
+        .space_between => .{ .between = space },
+        .space_around => .{ .lead = space / 2, .between = space },
+        .space_evenly => .{ .lead = space, .between = space },
+    };
+}
+
+// How a flex row's items fit its width, as the one number its cache slot
+// holds. They overflow: rowShrinkRatio's fraction, 0 to 1. They leave room
+// (and none grows into it): below 0, the share of each auto margin, negated;
+// above 1, 1 more than what justify-content puts before the first item
+// (center, end) or between two (space-*). 0 when there's nothing to do.
+fn rowFit(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     style_manager.setSizesOthers(self);
-    if (style_manager.flexWraps(self)) {
-        return 0;
+    if (style_manager.getCachedLayout(self, .row_fit)) |fit| {
+        return fit;
     }
-    if (style_manager.getCachedLayout(self, .row_shrink)) |ratio| {
-        return ratio;
+    const row = style_manager.flexRow(self) orelse return 0;
+    const wraps = row.wraps;
+    if (wraps and row.justify == .start) {
+        // Nothing to shrink, and measuring its items (often many) would
+        // only find their auto margins
+        style_manager.setCacheLayout(self, .row_fit, 0);
+        return 0;
     }
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
     const row_width = innerWidth(self, owner);
     var total: f64 = 0;
-    var items: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
-    while (nextFlexItem(&items, style_manager)) |el| {
+    var count: f64 = 0;
+    var autos: f64 = 0;
+    var grows = false;
+    var row_items: RowItems = .init(self, owner);
+    while (row_items.next(owner)) |el| {
+        if (row_items.text_width > 0) {
+            total += row_items.text_width;
+            count += 1;
+        }
         total += flexBase(el, row_width, owner).base + flexItemMargins(el, row_width, style_manager);
-    }
-
-    var ratio: f64 = 0;
-    const overflow = total - row_width;
-    if (overflow > 0) {
-        // Freezing an item leaves more for the others to give, so the ratio
-        // only grows between passes and a frozen item stays frozen: each pass
-        // freezes at least one more item, or the count holds and it's settled.
-        var frozen_before: ?usize = null;
-        while (true) {
-            var frozen: usize = 0;
-            var given: f64 = 0;
-            var shrinkable: f64 = 0;
-            items = .init(self.asNode(), .{ .frame = owner });
-            while (nextFlexItem(&items, style_manager)) |el| {
-                const item = flexBase(el, row_width, owner);
-                if (item.base <= item.floor) {
-                    continue;
-                }
-                if (item.base * (1 - ratio) < item.floor) {
-                    frozen += 1;
-                    given += item.base - item.floor;
-                } else {
-                    shrinkable += item.base;
-                }
-            }
-            ratio = if (shrinkable == 0) 1 else std.math.clamp((overflow - given) / shrinkable, 0, 1);
-            if (frozen_before) |previous| {
-                if (frozen <= previous) break;
-            }
-            frozen_before = frozen;
+        count += 1;
+        const sizing = style_manager.widthSizing(el);
+        if (sizing == .grow) {
+            grows = true;
+        }
+        // display: contents has no box, so no margins
+        if (sizing != .contents) {
+            autos += @floatFromInt(style_manager.autoMargins(el));
         }
     }
-    style_manager.setCacheLayout(self, .row_shrink, ratio);
+    if (row_items.text_width > 0) {
+        total += row_items.text_width;
+        count += 1;
+    }
+
+    const fit = blk: {
+        const overflow = total - row_width;
+        if (overflow > 0) {
+            break :blk if (wraps) 0 else shrinkRatio(self, overflow, row_width, owner);
+        }
+        if (overflow == 0 or grows) {
+            break :blk 0;
+        }
+        const free = -overflow;
+        if (autos > 0) {
+            break :blk -(free / autos);
+        }
+        const space = switch (row.justify) {
+            .start => break :blk 0,
+            .center => free / 2,
+            .end => free,
+            .space_between => if (count > 1) free / (count - 1) else break :blk 0,
+            .space_around => free / count,
+            .space_evenly => free / (count + 1),
+        };
+        break :blk 1 + space;
+    };
+    style_manager.setCacheLayout(self, .row_fit, fit);
+    return fit;
+}
+
+fn shrinkRatio(self: *Element, overflow: f64, row_width: f64, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    var ratio: f64 = 0;
+    // Freezing an item leaves more for the others to give, so the ratio
+    // only grows between passes and a frozen item stays frozen: each pass
+    // freezes at least one more item, or the count holds and it's settled.
+    var frozen_before: ?usize = null;
+    while (true) {
+        var frozen: usize = 0;
+        var given: f64 = 0;
+        var shrinkable: f64 = 0;
+        var items: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
+        while (nextFlexItem(&items, style_manager)) |el| {
+            const item = flexBase(el, row_width, owner);
+            if (item.base <= item.floor) {
+                continue;
+            }
+            if (item.base * (1 - ratio) < item.floor) {
+                frozen += 1;
+                given += item.base - item.floor;
+            } else {
+                shrinkable += item.base;
+            }
+        }
+        ratio = if (shrinkable == 0) 1 else std.math.clamp((overflow - given) / shrinkable, 0, 1);
+        if (frozen_before) |previous| {
+            if (frozen <= previous) break;
+        }
+        frozen_before = frozen;
+    }
     return ratio;
 }
+
+// A flex row's items in order: its rendered, in-flow element children, and
+// the text between them, each run of it an anonymous item (what
+// Element.LineCursor places).
+const RowItems = struct {
+    children: TreeWalker.FlatChildren,
+    text: LineText(.full),
+    // The run before the item next() last returned; after the last one,
+    // the run that ends the row. Never shrunk: 0 for none.
+    text_width: f64 = 0,
+
+    fn init(row: *Element, owner: *Frame) RowItems {
+        return .{ .children = .init(row.asNode(), .{ .frame = owner }), .text = .{ .parent = row } };
+    }
+
+    fn next(self: *RowItems, owner: *Frame) ?*Element {
+        const style_manager = &owner._style_manager;
+        const el = while (self.children.next()) |node| {
+            const el = node.is(Element) orelse {
+                if (node.is(Node.CData.Text)) |data| {
+                    self.text.add(data.ownData(), owner);
+                }
+                continue;
+            };
+            if (style_manager.hasDisplayNone(el) or style_manager.isFlexRowItem(el) == false) {
+                continue;
+            }
+            break el;
+        } else null;
+        // Snapped to Chrome's 1/64px layout unit, like an element item
+        self.text_width = @round(self.text.end() * 64) / 64;
+        return el;
+    }
+};
 
 // The next child of a flex row that is one of its items: rendered and in flow.
 fn nextFlexItem(children: *TreeWalker.FlatChildren, style_manager: *StyleManager) ?*Element {
@@ -369,8 +560,9 @@ fn growShare(self: *Element, owner: *Frame) f64 {
     const row_width = innerWidth(parent, owner);
     var taken: f64 = 0;
     var growers: f64 = 0;
-    var items: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
-    while (nextFlexItem(&items, style_manager)) |el| {
+    var items: RowItems = .init(parent, owner);
+    while (items.next(owner)) |el| {
+        taken += items.text_width;
         switch (style_manager.widthSizing(el)) {
             .grow => growers += 1,
             // Its children are the row's items
@@ -380,6 +572,7 @@ fn growShare(self: *Element, owner: *Frame) f64 {
         }
         taken += flexItemMargins(el, row_width, style_manager);
     }
+    taken += items.text_width;
     return @max(0, row_width - taken) / @max(1, growers);
 }
 
@@ -607,7 +800,7 @@ fn originStep(el: *Element, self: *Element, owner: *Frame, frame: *Frame) Origin
             }
         },
     }
-    delta.x += el.translateX(frame);
+    delta.x += el.translateX(frame) + marginOn(el, .left, owner);
 
     const parent = el.asNode().flatTreeParentElement(owner) orelse return .{ .delta = delta, .up = null };
     delta.y += boxOffset(el, parent, owner);
@@ -666,6 +859,20 @@ pub const Anchor = struct {
             resolveInset(s, base, axis, owner)
         else
             containingSize(base, axis, owner) - resolveInset(end.?, base, axis, owner) - boxSize(el, axis, owner);
+        if (axis == .horizontal) {
+            // Its margin box is what the inset places
+            if (start == null) {
+                offset -= marginOn(el, .right, owner);
+            } else if (end != null and style_manager.margin(el, .left) == .auto) {
+                // Pinned on both sides: an auto margin takes what its width
+                // leaves between them
+                const containing = containingSize(base, axis, owner);
+                const free = containing - offset - resolveInset(end.?, base, axis, owner) - boxSize(el, axis, owner);
+                offset += autoMarginShare(el, free, containing, owner);
+            } else {
+                offset += marginOn(el, .left, owner);
+            }
+        }
 
         if (position == .fixed) {
             // against the viewport, wherever it's scrolled to

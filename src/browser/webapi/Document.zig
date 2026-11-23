@@ -1201,6 +1201,11 @@ const HitLevel = struct {
             },
         }
 
+        if (facts.contents == false) {
+            // The walk already knows it has a box
+            x += layout.marginOn(element, .left, owner);
+        }
+
         const level = &levels[index];
         const parent = level.element orelse return x;
         x += level.content_left orelse blk: {

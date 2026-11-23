@@ -758,7 +758,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     const placement = placeSelector(matched) orelse return;
     try self.collectAttributeNames(selector, false);
     self.siblings.addNext(nextReach(selector));
-    try self.collectClassReach(selector, .subtree, true, matched.rightmost());
+    try self.collectClassReach(selector, .subtree, true, matched.rightmost(), BoxReach.of(props).widest(.of(important)));
     if (props.geometry.z_negative == true or important.geometry.z_negative == true) {
         self.negative_z_rules = true;
     }
@@ -1308,9 +1308,53 @@ const ClassReach = enum(u8) {
     }
 };
 
+// What a rule's declarations do to the boxes of the elements it matches.
+const BoxReach = enum(u8) {
+    // Order matters: narrowest to widest.
+    none, // nothing layout or a hit band keeps: visibility, opacity, z-index...
+    hit, // a vertical inset: applied on every read, but a hit band holds the top
+    layout,
+
+    fn widest(a: BoxReach, b: BoxReach) BoxReach {
+        return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
+    }
+
+    // Field by field what property_reach says of the properties they parse:
+    // a field not listed here moves a box.
+    fn of(declared: *const Declarations) BoxReach {
+        var reach: BoxReach = .none;
+        inline for (group_fields) |group| {
+            const fields = @field(declared, group);
+            inline for (@typeInfo(@TypeOf(fields)).@"struct".field_names) |field| {
+                const moves: BoxReach = comptime moves: {
+                    if (std.mem.eql(u8, group, "touch_action")) {
+                        break :moves .none;
+                    }
+                    for ([_][]const u8{ "visibility_hidden", "opacity_zero", "pointer_events_none", "overscroll_x_contains", "overscroll_y_contains", "z_negative" }) |neutral| {
+                        if (std.mem.eql(u8, field, neutral)) {
+                            break :moves .none;
+                        }
+                    }
+                    if (std.mem.eql(u8, group, "geometry") and (std.mem.eql(u8, field, "top") or std.mem.eql(u8, field, "bottom"))) {
+                        break :moves .hit;
+                    }
+                    break :moves .layout;
+                };
+                if (moves != .none and @field(fields, field) != null) {
+                    reach = reach.widest(moves);
+                }
+            }
+        }
+        return reach;
+    }
+};
+
 // How the tracked selectors use a class (or the class attribute).
 const ClassUse = struct {
     reach: ClassReach,
+
+    // What its rules declare, all of them together
+    boxes: BoxReach,
 
     // Within that reach, the elements whose match the class can change: the
     // subjects of the rules it's in, an index in class_subjects. Everything
@@ -1324,16 +1368,17 @@ const ClassUse = struct {
 // A use of `use`'s class, in a compound reaching `reach`, in a rule whose
 // subject is `subject`; null when the class is the subject's own, or the
 // subject isn't known.
-fn noteClassUse(self: *StyleManager, use: *ClassUse, first: bool, reach: ClassReach, subject: ?Selector.Compound) Allocator.Error!void {
+fn noteClassUse(self: *StyleManager, use: *ClassUse, first: bool, reach: ClassReach, subject: ?Selector.Compound, boxes: BoxReach) Allocator.Error!void {
     const allocator = self.arena.allocator();
     if (first) {
-        use.* = .{ .reach = reach, .subjects = ClassUse.any_subject };
+        use.* = .{ .reach = reach, .boxes = boxes, .subjects = ClassUse.any_subject };
         if (subject != null) {
             use.subjects = @intCast(self.class_subjects.items.len);
             try self.class_subjects.append(allocator, .{});
         }
     } else {
         use.reach = use.reach.widest(reach);
+        use.boxes = use.boxes.widest(boxes);
     }
     if (use.subjects == ClassUse.any_subject) {
         return;
@@ -1350,7 +1395,7 @@ const max_class_attribute_selectors = 256;
 // `subject` is the reach of the selector's subject compound: .subtree for a
 // rule's selector, the enclosing compound's for an :is() argument. `own`:
 // that compound is the rule's subject, `rule_subject` (null: not known).
-fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach, own: bool, rule_subject: ?Selector.Compound) Allocator.Error!void {
+fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach, own: bool, rule_subject: ?Selector.Compound, boxes: BoxReach) Allocator.Error!void {
     const segments = selector.segments();
     for (0..segments.len + 1) |i| {
         const compound = if (i == 0) selector.first() else segments[i - 1].compound();
@@ -1360,24 +1405,24 @@ fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: 
             .descendant, .child => .subtree,
             .next_sibling, .subsequent_sibling => .parent_subtree,
         };
-        try self.collectCompoundClassReach(compound, reach, own and i == segments.len, rule_subject);
+        try self.collectCompoundClassReach(compound, reach, own and i == segments.len, rule_subject, boxes);
     }
 }
 
-fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach, own: bool, rule_subject: ?Selector.Compound) Allocator.Error!void {
+fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach, own: bool, rule_subject: ?Selector.Compound, boxes: BoxReach) Allocator.Error!void {
     const subject = if (own) null else rule_subject;
     for (compound.parts) |part| {
         switch (part) {
             .class => |class| {
                 const gop = try self.class_reach.getOrPut(self.arena.allocator(), class);
-                try self.noteClassUse(gop.value_ptr, gop.found_existing == false, reach, subject);
+                try self.noteClassUse(gop.value_ptr, gop.found_existing == false, reach, subject, boxes);
             },
             .attribute => |attr| if (attr.name.eql(comptime .wrap("class"))) {
                 const first = self.class_attribute == null;
                 if (first) {
-                    self.class_attribute = .{ .reach = reach, .subjects = ClassUse.any_subject };
+                    self.class_attribute = .{ .reach = reach, .boxes = boxes, .subjects = ClassUse.any_subject };
                 }
-                try self.noteClassUse(&self.class_attribute.?, first, reach, subject);
+                try self.noteClassUse(&self.class_attribute.?, first, reach, subject, boxes);
                 if (self.class_attribute_selectors.items.len < max_class_attribute_selectors) {
                     try self.class_attribute_selectors.append(self.arena.allocator(), attr);
                 } else {
@@ -1386,14 +1431,14 @@ fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, r
             },
             .pseudo_class => |pseudo| switch (pseudo) {
                 .not, .is, .where => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, reach, own, rule_subject);
+                    try self.collectClassReach(selector, reach, own, rule_subject, boxes);
                 },
                 // A sibling's class changes which index the element has
                 .nth_child_of, .nth_last_child_of => |of| for (of.selectors) |selector| {
-                    try self.collectClassReach(selector, reach.widest(.parent_subtree), false, null);
+                    try self.collectClassReach(selector, reach.widest(.parent_subtree), false, null, boxes);
                 },
                 .has => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, .full, false, null);
+                    try self.collectClassReach(selector, .full, false, null, boxes);
                 },
                 .focus => self.focus_reach = if (self.focus_reach) |current| current.widest(reach) else reach,
                 .focus_within => self.focus_within_reach = if (self.focus_within_reach) |current| current.widest(reach) else reach,
@@ -1414,11 +1459,13 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         return true;
     }
     var reach: ?ClassReach = null;
+    var moves: BoxReach = .none;
     var subjects: ClassSubjects = .{};
     // [class*=x] reads the string, [class] its presence
     if (self.class_attribute) |use| {
         if (self.classAttributeMatchChanged(el, old, new)) {
             reach = use.reach;
+            moves = use.boxes;
             subjects.add(self, use);
         }
     }
@@ -1433,6 +1480,7 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
             }
             if (self.class_reach.get(class)) |use| {
                 reach = if (reach) |current| current.widest(use.reach) else use.reach;
+                moves = moves.widest(use.boxes);
                 subjects.add(self, use);
             }
         }
@@ -1440,6 +1488,9 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
     const scope = reach orelse return true;
     if (scope == .full) {
         return false;
+    }
+    if (moves == .hit) {
+        self.inline_bumps += 1;
     }
 
     var memos: Memos = .empty;
@@ -1452,7 +1503,9 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         }
     }
     if (budget == 0) {
-        self.layout_bumps += 1;
+        if (moves == .layout) {
+            self.layout_bumps += 1;
+        }
         return true;
     }
     const node = el.asNode();
@@ -1461,8 +1514,10 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         // nothing under it was read since it was dropped, boxes included
         return true;
     }
-    // Boxes can move: the ones whose styles go, and what they push around
-    var boxes: BoxScope = .init(self, &memos, &budget);
+    // Boxes can move: the ones whose styles go, and what they push around.
+    // Unless no rule the classes are in declares anything that moves one:
+    // the layout memo and the hit bands then outlive the styles.
+    var boxes: BoxScope = if (moves == .layout) .init(self, &memos, &budget) else .{ .style_manager = self, .memos = &memos, .scoped = false };
     keyed: {
         if (subjects.any) {
             break :keyed;
@@ -1498,7 +1553,10 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
     if (self.dropSubtree(root, memos, &budget) == false) {
         return false;
     }
-    self.recordDropped(root);
+    if (moves == .layout) {
+        // droppedCovers answers for the boxes too, and these were kept
+        self.recordDropped(root);
+    }
     return true;
 }
 
@@ -1970,7 +2028,7 @@ fn dropWidths(self: *StyleManager, root: *Node, heights: bool) void {
             self.walked += 1;
         }
         if (self.layout_memo.map.getPtr(el)) |entry| {
-            inline for (.{ .box_width, .content_width, .full_content_width, .min_content_width, .scrollable_content_width, .row_shrink }) |kind| {
+            inline for (.{ .box_width, .content_width, .full_content_width, .min_content_width, .scrollable_content_width, .row_fit }) |kind| {
                 entry.drop(kind);
             }
             entry.sizes_others = false;
@@ -3193,6 +3251,74 @@ pub fn paddingStart(self: *StyleManager, el: *Element, comptime axis: Element.Ax
     return .{ .fraction = 0, .px = @max(0, start.resolve(self, el) orelse 0) };
 }
 
+/// One of el's margins. A length's percentage is of the containing block's
+/// width; auto takes the free space on its side.
+pub const Margin = union(enum) {
+    auto,
+    length: Percent,
+};
+
+pub fn margin(self: *StyleManager, el: *Element, comptime side: Side) Margin {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{ .length = .{ .fraction = 0 } };
+    // One value: a position walk reads this for every box it passes
+    const length = self.geometry.ownProp(self.arena.allocator(), el, "margin_" ++ @tagName(side), self.frame);
+    if (length.unit == .auto) {
+        return .auto;
+    }
+    if (length.percentage()) |percent| {
+        return .{ .length = percent };
+    }
+    return .{ .length = .{ .fraction = 0, .px = length.resolve(self, el) orelse 0 } };
+}
+
+/// How many of el's left and right margins are auto
+pub fn autoMargins(self: *StyleManager, el: *Element) u2 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return 0;
+    const left, const right = self.geometry.ownPair(self.arena.allocator(), el, "margin_left", "margin_right", self.frame);
+    return @as(u2, @intFromBool(left.unit == .auto)) + @intFromBool(right.unit == .auto);
+}
+
+/// What places a flex row's free space, from one read; null for an element
+/// that isn't a flex row.
+pub const FlexRow = struct {
+    wraps: bool,
+    justify: Justify,
+};
+
+pub fn flexRow(self: *StyleManager, el: *Element) ?FlexRow {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    const visibility = self.visibilityProps(el);
+    if (visibility.display != .flex or visibility.flex_column) {
+        return null;
+    }
+    return .{ .wraps = visibility.flex_wrap, .justify = visibility.justify };
+}
+
+/// el's left and right margins together: what it takes on its line beyond
+/// its width, an auto one 0. Like margin, from one read: a line walk asks for
+/// every sibling.
+pub fn inlineMarginSum(self: *StyleManager, el: *Element) Percent {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{ .fraction = 0 };
+    const left, const right = self.geometry.ownPair(self.arena.allocator(), el, "margin_left", "margin_right", self.frame);
+    var sum: Percent = .{ .fraction = 0 };
+    if (left.isNone() and right.isNone()) {
+        return sum;
+    }
+    for ([_]Length{ left, right }) |length| {
+        if (length.percentage()) |percent| {
+            sum.fraction += percent.fraction;
+            sum.px += percent.px;
+        } else {
+            sum.px += length.resolve(self, el) orelse 0;
+        }
+    }
+    return sum;
+}
+
 /// The nearest element to el that generates a box, or `el` itself it it does
 pub fn boxElement(self: *StyleManager, el: *Element) ?*Element {
     self.assertOwns(el);
@@ -3429,6 +3555,21 @@ fn gridProps(self: *StyleManager, el: *Element) Grid.Computed {
     return self.grid.ownProps(self.arena.allocator(), el, self.frame);
 }
 
+/// Whether `el`'s margins apply: not without a box, and not on a table's
+/// cell or row (CSS 2 §8.3), which the table places. Out of the flow those
+/// are blocks.
+pub fn takesMargins(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    switch (self.visibilityProps(el).box) {
+        .contents => return self.generatesBox(el),
+        .table_cell, .table_row => {
+            const flow = self.flowProps(el);
+            return flow.position.outOfFlow() or flow.floated;
+        },
+        else => return true,
+    }
+}
+
 /// An in-flow table cell: it sits beside its sibling cells.
 pub fn isTableCell(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
@@ -3555,9 +3696,9 @@ fn widthLimit(self: *StyleManager, el: *Element, length: Length) ?BoxLength {
     return .{ .px = length.resolve(self, el) orelse return null };
 }
 
-// row_shrink is a flex row's shrink ratio, not a width. Offsets aren't a
-// kind: see getCachedOffset.
-pub const LayoutKind = enum { box_width, content_width, full_content_width, min_content_width, scrollable_content_width, row_shrink, box_height, content_height };
+// row_fit is how a flex row's items fit it (layout.rowFit), not a width.
+// Offsets aren't a kind: see getCachedOffset.
+pub const LayoutKind = enum { box_width, content_width, full_content_width, min_content_width, scrollable_content_width, row_fit, box_height, content_height };
 
 /// Element's computed layout (see layout.zig), valid for one layout version.
 const LayoutMemo = struct {
@@ -4217,6 +4358,17 @@ fn Group(comptime Spec: type) type {
                 }
             }
             return @field(self.ownProps(allocator, el, frame), field);
+        }
+
+        /// ownProp for two values, from the one lookup.
+        fn ownPair(self: *Self, allocator: Allocator, el: *Element, comptime first: []const u8, comptime second: []const u8, frame: *Frame) struct { @FieldType(Computed, first), @FieldType(Computed, second) } {
+            if (Stored == Computed) {
+                if (self.freshMemo(frame).getPtr(el)) |cached| {
+                    return .{ @field(cached, first), @field(cached, second) };
+                }
+            }
+            const computed = self.ownProps(allocator, el, frame);
+            return .{ @field(computed, first), @field(computed, second) };
         }
 
         /// Resolves the path up to the first memoized ancestor, so each
@@ -5067,6 +5219,37 @@ pub const Display = enum(u2) {
     }
 };
 
+/// Where justify-content puts a flex row's free space.
+pub const Justify = enum(u3) {
+    // normal, flex-start, stretch: none before the first item
+    start,
+    center,
+    end,
+    space_between,
+    space_around,
+    space_evenly,
+
+    fn parse(value: []const u8) Justify {
+        var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+        while (it.next()) |token| {
+            inline for (.{
+                .{ "center", .center },
+                .{ "flex-end", .end },
+                .{ "end", .end },
+                .{ "right", .end },
+                .{ "space-between", .space_between },
+                .{ "space-around", .space_around },
+                .{ "space-evenly", .space_evenly },
+            }) |keyword| {
+                if (std.ascii.eqlIgnoreCase(token, keyword[0])) {
+                    return keyword[1];
+                }
+            }
+        }
+        return .start;
+    }
+};
+
 const Box = enum(u3) {
     block_level,
     // A plain inline box: not a block container, so not a containing block
@@ -5386,12 +5569,23 @@ pub const Length = packed struct(u36) {
         return fromParsed(parsed);
     }
 
-    // A margin may be negative and has no intrinsic sizes; auto is 0.
-    fn parseMargin(text: []const u8) Length {
+    // An inset or a padding: it has no intrinsic sizes, and an inset may be
+    // negative. auto, and what doesn't parse, are auto.
+    fn parseEdge(text: []const u8) Length {
         if (Calc.isCalc(text)) {
             return Calc.parse(text);
         }
         return fromParsed(units.parse(text) catch return .{});
+    }
+
+    // A margin, which may be negative. Only `auto` is auto: it takes the
+    // free space, so what doesn't parse (initial, unset) is 0.
+    fn parseMargin(text: []const u8) Length {
+        if (std.ascii.eqlIgnoreCase(text, "auto")) {
+            return .{};
+        }
+        const length = parseEdge(text);
+        return if (length.unit == .auto) .{ .unit = .px } else length;
     }
 
     fn fromParsed(parsed: units.Parsed) Length {
@@ -5713,12 +5907,13 @@ const Calc = struct {
 const Visibility = struct {
     const Declared = struct {
         // A shorthand comes before its longhands, so a later longhand wins
-        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-flow", "flex-direction", "flex-wrap" };
+        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-flow", "flex-direction", "flex-wrap", "justify-content" };
 
         display: ?Display = null,
         box: ?Box = null,
         flex_column: ?bool = null,
         flex_wrap: ?bool = null,
+        justify: ?Justify = null,
         // Inner null: an explicit inherit, which still wins the cascade
         visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
@@ -5735,6 +5930,9 @@ const Visibility = struct {
                 },
                 .@"flex-wrap" => {
                     self.flex_wrap = isWrap(value);
+                },
+                .@"justify-content" => {
+                    self.justify = Justify.parse(value);
                 },
                 .@"flex-flow" => {
                     self.flex_column = false;
@@ -5787,6 +5985,7 @@ const Visibility = struct {
         box: Box = .inline_level,
         flex_column: bool = false,
         flex_wrap: bool = false,
+        justify: Justify = .start,
         author_display: bool = false,
         // Null takes the parent's value
         visibility_hidden: ?bool = null,
@@ -5796,11 +5995,12 @@ const Visibility = struct {
         outside_flat_tree: bool = false,
     };
 
-    const Computed = packed struct(u12) {
+    const Computed = packed struct(u15) {
         display: Display = .other,
         box: Box = .inline_level,
         flex_column: bool = false,
         flex_wrap: bool = false,
+        justify: Justify = .start,
         author_display: bool = false,
         visibility_hidden: bool = false, // inherited
         pointer_events_none: bool = false, // inherited
@@ -5813,6 +6013,7 @@ const Visibility = struct {
                 .box = own.box,
                 .flex_column = own.flex_column,
                 .flex_wrap = own.flex_wrap,
+                .justify = own.justify,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
@@ -5895,43 +6096,43 @@ const Geometry = struct {
                     self.flex_no_shrink = flexShorthandNoShrink(value);
                 },
                 .margin => {
-                    const sides = boxSides(value) orelse return;
+                    const sides = boxSides(value, Length.parseMargin) orelse return;
                     self.margin_left = sides.left;
                     self.margin_right = sides.right;
                 },
                 .@"margin-inline" => {
-                    const sides = inlineSides(value) orelse return;
+                    const sides = inlineSides(value, Length.parseMargin) orelse return;
                     self.margin_left = sides.left;
                     self.margin_right = sides.right;
                 },
                 .inset => {
-                    const sides = boxSides(value) orelse return;
+                    const sides = boxSides(value, Length.parseEdge) orelse return;
                     self.left = sides.left;
                     self.right = sides.right;
                     self.top = sides.top;
                     self.bottom = sides.bottom;
                 },
                 .@"inset-block" => {
-                    const sides = inlineSides(value) orelse return;
+                    const sides = inlineSides(value, Length.parseEdge) orelse return;
                     self.top = sides.left;
                     self.bottom = sides.right;
                 },
                 .top, .@"inset-block-start" => {
-                    self.top = Length.parseMargin(value);
+                    self.top = Length.parseEdge(value);
                 },
                 .bottom, .@"inset-block-end" => {
-                    self.bottom = Length.parseMargin(value);
+                    self.bottom = Length.parseEdge(value);
                 },
                 .@"inset-inline" => {
-                    const sides = inlineSides(value) orelse return;
+                    const sides = inlineSides(value, Length.parseEdge) orelse return;
                     self.left = sides.left;
                     self.right = sides.right;
                 },
                 .left, .@"inset-inline-start" => {
-                    self.left = Length.parseMargin(value);
+                    self.left = Length.parseEdge(value);
                 },
                 .right, .@"inset-inline-end" => {
-                    self.right = Length.parseMargin(value);
+                    self.right = Length.parseEdge(value);
                 },
                 .@"margin-left", .@"margin-inline-start" => {
                     self.margin_left = Length.parseMargin(value);
@@ -5972,33 +6173,33 @@ const Geometry = struct {
                     }
                 },
                 .padding => {
-                    const sides = boxSides(value) orelse return;
+                    const sides = boxSides(value, Length.parseEdge) orelse return;
                     self.padding_top = sides.top;
                     self.padding_right = sides.right;
                     self.padding_bottom = sides.bottom;
                     self.padding_left = sides.left;
                 },
                 .@"padding-inline" => {
-                    const sides = inlineSides(value) orelse return;
+                    const sides = inlineSides(value, Length.parseEdge) orelse return;
                     self.padding_left = sides.left;
                     self.padding_right = sides.right;
                 },
                 .@"padding-block" => {
-                    const sides = inlineSides(value) orelse return;
+                    const sides = inlineSides(value, Length.parseEdge) orelse return;
                     self.padding_top = sides.left;
                     self.padding_bottom = sides.right;
                 },
                 .@"padding-top", .@"padding-block-start" => {
-                    self.padding_top = Length.parseMargin(value);
+                    self.padding_top = Length.parseEdge(value);
                 },
                 .@"padding-right", .@"padding-inline-end" => {
-                    self.padding_right = Length.parseMargin(value);
+                    self.padding_right = Length.parseEdge(value);
                 },
                 .@"padding-bottom", .@"padding-block-end" => {
-                    self.padding_bottom = Length.parseMargin(value);
+                    self.padding_bottom = Length.parseEdge(value);
                 },
                 .@"padding-left", .@"padding-inline-start" => {
-                    self.padding_left = Length.parseMargin(value);
+                    self.padding_left = Length.parseEdge(value);
                 },
                 .@"box-sizing" => {
                     self.border_box = std.ascii.eqlIgnoreCase(value, "border-box");
@@ -6012,7 +6213,7 @@ const Geometry = struct {
 
         // The sides of a `top [right [bottom [left]]]` shorthand (margin,
         // inset, padding).
-        fn boxSides(value: []const u8) ?Sides {
+        fn boxSides(value: []const u8, comptime parse: fn ([]const u8) Length) ?Sides {
             var count: usize = 0;
             var tokens: [4][]const u8 = undefined;
             var it: Components = .{ .value = value };
@@ -6027,21 +6228,21 @@ const Geometry = struct {
             }
             const right = tokens[@min(count - 1, 1)];
             return .{
-                .left = Length.parseMargin(if (count == 4) tokens[3] else right),
-                .right = Length.parseMargin(right),
-                .top = Length.parseMargin(tokens[0]),
-                .bottom = Length.parseMargin(tokens[if (count >= 3) 2 else 0]),
+                .left = parse(if (count == 4) tokens[3] else right),
+                .right = parse(right),
+                .top = parse(tokens[0]),
+                .bottom = parse(tokens[if (count >= 3) 2 else 0]),
             };
         }
 
         // `start [end]` (margin-inline, inset-inline, padding-inline), in a
         // left-to-right flow
-        fn inlineSides(value: []const u8) ?Sides {
+        fn inlineSides(value: []const u8, comptime parse: fn ([]const u8) Length) ?Sides {
             var it: Components = .{ .value = value };
             const start = it.next() orelse return null;
             return .{
-                .left = Length.parseMargin(start),
-                .right = Length.parseMargin(it.next() orelse start),
+                .left = parse(start),
+                .right = parse(it.next() orelse start),
             };
         }
 
@@ -6204,9 +6405,10 @@ const Geometry = struct {
         max_width: Length = .{},
         min_height: Length = .{},
         max_height: Length = .{},
-        // auto, and values that need layout, are 0
-        margin_left: Length = .{},
-        margin_right: Length = .{},
+        // auto takes the free space (see layout.marginOn); values that need
+        // layout are 0
+        margin_left: Length = .{ .unit = .px },
+        margin_right: Length = .{ .unit = .px },
         // Positioned boxes only; auto, and values that need layout, are auto
         left: Length = .{},
         right: Length = .{},
@@ -8263,10 +8465,11 @@ test "StyleManager: memo: a class change drops what its selectors reach" {
     try testing.expectEqual(version, frame.page.style_version);
     try testing.expectEqual(layout_version, sm.layoutVersion());
 
-    // Its subtree only: p keeps its entry
+    // Its subtree only: p keeps its entry. And only its styles: no box
+    // moves with a visibility.
     try section.setAttribute(comptime .wrap("class"), comptime .wrap("hook a"), frame);
     try testing.expectEqual(version, frame.page.style_version);
-    try testing.expect(sm.layoutVersion() != layout_version);
+    try testing.expectEqual(layout_version, sm.layoutVersion());
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
     try testing.expectEqual(cascades + 2, sm.visibility.cascades);
@@ -8700,6 +8903,66 @@ test "StyleManager: hit bands: a z-index write keeps the layout memo and the ban
     // It does nothing on a box that isn't positioned
     try style.setProperty("position", "static", null, frame);
     try testing.expectEqual(.flow, sm.hitFacts(div).layer);
+}
+
+test "StyleManager: hit bands: a class no rule moves a box with keeps the layout memo and the bands" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".off { pointer-events: none; opacity: 0.5 } .gone { visibility: hidden } .gone i { z-index: 2 }" ++
+        " .down { position: relative; top: 30px } .tall { height: 80px !important } .mixed { opacity: 0 } p.mixed { width: 40px }", frame);
+    _ = try html.insertBefore(style_el.asNode(), body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style='width: 100px; height: 50px'><i></i></div>" ++
+        "<p style='width: 100px; height: 50px'></p>");
+    const div = body.firstChild().?.as(Element);
+    const p = body.lastChild().?.as(Element);
+    const class: String = comptime .wrap("class");
+
+    try testing.expectEqual(div, (try doc.hitTest(10, 10, frame)).?);
+    try testing.expectEqual(p, (try doc.hitTest(10, 60, frame)).?);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+    const layout_bumps = sm.layout_bumps;
+    const version = sm.hitVersion();
+    const entries = sm.layout_memo.map.count();
+
+    try testing.expectEqual(BoxReach.none, sm.class_reach.get("off").?.boxes);
+    try testing.expectEqual(BoxReach.none, sm.class_reach.get("gone").?.boxes);
+    try testing.expectEqual(BoxReach.layout, sm.class_reach.get("down").?.boxes);
+    try testing.expectEqual(BoxReach.layout, sm.class_reach.get("tall").?.boxes);
+    // every rule it's in counts
+    try testing.expectEqual(BoxReach.layout, sm.class_reach.get("mixed").?.boxes);
+
+    // The styles go, so the hit sees them: the boxes stay
+    try div.setAttribute(class, comptime .wrap("off"), frame);
+    try testing.expectEqual(body.as(Element), (try doc.hitTest(10, 10, frame)).?);
+    try div.setAttribute(class, comptime .wrap("gone"), frame);
+    try testing.expectEqual(body.as(Element), (try doc.hitTest(10, 10, frame)).?);
+    try div.setAttribute(class, comptime .wrap(""), frame);
+    try testing.expectEqual(div, (try doc.hitTest(10, 10, frame)).?);
+    try testing.expectEqual(p, (try doc.hitTest(10, 60, frame)).?);
+
+    try testing.expectEqual(layout_bumps, sm.layout_bumps);
+    try testing.expectEqual(version, sm.hitVersion());
+    try testing.expectEqual(version, sm.hit_bands.version);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+    try testing.expectEqual(entries, sm.layout_memo.map.count());
+
+    // One that moves a box right after one that doesn't, nothing read between
+    try div.setAttribute(class, comptime .wrap("off"), frame);
+    try div.setAttribute(class, comptime .wrap("tall"), frame);
+    try testing.expectEqual(div, (try doc.hitTest(10, 60, frame)).?);
+    try testing.expectEqual(p, (try doc.hitTest(10, 90, frame)).?);
+    try testing.expect(version != sm.hitVersion());
+
+    try div.setAttribute(class, comptime .wrap("down"), frame);
+    try testing.expectEqual(div, (try doc.hitTest(10, 70, frame)).?);
 }
 
 test "StyleManager: a viewport change drops the layout" {
@@ -9506,9 +9769,9 @@ test "StyleManager: records: the layout memo keeps each kind apart" {
     const div = try frame.window._document.createElement("div", null, frame);
     try testing.expectEqual(null, sm.getCachedLayout(div, .box_width));
     sm.setCacheLayout(div, .box_width, 120);
-    sm.setCacheLayout(div, .row_shrink, 0.5);
+    sm.setCacheLayout(div, .row_fit, 0.5);
     try testing.expectEqual(120, sm.getCachedLayout(div, .box_width));
-    try testing.expectEqual(0.5, sm.getCachedLayout(div, .row_shrink));
+    try testing.expectEqual(0.5, sm.getCachedLayout(div, .row_fit));
     try testing.expectEqual(null, sm.getCachedLayout(div, .content_width));
     try testing.expectEqual(1, sm.layout_memo.map.count());
 
@@ -9517,7 +9780,7 @@ test "StyleManager: records: the layout memo keeps each kind apart" {
     try testing.expectEqual(null, sm.getCachedLayout(div, .box_width));
     sm.setCacheLayout(div, .content_width, 80);
     try testing.expectEqual(80, sm.getCachedLayout(div, .content_width));
-    try testing.expectEqual(null, sm.getCachedLayout(div, .row_shrink));
+    try testing.expectEqual(null, sm.getCachedLayout(div, .row_fit));
 }
 
 test "StyleManager: records: the generation wraps" {
@@ -10524,13 +10787,13 @@ test "StyleManager: work: child-combinator rules keyed by parent" {
 
     // The cascade the counts describe
     const spans = elements[1..9];
-    try testing.expectEqual(Length{}, sm.geometryProps(spans[0]).margin_left);
+    try testing.expectEqual(Length{ .unit = .px }, sm.geometryProps(spans[0]).margin_left);
     try testing.expectEqual(Length{ .value = 4, .unit = .px }, sm.geometryProps(spans[1]).margin_left);
     try testing.expectEqual(Length{ .value = 100, .unit = .percent }, sm.geometryProps(elements[10]).width);
     try testing.expectEqual(Length{}, sm.geometryProps(elements[15]).width);
     const gap_spans = elements[20..24];
     try testing.expectEqual(Length{ .value = 4, .unit = .px }, sm.geometryProps(gap_spans[0]).margin_right);
-    try testing.expectEqual(Length{}, sm.geometryProps(gap_spans[3]).margin_right);
+    try testing.expectEqual(Length{ .unit = .px }, sm.geometryProps(gap_spans[3]).margin_right);
 
     // Filed in `other`, every element was matched against all 81 rules:
     // 24 * 81 = 1944 matches for 27 probes. Now each child of a keyed parent
@@ -10755,8 +11018,8 @@ test "StyleManager: parent-keyed and :where rules keep their priority" {
     try testing.expectEqual(Length{ .value = 10, .unit = .px }, sm.geometryProps(section.asNode().firstChild().?.as(Element)).width);
     try testing.expectEqual(Length{ .value = 30, .unit = .px }, sm.geometryProps(section).width);
     try testing.expectEqual(Length{ .value = 5, .unit = .px }, sm.geometryProps(after_x).margin_left);
-    try testing.expectEqual(Length{}, sm.geometryProps(after_x.asNode().nextSibling().?.as(Element)).margin_left);
-    try testing.expectEqual(Length{}, sm.geometryProps(after_x).margin_right);
+    try testing.expectEqual(Length{ .unit = .px }, sm.geometryProps(after_x.asNode().nextSibling().?.as(Element)).margin_left);
+    try testing.expectEqual(Length{ .unit = .px }, sm.geometryProps(after_x).margin_right);
 
     // `*`
     try testing.expectEqual(1, sm.geometry.other_rules.len);
