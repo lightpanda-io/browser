@@ -224,6 +224,9 @@ const Channel = struct {
 
     fn trySend(self: *const Channel, value_: ?js.Value, exec: *const js.Execution) !void {
         const bidi = self.bidi;
+        if (bidi.subscribed("script.message") == false) {
+            return;
+        }
         const frame = switch (exec.js.global) {
             .frame => |frame| frame,
             .worker => return,
