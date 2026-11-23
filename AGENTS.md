@@ -39,12 +39,13 @@ Mirror the patterns in neighboring files. In particular:
 
 ## Object lifetimes
 
-A realm (`js.Context`) is torn down when its frame navigates or is removed, but another frame can still hold objects that were created in it. A navigation re-initializes the `Frame` struct in place, so a `*Frame` kept from before it names the next document.
+A realm (`js.Context`) is destroyed when its frame navigates or its worker goes away, while another frame can still hold, and call, the objects that were created in it. A navigation re-initializes the `Frame` struct in place, so a `*Frame` kept from before it names the next document, and a kept `*Execution` points into freed memory.
 
-- A web API object doesn't keep a `*Frame`. It keeps its realm, `_exec: *js.Execution`, taken from `&frame.main_js.execution` (during a call `frame.js` is the calling world's context, and an isolated world can go before its frame does).
-- It reaches the frame through `exec.frame()`, which is null once the realm is gone. Decide what the API does then, check it against Chrome, and add the case to `src/browser/tests/frames/navigated_realm_objects.html`.
-- `*Frame` as a parameter is fine: the bridge passes the frame of the realm that is running.
-- Once a realm is gone, `Execution`'s event methods (`dispatch`, `registerListener`, `setHandler`, ...) do nothing and `Scheduler.add` fails with `error.SchedulerClosed`. Its other methods still forward to the frame.
-- A scheduler task's finalizer runs after the realm is marked gone, so it releases through `_exec.page` and `_exec._factory`.
+- An object that outlives the call that created it doesn't store a `*Frame`, a `*Execution`, a `*js.Context` or anything they own (scheduler, call arena, `url`, ...). It stores a handle (`src/browser/js/handle.zig`): `_frame: js.FrameHandle` from `frame.handle()`, or `_exec: js.ExecutionHandle` from `exec.handle()`.
+- A handle has no realm to misuse: `get()` (the `*Frame` or `*Execution`) and `js()` (the `*js.Context`) return null once the realm is gone. A `FrameHandle` names the document the frame had when it was taken: after a navigation it resolves to null, not to the next document.
+- What outlives the realm needs no check: `handle.page()`, and through it the factory and the page arena. A scheduler task's finalizer runs when its realm is already gone, so it releases through that.
+- `ExecutionHandle.global()` is the `Frame` or `WorkerGlobalScope` of the realm, which an isolated world can be destroyed before. An object linked in a list its global owns is unlinked through it.
+- Decide what each use does when the handle resolves to null (throw, ignore, leave a promise pending), check it against Chrome, and add the case to `src/browser/tests/frames/navigated_realm_*.html`.
+- `frame: *Frame` and `exec: *Execution` as parameters are fine: the bridge passes the realm that is running. For a method of an object whose realm is gone, that is the caller's.
 
-What still keeps a `*Frame`: `Window` (one per frame, re-initialized with it), `Document._frame` (set by `Frame.init`, cleared by `Frame.deinit`), `WorkerGlobalScope._frame` (the frame that owns the worker), and task or walker structs that belong to a frame's scheduler or to a single call.
+What still keeps a pointer, and why it can't go stale: `Document._frame` (an optional, set by `Frame.init` and cleared by `Frame.deinit`), `Worker._worker_scope` (an optional, cleared by `Worker.deinit`), a task struct that keeps the realm whose scheduler it is queued on (it only runs while that realm exists, and is finalized before the realm is freed), `Media._clock` (cleared by its task's finalizer), and structs that live for a single call (walkers, parsers).
