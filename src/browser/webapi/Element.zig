@@ -2036,7 +2036,7 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
                 current = (anchor.base orelse return x).asNode();
                 continue;
             }
-            x += layout.relativeShift(el, .horizontal, owner);
+            x += layout.relativeShift(el, .horizontal, owner) + layout.marginOn(el, .left, owner);
         }
         const parent = current.flatParent(frame) orelse return x;
         if (current.is(Element)) |el| {
@@ -2078,6 +2078,12 @@ pub const LineCursor = struct {
     // Text before the box, unwrapped: on its line, or in a row the
     // anonymous item a run of it makes.
     text: ?layout.LineText(.full) = null,
+    // A flex row's free space, read at the first offset; null for none
+    space: ??layout.RowSpace = null,
+    // In a row with space to place: the items before `next`, and their
+    // auto margins
+    items: f64 = 0,
+    autos: f64 = 0,
 
     pub const Mode = enum {
         // a flex row's item, a table cell: beside every sibling before it
@@ -2138,6 +2144,11 @@ pub const LineCursor = struct {
     /// `node` is a child of the parent, at or after the last one asked for.
     pub fn offsetOf(self: *LineCursor, node: *Node, owner: *Frame) f64 {
         const style_manager = &owner._style_manager;
+        const space: ?layout.RowSpace = self.space orelse blk: {
+            const space = if (self.mode == .row and self.text != null) layout.rowSpace(self.text.?.parent, owner) else null;
+            self.space = space;
+            break :blk space;
+        };
         while (self.next) |s| : (self.next = s.flatNextSibling(self.frame)) {
             if (s == node) break;
             const sibling = s.is(Element) orelse {
@@ -2164,23 +2175,44 @@ pub const LineCursor = struct {
                 style_manager.line_steps += 1;
             }
             if (self.mode == .row) {
-                // The text since the last item is an item of its own
-                self.x += self.textItem();
+                self.addTextItem();
+                self.items += 1;
+                if (space != null and space.?.auto != 0) {
+                    self.autos += @floatFromInt(style_manager.autoMargins(sibling));
+                }
             }
-            self.x += layout.boxWidth(sibling, owner);
+            const width = layout.boxWidth(sibling, owner);
+            if (width == 0 and self.mode == .row and style_manager.widthSizing(sibling) == .contents) {
+                // No box, but its children are the row's items
+                self.x += layout.contentsItemWidth(sibling, owner);
+                continue;
+            }
+            self.x += width + layout.inlineMargins(sibling, owner);
         }
         if (self.mode == .row) {
-            self.x += self.textItem();
-            return self.x;
+            self.addTextItem();
+            const placed = space orelse return self.x;
+            var autos = self.autos;
+            if (placed.auto != 0) {
+                if (node.is(Element)) |el| {
+                    const left = style_manager.margin(el, .left) == .auto and style_manager.takesMargins(el);
+                    autos += @floatFromInt(@intFromBool(left));
+                }
+            }
+            return self.x + placed.lead + placed.between * self.items + placed.auto * autos;
         }
         return self.x + if (self.text) |*t| t.widthBefore() else 0;
     }
 
-    // Snapped to Chrome's 1/64px layout unit, like an element item. It's
-    // never shrunk: the row's sizing doesn't see it.
-    fn textItem(self: *LineCursor) f64 {
-        const t = &(self.text orelse return 0);
-        return @round(t.end() * 64) / 64;
+    // The text since the last item is an item of its own. Snapped to
+    // Chrome's 1/64px layout unit, like an element item; it's never shrunk.
+    fn addTextItem(self: *LineCursor) void {
+        const t = &(self.text orelse return);
+        const width = @round(t.end() * 64) / 64;
+        if (width > 0) {
+            self.x += width;
+            self.items += 1;
+        }
     }
 };
 

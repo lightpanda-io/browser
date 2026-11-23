@@ -7,6 +7,8 @@
   .bmBorderBox { box-sizing: border-box; }
   .bmPadded { padding: 10px; }
   .bmLonghand { padding: 10px; padding-bottom: 30px; }
+  .bmMargin { margin: 0 12px; }
+  .bmCentre { margin: 0 auto; }
 </style>
 
 <div id="bm-hit" style="width: 0; height: 0; padding: 6px"></div>
@@ -269,6 +271,249 @@
   testing.expectEqual(child, document.elementFromPoint(p.left + 25, p.top + 25));
   testing.expectEqual(child, document.elementFromPoint(p.left + 115, p.top + 55));
   testing.expectEqual(parent, document.elementFromPoint(p.left + 130, p.top + 70));
+
+  wrap.remove();
+}
+</script>
+
+<script id="marginPositions">
+{
+  const wrap = document.createElement('div');
+  wrap.id = 'bm-margin-wrap';
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const left = (id) => rect(id).left - wrap.getBoundingClientRect().left;
+
+  // A left margin moves a block, both narrow it; a percentage is of the
+  // containing block's width, a negative one pulls it out
+  wrap.innerHTML = '<div id="bm-m-block" style="margin-left: 30px; margin-right: 20px; height: 10px"></div>' +
+    '<div id="bm-m-percent" style="margin-left: 10%; height: 10px"></div>' +
+    '<div id="bm-m-negative" style="margin-left: -15px; height: 10px"></div>' +
+    '<div id="bm-m-sheet" class="bmMargin" style="height: 10px"><div id="bm-m-nested" style="margin-left: 5px; height: 10px"></div></div>';
+  testing.expectEqual(30, left('bm-m-block'));
+  testing.expectEqual(550, rect('bm-m-block').width);
+  testing.expectEqual(60, left('bm-m-percent'));
+  testing.expectEqual(-15, left('bm-m-negative'));
+  testing.expectEqual(615, rect('bm-m-negative').width);
+  testing.expectEqual(12, left('bm-m-sheet'));
+  testing.expectEqual(17, left('bm-m-nested'));
+  testing.expectEqual(12, $('#bm-m-sheet').offsetLeft - wrap.offsetLeft);
+
+  // On a line or in a row, a box's margins also keep the next one away
+  wrap.innerHTML = '<div style="display: flex"><div id="bm-m-item-a" style="width: 50px; height: 10px; margin: 0 10px"></div><div id="bm-m-item-b" style="width: 50px; height: 10px; margin-left: 5px"></div></div>' +
+    '<div><span id="bm-m-inline-a" style="display: inline-block; width: 20px; height: 10px; margin: 0 4px"></span><span id="bm-m-inline-b" style="display: inline-block; width: 20px; height: 10px"></span></div>' +
+    '<div style="display: grid; grid-template-columns: 1fr 1fr; width: 200px"><div id="bm-m-cell-a" style="height: 10px; margin-left: 10px"></div><div id="bm-m-cell-b" style="height: 10px"></div></div>';
+  testing.expectEqual(10, left('bm-m-item-a'));
+  testing.expectEqual(75, left('bm-m-item-b'));
+  testing.expectEqual(4, left('bm-m-inline-a'));
+  testing.expectEqual(28, left('bm-m-inline-b'));
+  testing.expectEqual(10, left('bm-m-cell-a'));
+  testing.expectEqual(90, rect('bm-m-cell-a').width);
+  testing.expectEqual(100, left('bm-m-cell-b'));
+
+  // A table places its cells and rows: their margins do nothing
+  wrap.innerHTML = '<table style="border-collapse: collapse"><tr id="bm-m-tr" style="margin-left: 25px">' +
+    '<td id="bm-m-td-a" style="padding: 0; width: 50px; height: 10px; margin: 0 30px"></td>' +
+    '<td id="bm-m-td-b" style="padding: 0; width: 50px; height: 10px; margin-left: 15px"></td></tr></table>' +
+    '<div><div style="display: table-cell; width: 40px; height: 10px; margin-left: 20px" id="bm-m-div-cell"></div></div>';
+  testing.expectEqual(0, left('bm-m-tr'));
+  testing.expectEqual(0, left('bm-m-td-a'));
+  testing.expectEqual(50, left('bm-m-td-b'));
+  testing.expectEqual(0, left('bm-m-div-cell'));
+  testing.expectEqual(0, $('#bm-m-td-a').offsetLeft);
+  testing.expectEqual($('#bm-m-td-b'), document.elementFromPoint(rect('bm-m-td-b').left + 2, rect('bm-m-td-b').top + 2));
+  testing.expectEqual($('#bm-m-td-a'), document.elementFromPoint(rect('bm-m-td-a').left + 48, rect('bm-m-td-a').top + 2));
+
+  // A row group's margins do nothing either, auto ones included
+  wrap.innerHTML = '<table style="border-collapse: collapse"><tbody id="bm-m-tbody" style="margin-left: 20px"><tr>' +
+    '<td id="bm-m-tbody-td" style="padding: 0; width: 50px; height: 10px"></td></tr></tbody></table>' +
+    '<div><div id="bm-m-div-group" style="display: table-row-group; width: 100px; height: 10px; margin: 0 auto"></div></div>';
+  testing.expectEqual(0, left('bm-m-tbody'));
+  testing.expectEqual(0, left('bm-m-tbody-td'));
+  testing.expectEqual(0, left('bm-m-div-group'));
+
+  // display: contents has no box, so no margins, and its children are the
+  // row's items
+  wrap.innerHTML = '<div style="display: flex">' +
+    '<div style="display: contents; margin-left: auto"><i style="display: block; width: 50px; height: 10px"></i></div>' +
+    '<div id="bm-m-after-contents" style="width: 50px; height: 10px; margin-left: auto"></div></div>' +
+    '<div style="display: flex">' +
+    '<div style="display: contents"><i style="display: block; width: 50px; height: 10px; margin-right: 5px"></i></div>' +
+    '<div id="bm-m-past-contents" style="width: 50px; height: 10px"></div></div>';
+  testing.expectEqual(550, left('bm-m-after-contents'));
+  testing.expectEqual(55, left('bm-m-past-contents'));
+
+  // An inset places the margin box: the left margin after a left inset, the
+  // right one before a right inset
+  wrap.innerHTML = '<div style="position: relative; height: 20px">' +
+    '<div id="bm-m-centred" style="position: absolute; left: 50%; margin-left: -50px; width: 100px; height: 5px"></div>' +
+    '<div id="bm-m-right" style="position: absolute; right: 0; margin-right: 10px; width: 20px; height: 5px"></div>' +
+    '<div id="bm-m-static" style="position: absolute; margin-left: 7px; width: 20px; height: 5px"></div></div>';
+  testing.expectEqual(250, left('bm-m-centred'));
+  testing.expectEqual(570, left('bm-m-right'));
+  testing.expectEqual(7, left('bm-m-static'));
+
+  // display: contents has no box to move
+  wrap.innerHTML = '<div style="display: contents; margin-left: 50px"><div id="bm-m-contents" style="height: 10px"></div></div>';
+  testing.expectEqual(0, left('bm-m-contents'));
+
+  // A margin write moves the box and what follows it on its line
+  wrap.innerHTML = '<div style="display: flex"><div id="bm-m-write" style="width: 50px; height: 10px"></div><div id="bm-m-write-after" style="width: 50px; height: 10px"></div></div>';
+  testing.expectEqual(0, left('bm-m-write'));
+  testing.expectEqual(50, left('bm-m-write-after'));
+  $('#bm-m-write').style.margin = '0 8px 0 25px';
+  testing.expectEqual(25, left('bm-m-write'));
+  testing.expectEqual(83, left('bm-m-write-after'));
+  $('#bm-m-write').style.margin = '';
+  testing.expectEqual(0, left('bm-m-write'));
+  testing.expectEqual(50, left('bm-m-write-after'));
+
+  // A point in the margin isn't the box's
+  wrap.innerHTML = '<div id="bm-m-hit" style="margin-left: 100px; width: 50px; height: 20px"></div>';
+  const w = wrap.getBoundingClientRect();
+  testing.expectEqual(wrap, document.elementFromPoint(w.left + 10, w.top + 10));
+  testing.expectEqual($('#bm-m-hit'), document.elementFromPoint(w.left + 110, w.top + 10));
+  testing.expectEqual(wrap, document.elementFromPoint(w.left + 160, w.top + 10));
+
+  wrap.remove();
+}
+</script>
+
+<script id="autoMargins">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const left = (id) => rect(id).left - wrap.getBoundingClientRect().left;
+
+  // A block narrower than its container: auto margins share the room left
+  wrap.innerHTML = '<div id="bm-a-centre" style="width: 200px; margin: 0 auto; height: 10px"><div id="bm-a-child" style="height: 10px"></div></div>' +
+    '<div id="bm-a-max" style="max-width: 300px; margin-left: auto; margin-right: auto; height: 10px"></div>' +
+    '<div id="bm-a-left" style="width: 100px; margin-left: auto; height: 10px"></div>' +
+    '<div id="bm-a-left-right" style="width: 100px; margin-left: auto; margin-right: 50px; height: 10px"></div>' +
+    '<div id="bm-a-right" style="width: 100px; margin-right: auto; height: 10px"></div>' +
+    '<div id="bm-a-sheet" class="bmCentre" style="width: 100px; height: 10px"></div>' +
+    '<div id="bm-a-wide" style="width: 700px; margin: 0 auto; height: 10px"></div>' +
+    '<div id="bm-a-fill" style="margin: 0 auto; height: 10px"></div>' +
+    '<div id="bm-a-initial" style="width: 100px; margin: initial; height: 10px"></div>';
+  testing.expectEqual(200, left('bm-a-centre'));
+  testing.expectEqual(200, left('bm-a-child'));
+  testing.expectEqual(150, left('bm-a-max'));
+  testing.expectEqual(300, rect('bm-a-max').width);
+  testing.expectEqual(500, left('bm-a-left'));
+  testing.expectEqual(450, left('bm-a-left-right'));
+  testing.expectEqual(0, left('bm-a-right'));
+  testing.expectEqual(250, left('bm-a-sheet'));
+  testing.expectEqual(0, left('bm-a-wide'));
+  testing.expectEqual(0, left('bm-a-fill'));
+  testing.expectEqual(600, rect('bm-a-fill').width);
+  testing.expectEqual(0, left('bm-a-initial'));
+
+  // On a line, auto is 0
+  wrap.innerHTML = '<div><span id="bm-a-inline" style="display: inline-block; width: 20px; height: 10px; margin: 0 auto"></span></div>';
+  testing.expectEqual(0, left('bm-a-inline'));
+
+  // A box pinned on both sides: between its insets
+  wrap.innerHTML = '<div style="position: relative; height: 20px">' +
+    '<div id="bm-a-abs" style="position: absolute; left: 0; right: 0; width: 100px; margin: auto; height: 5px"></div>' +
+    '<div id="bm-a-abs-left" style="position: absolute; left: 20px; right: 30px; width: 100px; margin-left: auto; height: 5px"></div></div>';
+  testing.expectEqual(250, left('bm-a-abs'));
+  testing.expectEqual(470, left('bm-a-abs-left'));
+
+  // A write centres it, and puts it back
+  wrap.innerHTML = '<div id="bm-a-write" style="width: 100px; height: 10px"></div>';
+  testing.expectEqual(0, left('bm-a-write'));
+  $('#bm-a-write').style.margin = '0 auto';
+  testing.expectEqual(250, left('bm-a-write'));
+  $('#bm-a-write').style.marginLeft = '10px';
+  testing.expectEqual(10, left('bm-a-write'));
+
+  wrap.remove();
+}
+</script>
+
+<script id="flexFreeSpace">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const left = (id) => rect(id).left - wrap.getBoundingClientRect().left;
+  const item = (id, style = '') => `<div id="${id}" style="width: 50px; height: 10px; ${style}"></div>`;
+  const row = (style, ...items) => `<div style="display: flex; ${style}">${items.join('')}</div>`;
+
+  // A row's free space goes to its items' auto margins, in equal shares
+  wrap.innerHTML = row('', item('bm-f-a'), item('bm-f-b', 'margin-left: auto')) +
+    row('', item('bm-f-both', 'margin: 0 auto')) +
+    row('', item('bm-f-c', 'margin-right: auto'), item('bm-f-d'), item('bm-f-e', 'margin-left: auto'));
+  testing.expectEqual(0, left('bm-f-a'));
+  testing.expectEqual(550, left('bm-f-b'));
+  testing.expectEqual(275, left('bm-f-both'));
+  testing.expectEqual(0, left('bm-f-c'));
+  testing.expectEqual(275, left('bm-f-d'));
+  testing.expectEqual(550, left('bm-f-e'));
+
+  // Without one, justify-content places it
+  wrap.innerHTML = row('justify-content: center', item('bm-j-c1'), item('bm-j-c2')) +
+    row('justify-content: flex-end', item('bm-j-e1'), item('bm-j-e2')) +
+    row('justify-content: space-between', item('bm-j-b1'), item('bm-j-b2'), item('bm-j-b3')) +
+    row('justify-content: space-around', item('bm-j-a1'), item('bm-j-a2'), item('bm-j-a3')) +
+    row('justify-content: space-evenly', item('bm-j-v1'), item('bm-j-v2'), item('bm-j-v3')) +
+    row('justify-content: space-between', item('bm-j-one'));
+  testing.expectEqual(250, left('bm-j-c1'));
+  testing.expectEqual(300, left('bm-j-c2'));
+  testing.expectEqual(500, left('bm-j-e1'));
+  testing.expectEqual(550, left('bm-j-e2'));
+  testing.expectEqual(0, left('bm-j-b1'));
+  testing.expectEqual(275, left('bm-j-b2'));
+  testing.expectEqual(550, left('bm-j-b3'));
+  testing.expectEqual(75, left('bm-j-a1'));
+  testing.expectEqual(275, left('bm-j-a2'));
+  testing.expectEqual(475, left('bm-j-a3'));
+  testing.expectEqual(112.5, left('bm-j-v1'));
+  testing.expectEqual(275, left('bm-j-v2'));
+  testing.expectEqual(437.5, left('bm-j-v3'));
+  testing.expectEqual(0, left('bm-j-one'));
+
+  // An auto margin wins over justify-content; an item that grows leaves
+  // nothing to place, and neither does a row that overflows
+  wrap.innerHTML = row('justify-content: center', item('bm-j-m1'), item('bm-j-m2', 'margin-left: auto')) +
+    row('justify-content: center', '<div id="bm-j-grow" style="flex: 1; height: 10px"></div>', item('bm-j-g2')) +
+    row('justify-content: center', '<div id="bm-j-over" style="width: 500px; height: 10px"></div>', '<div style="width: 500px; height: 10px"></div>');
+  testing.expectEqual(0, left('bm-j-m1'));
+  testing.expectEqual(550, left('bm-j-m2'));
+  testing.expectEqual(0, left('bm-j-grow'));
+  testing.expectEqual(550, rect('bm-j-grow').width);
+  testing.expectEqual(550, left('bm-j-g2'));
+  testing.expectEqual(0, left('bm-j-over'));
+  testing.expectEqual(300, rect('bm-j-over').width);
+
+  // A run of text is an item too: the box after it ends at the row's edge
+  wrap.innerHTML = '<div style="display: flex; justify-content: space-between">Title<b id="bm-j-text">date</b></div>' +
+    '<div style="display: flex">Title<b id="bm-j-text-auto" style="margin-left: auto">date</b></div>';
+  testing.expectEqual(true, Math.abs(rect('bm-j-text').right - wrap.getBoundingClientRect().right) < 0.1);
+  testing.expectEqual(true, Math.abs(rect('bm-j-text-auto').right - wrap.getBoundingClientRect().right) < 0.1);
+
+  // Writes move the items
+  wrap.innerHTML = '<div id="bm-j-write" style="display: flex">' + item('bm-j-w1') + item('bm-j-w2') + '</div>';
+  testing.expectEqual(50, left('bm-j-w2'));
+  $('#bm-j-write').style.justifyContent = 'flex-end';
+  testing.expectEqual(500, left('bm-j-w1'));
+  testing.expectEqual(550, left('bm-j-w2'));
+  $('#bm-j-write').style.justifyContent = '';
+  $('#bm-j-w2').style.marginLeft = 'auto';
+  testing.expectEqual(0, left('bm-j-w1'));
+  testing.expectEqual(550, left('bm-j-w2'));
+  $('#bm-j-w2').style.marginLeft = '';
+  testing.expectEqual(50, left('bm-j-w2'));
+
+  // and a hit follows them
+  wrap.innerHTML = row('justify-content: flex-end', item('bm-j-hit'));
+  const w = wrap.getBoundingClientRect();
+  testing.expectEqual($('#bm-j-hit'), document.elementFromPoint(w.left + 575, w.top + 5));
+  testing.expectEqual(false, $('#bm-j-hit') === document.elementFromPoint(w.left + 25, w.top + 5));
 
   wrap.remove();
 }
