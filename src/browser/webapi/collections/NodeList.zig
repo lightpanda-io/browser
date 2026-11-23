@@ -34,7 +34,7 @@ const log = lp.log;
 const NodeList = @This();
 
 _data: union(enum) {
-    child_nodes: *ChildNodes,
+    child_nodes: ChildNodes,
     selector_list: *SelectorList,
     radio_node_list: *RadioNodeList,
     name: NodeLive(.name),
@@ -43,7 +43,7 @@ _rc: lp.RC = .{},
 
 pub fn deinit(self: *NodeList, page: *Page) void {
     switch (self._data) {
-        .child_nodes => |cn| cn.deinit(page),
+        .child_nodes => page.factory.destroy(self),
         .selector_list => |list| list.deinit(page),
         .radio_node_list => |rnl| rnl._form_collection.releaseRef(page),
         .name => {},
@@ -60,7 +60,7 @@ pub fn acquireRef(self: *NodeList) void {
 
 pub fn length(self: *NodeList, frame: *Frame) u32 {
     return switch (self._data) {
-        .child_nodes => |impl| impl.length(frame),
+        .child_nodes => |*impl| impl.length(frame),
         .selector_list => |impl| @intCast(impl.getLength()),
         .radio_node_list => |impl| impl.getLength(),
         .name => |*impl| impl.length(frame),
@@ -73,7 +73,7 @@ fn indexedGet(self: *NodeList, index: usize, frame: *Frame) !*Node {
 
 pub fn getAtIndex(self: *NodeList, index: usize, frame: *Frame) ?*Node {
     return switch (self._data) {
-        .child_nodes => |impl| impl.getAtIndex(index, frame),
+        .child_nodes => |*impl| impl.getAtIndex(index, frame),
         .selector_list => |impl| impl.getAtIndex(index),
         .radio_node_list => |impl| impl.getAtIndex(index),
         .name => |*impl| if (impl.getAtIndex(index, frame)) |el| el.asNode() else null,

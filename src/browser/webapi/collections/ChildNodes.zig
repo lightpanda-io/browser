@@ -16,48 +16,30 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const lp = @import("lightpanda");
-
-const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
-
-const GenericIterator = @import("iterator.zig").Entry;
 
 // Optimized for node.childNodes, which has to be a live list.
 // No need to go through a TreeWalker or add any filtering.
 const ChildNodes = @This();
 
-_arena: *lp.Arena,
 _last_index: usize,
 _last_length: ?u32,
 _last_node: ?*Node,
 _cached_version: usize,
 _node: *Node,
 
-pub const KeyIterator = GenericIterator(Iterator, "0");
-pub const ValueIterator = GenericIterator(Iterator, "1");
-pub const EntryIterator = GenericIterator(Iterator, null);
-
-pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
-    const arena = try frame.getArena(.small, "ChildNodes");
-    errdefer arena.release();
-
-    const self = try arena.create(ChildNodes);
-    self.* = .{
+// Held by value in the NodeList that exposes it, so it needs no allocation of
+// its own.
+pub fn init(node: *Node, frame: *const Frame) ChildNodes {
+    return .{
         ._node = node,
-        ._arena = arena,
         ._last_index = 0,
         ._last_node = null,
         ._last_length = null,
         ._cached_version = frame.page.dom_version,
     };
-    return self;
-}
-
-pub fn deinit(self: *const ChildNodes, _: *Page) void {
-    self._arena.release();
 }
 
 pub fn length(self: *ChildNodes, frame: *const Frame) u32 {
@@ -105,18 +87,6 @@ pub fn first(self: *const ChildNodes) ?*Node {
     return self._node.firstChild();
 }
 
-pub fn keys(self: *ChildNodes, frame: *Frame) !*KeyIterator {
-    return .init(.{ .list = self }, frame);
-}
-
-pub fn values(self: *ChildNodes, frame: *Frame) !*ValueIterator {
-    return .init(.{ .list = self }, frame);
-}
-
-pub fn entries(self: *ChildNodes, frame: *Frame) !*EntryIterator {
-    return .init(.{ .list = self }, frame);
-}
-
 fn versionCheck(self: *ChildNodes, frame: *const Frame) bool {
     const current = frame.page.dom_version;
     if (current == self._cached_version) {
@@ -128,26 +98,3 @@ fn versionCheck(self: *ChildNodes, frame: *const Frame) bool {
     self._cached_version = current;
     return false;
 }
-
-const NodeList = @import("NodeList.zig");
-pub fn runtimeGenericWrap(self: *ChildNodes, _: *const Frame) !*NodeList {
-    const nl = try self._arena.create(NodeList);
-    nl.* = .{
-        ._data = .{ .child_nodes = self },
-    };
-    return nl;
-}
-
-const Iterator = struct {
-    index: u32 = 0,
-    list: *ChildNodes,
-
-    const Entry = struct { u32, *Node };
-
-    pub fn next(self: *Iterator, frame: *const Frame) ?Entry {
-        const index = self.index;
-        const node = self.list.getAtIndex(index, frame) orelse return null;
-        self.index = index + 1;
-        return .{ index, node };
-    }
-};

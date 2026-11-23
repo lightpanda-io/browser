@@ -394,8 +394,10 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     return child;
 }
 
-pub fn childNodes(self: *Node, frame: *Frame) !*collections.ChildNodes {
-    return collections.ChildNodes.init(self, frame);
+pub fn childNodes(self: *Node, frame: *Frame) !*collections.NodeList {
+    return frame._factory.create(collections.NodeList{
+        ._data = .{ .child_nodes = .init(self, frame) },
+    });
 }
 
 pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!void {
