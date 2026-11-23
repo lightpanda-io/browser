@@ -106,8 +106,8 @@ const string = @import("string.zig");
 ///     to `false` when no `default` is given. `?bool` is not allowed.
 ///   - Integers (`u8`, `u16`, `u31`, `usize`, etc.) — parsed with
 ///     `std.fmt.parseInt`. Requires `default` unless wrapped in `?`.
-///   - Floats (`f32`, `f64`) — parsed with `std.fmt.parseFloat`. Requires
-///     `default` unless wrapped in `?`.
+///   - Floats (`f32`, `f64`) — parsed with `std.fmt.parseFloat`; `nan` and
+///     `inf` are refused. Requires `default` unless wrapped in `?`.
 ///   - `[]const u8`, `[:0]const u8` (and mutable variants) — string slices
 ///     duped from argv. Sentinel is preserved. Requires `default` unless `?`.
 ///   - Enums — parsed via `std.meta.stringToEnum`. Returns
@@ -739,10 +739,12 @@ pub fn Builder(comptime commands: anytype) type {
                     const Float = std.meta.Float(float.bits);
 
                     const str = args.next() orelse return error.MissingArgument;
-                    const v = std.fmt.parseFloat(Float, str) catch {
+                    const v = std.fmt.parseFloat(Float, str) catch std.math.nan(Float);
+                    // parseFloat accepts "nan" and "inf", which can't be sent as JSON.
+                    if (!std.math.isFinite(v)) {
                         log.fatal(.app, "invalid number", .{ .arg = kebab_cased, .value = str });
                         return error.InvalidArgument;
-                    };
+                    }
 
                     if (is_multiple) {
                         try target.append(allocator, v);

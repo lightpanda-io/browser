@@ -1543,6 +1543,7 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, mode: SynthesisMode)
             .max_tokens = 8192,
             .tool_choice = if (inspect) .auto else .none,
             .effort = bumpedEffort(self.effort).level(),
+            .temperature = self.temperature,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
             .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
