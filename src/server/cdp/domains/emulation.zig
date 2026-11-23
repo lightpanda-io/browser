@@ -209,10 +209,9 @@ fn clearGeolocationOverride(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// Accepted so drivers can finish context setup; Intl/Date keep the process
-// locale and timezone (--locale, --timezone). Changing them at runtime needs
-// zig-v8-fork bindings for Isolate::DateTimeConfigurationChangeNotification
-// and the ICU default locale.
+// Accepted so drivers can finish context setup; Intl keeps the process locale
+// (--locale). Changing it at runtime needs zig-v8-fork bindings for
+// Isolate::LocaleConfigurationChangeNotification and the ICU default locale.
 fn setLocaleOverride(cmd: *CDP.Command) !void {
     const Params = struct { locale: ?[]const u8 = null };
     const params = (try cmd.params(Params)) orelse Params{};
@@ -222,13 +221,38 @@ fn setLocaleOverride(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
+// Opt-in (--cdp-allow-timezone-override), because ICU has one default time
+// zone per process: every connection sees the override. Date and Intl follow
+// the zone until an empty id, or the end of the browser context, puts the
+// process zone back (--timezone, else the host's).
 fn setTimezoneOverride(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         timezoneId: []const u8,
     })) orelse return error.InvalidParams;
-    if (params.timezoneId.len > 0) {
-        log.debug(.not_implemented, "Emulation.setTimezoneOverride", .{ .timezoneId = params.timezoneId });
+
+    const browser = &cmd.cdp.browser;
+    const id = params.timezoneId;
+    if (!cmd.cdp.app.config.cdpAllowTimezoneOverride()) {
+        if (id.len > 0) {
+            log.warn(.cdp, "Emulation.setTimezoneOverride", .{ .timezoneId = id, .info = "Ignored: start with --cdp-allow-timezone-override to change the time zone at runtime, or with --timezone to set it for the process." });
+        }
+        return cmd.sendResult(null, .{});
     }
+    if (id.len == 0) {
+        browser.clearTimezoneOverride();
+        return cmd.sendResult(null, .{});
+    }
+
+    // Same shape check as --timezone; it also bounds the id for the buffer.
+    Config.validateTimezone(id) catch return cmd.sendError(-32602, "Invalid timezone id", .{});
+    var buf: [65]u8 = undefined;
+    @memcpy(buf[0..id.len], id);
+    buf[id.len] = 0;
+    browser.setTimezoneOverride(buf[0..id.len :0]) catch |err| switch (err) {
+        error.UnknownTimeZone => return cmd.sendError(-32602, "Invalid timezone id", .{}),
+        error.AlreadyOverridden => return cmd.sendError(-32000, "Timezone override is already in effect", .{}),
+    };
+
     return cmd.sendResult(null, .{});
 }
 
@@ -244,7 +268,7 @@ fn setScriptExecutionDisabled(cmd: *CDP.Command) !void {
 
 const testing = @import("../testing.zig");
 
-test "cdp.Emulation: locale, timezone and script execution stubs" {
+test "cdp.Emulation: locale and script execution stubs" {
     testing.silenceLog(&.{.not_implemented});
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -253,17 +277,141 @@ test "cdp.Emulation: locale, timezone and script execution stubs" {
     try ctx.processMessage(.{ .id = 1, .method = "Emulation.setLocaleOverride", .params = .{ .locale = "fr-FR" } });
     try ctx.expectSentResult(null, .{ .id = 1 });
 
-    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Europe/Paris" } });
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setScriptExecutionDisabled", .params = .{ .value = false } });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    try ctx.processMessage(.{ .id = 3, .method = "Emulation.setScriptExecutionDisabled", .params = .{ .value = false } });
-    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 3, .method = "Emulation.setScriptExecutionDisabled", .params = .{ .value = true } });
+    try ctx.expectSentError(-32000, "Disabling script execution is not supported", .{ .id = 3 });
 
-    try ctx.processMessage(.{ .id = 4, .method = "Emulation.setScriptExecutionDisabled", .params = .{ .value = true } });
-    try ctx.expectSentError(-32000, "Disabling script execution is not supported", .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 4, .method = "Emulation.setDefaultBackgroundColorOverride", .params = .{ .color = .{ .r = 0, .g = 0, .b = 0, .a = 0 } } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+}
 
-    try ctx.processMessage(.{ .id = 5, .method = "Emulation.setDefaultBackgroundColorOverride", .params = .{ .color = .{ .r = 0, .g = 0, .b = 0, .a = 0 } } });
+test "cdp.Emulation: setTimezoneOverride moves Date and Intl" {
+    const opts = &testing.base.test_config.mode.serve;
+    opts.cdp_allow_timezone_override = true;
+    defer opts.cdp_allow_timezone_override = false;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-TZ1", .url = "hi.html" });
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Read both before the override, so V8 has the host's offsets cached.
+    _ = try ls.local.exec(
+        \\window.zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+        \\window.offset = () => new Date(Date.UTC(2026, 0, 15)).getTimezoneOffset();
+        \\window.host = zone() + ' ' + offset();
+    , null);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Asia/Tokyo" } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    var v = try ls.local.exec("zone() === 'Asia/Tokyo' && offset() === -540", null);
+    try testing.expect(v.toBool());
+
+    // A second override replaces the first.
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "America/Phoenix" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    v = try ls.local.exec("zone() === 'America/Phoenix' && offset() === 420", null);
+    try testing.expect(v.toBool());
+
+    // An unknown zone is refused and leaves the override in place.
+    try ctx.processMessage(.{ .id = 3, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Mars/Phobos" } });
+    try ctx.expectSentError(-32602, "Invalid timezone id", .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 4, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Europe/ Paris" } });
+    try ctx.expectSentError(-32602, "Invalid timezone id", .{ .id = 4 });
+    v = try ls.local.exec("zone() === 'America/Phoenix' && offset() === 420", null);
+    try testing.expect(v.toBool());
+
+    // An empty id restores the host's zone.
+    try ctx.processMessage(.{ .id = 5, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "" } });
     try ctx.expectSentResult(null, .{ .id = 5 });
+    v = try ls.local.exec("zone() + ' ' + offset() === host", null);
+    try testing.expect(v.toBool());
+    try testing.expectEqual(false, ctx.cdp().app.timezone_override_held.load(.monotonic));
+}
+
+test "cdp.Emulation: setTimezoneOverride is refused while another browser holds it" {
+    const opts = &testing.base.test_config.mode.serve;
+    opts.cdp_allow_timezone_override = true;
+    defer opts.cdp_allow_timezone_override = false;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-TZ4", .url = "hi.html" });
+
+    // Another connection's browser holds the override.
+    const held = &ctx.cdp().app.timezone_override_held;
+    held.store(true, .monotonic);
+    defer held.store(false, .monotonic);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Asia/Tokyo" } });
+    try ctx.expectSentError(-32000, "Timezone override is already in effect", .{ .id = 1 });
+    try testing.expectEqual(false, ctx.cdp().browser.timezone_overridden);
+
+    // Clearing what this browser never set leaves the holder alone.
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(true, held.load(.monotonic));
+}
+
+test "cdp.Emulation: setTimezoneOverride is ignored without --cdp-allow-timezone-override" {
+    testing.expectLog(&.{.cdp});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-TZ0", .url = "hi.html" });
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec("window.zone = Intl.DateTimeFormat().resolvedOptions().timeZone", null);
+
+    // Kiritimati is UTC+14: no host a test runs on is likely to share it.
+    try ctx.processMessage(.{ .id = 1, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Pacific/Kiritimati" } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    const v = try ls.local.exec("Intl.DateTimeFormat().resolvedOptions().timeZone === zone", null);
+    try testing.expect(v.toBool());
+    try testing.expectEqual(false, ctx.cdp().browser.timezone_overridden);
+}
+
+test "cdp.Emulation: setTimezoneOverride ends with the browser context" {
+    const opts = &testing.base.test_config.mode.serve;
+    opts.cdp_allow_timezone_override = true;
+    defer opts.cdp_allow_timezone_override = false;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const probe = "Intl.DateTimeFormat().resolvedOptions().timeZone + ' ' + new Date(Date.UTC(2026, 0, 15)).getTimezoneOffset()";
+    var buf: [128]u8 = undefined;
+    var host: []const u8 = undefined;
+
+    {
+        const bc = try ctx.loadBrowserContext(.{ .id = "BID-TZ2", .url = "hi.html" });
+        const frame = (try testing.firstTarget(bc)).mainFrame().?;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        host = try std.fmt.bufPrint(&buf, "{s}", .{try (try ls.local.exec(probe, null)).toStringSlice()});
+
+        // Kiritimati is UTC+14: no host a test runs on is likely to share it.
+        try ctx.processMessage(.{ .id = 1, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Pacific/Kiritimati" } });
+        try ctx.expectSentResult(null, .{ .id = 1 });
+        try testing.expectEqual("Pacific/Kiritimati -840", try (try ls.local.exec(probe, null)).toStringSlice());
+    }
+
+    // loadBrowserContext disposes the previous context first.
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-TZ3", .url = "hi.html" });
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(host, try (try ls.local.exec(probe, null)).toStringSlice());
 }
 
 test "cdp.Emulation: viewport override fires matchMedia change events" {

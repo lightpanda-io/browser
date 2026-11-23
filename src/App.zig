@@ -52,6 +52,9 @@ regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
 
+// Set while a Browser holds Emulation.setTimezoneOverride. Only 1 per process
+timezone_override_held: std.atomic.Value(bool) = .init(false),
+
 /// One connection pool and CA bundle for the API clients outside the page
 /// network stack (decisions, search, the agent's model), so a call to a host
 /// already reached skips the handshakes. Shared across threads, which its
