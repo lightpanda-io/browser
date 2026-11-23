@@ -171,6 +171,7 @@ pub const FetchOpts = struct {
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
+    png_mode: screenshot.Mode = .layout,
     /// Dump only the first match instead of the document.
     selector: ?[:0]const u8 = null,
     /// Any page with an HTTP status >= 400 fails the fetch with `error.HttpError`.
@@ -523,14 +524,14 @@ const Binary = union(enum) {
 fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Binary {
     const state = try RenderTree.resolve(arena, try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
     return switch (opts.dump_mode.?) {
-        .png => .{ .png = try screenshot.preparePng(arena, state, pngOpts(frame), frame) },
+        .png => .{ .png = try screenshot.preparePng(arena, state, pngOpts(frame, opts), frame) },
         .pdf => .{ .pdf = try pdf.prepare(arena, state, .{}, frame) },
         else => unreachable,
     };
 }
 
-fn pngOpts(frame: *Frame) screenshot.Opts {
-    return .fromViewport(frame.page.getViewport(), true);
+fn pngOpts(frame: *Frame, opts: FetchOpts) screenshot.Opts {
+    return .fromViewport(frame.page.getViewport(), true, opts.png_mode);
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
@@ -551,7 +552,7 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
         .html => try dump.render(state, opts.dump, writer, frame),
         .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes }, writer, frame),
         .png => {
-            _ = try screenshot.png(arena.allocator(), state, pngOpts(frame), writer, frame);
+            _ = try screenshot.png(arena.allocator(), state, pngOpts(frame, opts), writer, frame);
         },
         .pdf => {
             try pdf.print(arena.allocator(), state, .{}, writer, frame);

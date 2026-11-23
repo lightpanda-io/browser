@@ -1151,7 +1151,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
     const viewport = cmd.cdp.browser.getViewport();
 
-    var opts: lp.screenshot.Opts = .fromViewport(viewport, params.captureBeyondViewport orelse false);
+    var opts: lp.screenshot.Opts = .fromViewport(viewport, params.captureBeyondViewport orelse false, .layout);
     if (params.clip) |clip| {
         opts.clip = .{
             .x = @floatCast(clip.x),
@@ -1236,12 +1236,12 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
     const width = viewport.width;
     const height = viewport.height;
 
-    // Full-page height as our text rendering lays it out, so a fullPage
+    // Full-page height as the screenshot lays it out, so a fullPage
     // screenshot (getLayoutMetrics → captureScreenshot) is consistent.
     const content_height: u32 = blk: {
         const target = cmd.target() catch break :blk height;
         const frame = target.mainFrame() orelse break :blk height;
-        const h = lp.screenshot.contentHeight(cmd.arena, frame.window._document.asNode(), width, frame) catch break :blk height;
+        const h = lp.screenshot.contentHeight(cmd.arena, frame.window._document.asNode(), width, .layout, frame) catch break :blk height;
         break :blk @max(height, h);
     };
 

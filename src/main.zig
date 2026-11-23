@@ -213,6 +213,7 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .inject_script = opts.inject_script,
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
+                .png_mode = opts.png_mode,
                 .selector = opts.dump_selector,
                 .fail_on_http_error = opts.fail_on_http_error,
                 .markdown_alternate = opts.markdown_alternate,

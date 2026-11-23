@@ -24,6 +24,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::Write;
 use std::os::raw::c_void;
 
 use fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
@@ -37,7 +38,7 @@ use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::TableProvider;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
-use tiny_skia::{Color, FillRule, IntRect, Paint, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 // ---------------------------------------------------------------------------
 // C ABI — mirrored by src/browser/screenshot.zig.
@@ -87,6 +88,25 @@ pub struct LpBlock {
     pub list_depth: u8,
     pub quote_depth: u8,
     pub flags: u8,
+}
+
+/// The box's edges are drawn: without backgrounds or borders, the outline is
+/// what shows where the box is.
+pub const BOX_OUTLINE: u32 = 1 << 0;
+
+/// A box placed by the page's own layout (`lp_render_boxes_png`), in CSS px
+/// from the top-left of the output. Its text starts at the box's top-left
+/// corner and wraps at its width, but isn't clipped to it.
+#[repr(C)]
+pub struct LpBox {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub spans: *const LpSpan,
+    pub spans_len: usize,
+    pub font_size: f32,
+    pub flags: u32,
 }
 
 /// The bytes belong to the caller and must outlive the renderer and every
@@ -290,6 +310,18 @@ pub struct LpAbi {
     pub block_quote_depth: u32,
     pub block_flags: u32,
 
+    pub box_size: u32,
+    pub box_align: u32,
+    pub box_x: u32,
+    pub box_y: u32,
+    pub box_width: u32,
+    pub box_height: u32,
+    pub box_spans: u32,
+    pub box_spans_len: u32,
+    pub box_font_size: u32,
+    pub box_flags: u32,
+    pub box_outline: u32,
+
     pub opts_size: u32,
     pub opts_align: u32,
     pub opts_width: u32,
@@ -432,6 +464,18 @@ pub unsafe extern "C" fn lp_render_abi(out: *mut LpAbi) {
         block_list_depth: offset_of!(LpBlock, list_depth) as u32,
         block_quote_depth: offset_of!(LpBlock, quote_depth) as u32,
         block_flags: offset_of!(LpBlock, flags) as u32,
+
+        box_size: size_of::<LpBox>() as u32,
+        box_align: align_of::<LpBox>() as u32,
+        box_x: offset_of!(LpBox, x) as u32,
+        box_y: offset_of!(LpBox, y) as u32,
+        box_width: offset_of!(LpBox, width) as u32,
+        box_height: offset_of!(LpBox, height) as u32,
+        box_spans: offset_of!(LpBox, spans) as u32,
+        box_spans_len: offset_of!(LpBox, spans_len) as u32,
+        box_font_size: offset_of!(LpBox, font_size) as u32,
+        box_flags: offset_of!(LpBox, flags) as u32,
+        box_outline: BOX_OUTLINE,
 
         opts_size: size_of::<LpRenderOpts>() as u32,
         opts_align: align_of::<LpRenderOpts>() as u32,
@@ -640,6 +684,46 @@ unsafe fn render_png(
     }
 }
 
+/// Draws `boxes`, already placed by the caller's layout, to PNG. Same
+/// contract as `lp_render_png`; `content_height` is the bottom of the lowest
+/// box.
+#[no_mangle]
+pub unsafe extern "C" fn lp_render_boxes_png(
+    r: *mut Renderer,
+    boxes: *const LpBox,
+    boxes_len: usize,
+    opts: LpRenderOpts,
+    content_height: *mut u32,
+    ctx: *mut c_void,
+    write: LpWriteFn,
+) -> i32 {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if opts.width == 0 || !(opts.scale > 0.0) || opts.scale > 8.0 {
+            return RC_INVALID;
+        }
+        let boxes = if boxes_len == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(boxes, boxes_len)
+        };
+        let mut sink = Sink {
+            ctx,
+            write,
+            failed: false,
+        };
+        let (h, rc) = (*r).render_boxes(boxes, opts, &mut sink);
+        if !content_height.is_null() {
+            *content_height = h;
+        }
+        if sink.failed {
+            RC_WRITE_REFUSED
+        } else {
+            rc
+        }
+    }));
+    caught.unwrap_or(RC_PANIC)
+}
+
 /// Lays `blocks` out in a column `width` layout px wide with `margin` on
 /// every side and exports the result into `out`. Null on invalid input or
 /// panic; the handle must be freed with `lp_layout_free`.
@@ -659,7 +743,7 @@ pub unsafe extern "C" fn lp_layout_new(
         let Some(doc) = blocks_from_ffi(blocks, blocks_len) else {
             return std::ptr::null_mut();
         };
-        let (placed, height) = (*r).layout(&doc, width, margin, 1.0);
+        let (placed, height) = (*r).layout(&doc, width, margin, 1.0, f32::INFINITY);
         let handle = Box::new(LayoutHandle::export(&placed, height, &(*r).fallbacks));
         *out = handle.view();
         Box::into_raw(handle)
@@ -903,20 +987,9 @@ unsafe fn blocks_from_ffi<'a>(blocks: *const LpBlock, blocks_len: usize) -> Opti
     };
     let mut doc: Vec<Block> = Vec::with_capacity(blocks_len);
     for b in blocks {
-        let spans = if b.spans_len == 0 {
-            &[][..]
-        } else {
-            std::slice::from_raw_parts(b.spans, b.spans_len)
-        };
-        let mut out_spans = Vec::with_capacity(spans.len());
-        for s in spans {
-            let bytes = std::slice::from_raw_parts(s.text, s.len);
-            let text = std::str::from_utf8(bytes).ok()?;
-            out_spans.push(Span {
-                text,
-                flags: s.flags,
-                color: s.color,
-            });
+        let mut out_spans = Vec::with_capacity(b.spans_len);
+        if !spans_from_ffi(&mut out_spans, b.spans, b.spans_len) {
+            return None;
         }
         let marker =
             std::str::from_utf8(std::slice::from_raw_parts(b.marker, b.marker_len)).unwrap_or("");
@@ -931,6 +1004,30 @@ unsafe fn blocks_from_ffi<'a>(blocks: *const LpBlock, blocks_len: usize) -> Opti
         });
     }
     Some(doc)
+}
+
+/// Replaces `out` with the spans; false if any isn't UTF-8.
+unsafe fn spans_from_ffi<'a>(
+    out: &mut Vec<Span<'a>>,
+    spans: *const LpSpan,
+    spans_len: usize,
+) -> bool {
+    out.clear();
+    if spans_len == 0 {
+        return true;
+    }
+    for s in std::slice::from_raw_parts(spans, spans_len) {
+        let bytes = std::slice::from_raw_parts(s.text, s.len);
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return false;
+        };
+        out.push(Span {
+            text,
+            flags: s.flags,
+            color: s.color,
+        });
+    }
+    true
 }
 
 pub(crate) struct Sink {
@@ -960,6 +1057,20 @@ struct Span<'a> {
     color: u32,
 }
 
+/// A box of the layout render that reaches the raster, in device px.
+struct BoxItem {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    /// The taller of the box and its text
+    extent: f32,
+    /// How far a glyph can reach past its line box
+    slop: f32,
+    outline: bool,
+    text: Option<Layout<Rgb>>,
+}
+
 struct Block<'a> {
     kind: u8,
     level: u8,
@@ -987,11 +1098,21 @@ const PRE_PAD: f32 = 8.0;
 const TEXT_COLOR: Rgb = Rgb(0x1f, 0x1f, 0x1f);
 const RULE_COLOR: Rgb = Rgb(0xcc, 0xcc, 0xcc);
 const PRE_BG: Rgb = Rgb(0xf4, 0xf4, 0xf4);
+/// Box outlines in the layout render
+const BOX_COLOR: Rgb = Rgb(0xd8, 0xd8, 0xd8);
+/// text_measure.LINE_HEIGHT, which the layout sizes boxes with
+const BOX_LINE_HEIGHT: f32 = 1.2;
 /// Device pixels per side. Chrome's own full-page captures top out around here.
 const MAX_RASTER_DIM: u64 = 16384;
-/// Device pixels in total, 4 bytes each: a 256MB ceiling on the pixmap. A 4K
+/// Device pixels in total: a ceiling on the output, 256MB decoded. A 4K
 /// viewport captured full-page at 2x still fits.
 const MAX_RASTER_PIXELS: u64 = 64 << 20;
+/// Rows rasterized at a time. The page is drawn band by band straight into
+/// the PNG encoder, so the pixmap is this tall rather than the page.
+const BAND_ROWS: u32 = 128;
+/// Line height of the reader render's largest text (an <h1>), in layout px:
+/// how far outside a band a line can be and still have glyphs reach into it.
+const READER_SLOP: f32 = BASE_SIZE * 2.0 * 1.25;
 
 /// (font, glyph id). Deliberately not the size — see draw_glyph_run.
 type GlyphKey = (usize, u32);
@@ -1170,20 +1291,92 @@ impl Renderer {
         fams[0].0
     }
 
+    /// `spans` shaped into `layout` (whose allocations are reused) at `scale`
+    /// device px per layout px, lines not broken yet. `mono` sets the whole
+    /// text in the monospace face.
+    fn text_layout(
+        &mut self,
+        layout: &mut Layout<Rgb>,
+        spans: &[Span],
+        mono: bool,
+        size: f32,
+        weight: FontWeight,
+        line_h: f32,
+        scale: f32,
+    ) {
+        let root = TextStyle {
+            font_family: FontFamily::Source(Cow::Borrowed(if mono {
+                "monospace"
+            } else {
+                "sans-serif"
+            })),
+            font_size: size,
+            font_weight: weight,
+            brush: TEXT_COLOR,
+            line_height: LineHeight::FontSizeRelative(line_h),
+            overflow_wrap: OverflowWrap::Anywhere,
+            ..Default::default()
+        };
+        let mut builder = self.lcx.tree_builder(&mut self.fcx, scale, true, &root);
+        // The Zig walker already collapsed whitespace; preserving lets
+        // "\n" (from <br> and <pre>) act as a hard break.
+        builder.set_white_space_mode(WhiteSpaceCollapse::Preserve);
+        let mut props: Vec<StyleProperty<Rgb>> = Vec::with_capacity(6);
+        for span in spans {
+            props.clear();
+            if span.flags & SPAN_BOLD != 0 {
+                props.push(StyleProperty::FontWeight(FontWeight::BOLD));
+            }
+            if span.flags & SPAN_ITALIC != 0 {
+                props.push(StyleProperty::FontStyle(FontStyle::Italic));
+            }
+            if span.flags & SPAN_UNDERLINE != 0 {
+                props.push(StyleProperty::Underline(true));
+            }
+            if span.flags & SPAN_STRIKE != 0 {
+                props.push(StyleProperty::Strikethrough(true));
+            }
+            if span.flags & SPAN_MONO != 0 && !mono {
+                props.push(StyleProperty::FontFamily(FontFamily::Source(
+                    Cow::Borrowed("monospace"),
+                )));
+                props.push(StyleProperty::FontSize(size * 0.9));
+            }
+            if span.flags & SPAN_HAS_COLOR != 0 {
+                let c = Rgb(
+                    (span.color >> 16) as u8,
+                    (span.color >> 8) as u8,
+                    span.color as u8,
+                );
+                props.push(StyleProperty::Brush(c));
+                props.push(StyleProperty::UnderlineBrush(Some(c)));
+                props.push(StyleProperty::StrikethroughBrush(Some(c)));
+            }
+            builder.push_style_modification_span(&props);
+            builder.push_text(span.text);
+            builder.pop_style_span();
+        }
+        builder.build_into(layout);
+    }
+
     /// Flows `blocks` into a column `width` layout px wide with `margin` on
     /// every side, shaping at `scale` device px per layout px. Returns the
     /// placed blocks and the column height (margins included), in layout px.
+    /// A block starting at or below `keep_below` is only measured: its
+    /// `Placed` has no text.
     pub(crate) fn layout(
         &mut self,
         blocks: &[Block],
         width: f32,
         margin: f32,
         scale: f32,
+        keep_below: f32,
     ) -> (Vec<Placed>, f32) {
         let content_w = (width - 2.0 * margin).max(1.0);
         let mut y = margin;
         let mut placed: Vec<Placed> = Vec::with_capacity(blocks.len());
         let mut prev_after: Option<f32> = None;
+        let mut scratch = Layout::new();
 
         for block in blocks {
             let (size, weight, before, after, line_h) = block_metrics(block);
@@ -1212,64 +1405,18 @@ impl Renderer {
             }
 
             let is_pre = block.kind == BLOCK_PRE;
-            let root = TextStyle {
-                font_family: FontFamily::Source(Cow::Borrowed(if is_pre {
-                    "monospace"
-                } else {
-                    "sans-serif"
-                })),
-                font_size: size,
-                font_weight: weight,
-                brush: TEXT_COLOR,
-                line_height: LineHeight::FontSizeRelative(line_h),
-                overflow_wrap: OverflowWrap::Anywhere,
-                ..Default::default()
-            };
-            let mut builder = self.lcx.tree_builder(&mut self.fcx, scale, true, &root);
-            // The Zig walker already collapsed whitespace; preserving lets
-            // "\n" (from <br> and <pre>) act as a hard break.
-            builder.set_white_space_mode(WhiteSpaceCollapse::Preserve);
-            let mut props: Vec<StyleProperty<Rgb>> = Vec::with_capacity(6);
-            for span in &block.spans {
-                props.clear();
-                if span.flags & SPAN_BOLD != 0 {
-                    props.push(StyleProperty::FontWeight(FontWeight::BOLD));
-                }
-                if span.flags & SPAN_ITALIC != 0 {
-                    props.push(StyleProperty::FontStyle(FontStyle::Italic));
-                }
-                if span.flags & SPAN_UNDERLINE != 0 {
-                    props.push(StyleProperty::Underline(true));
-                }
-                if span.flags & SPAN_STRIKE != 0 {
-                    props.push(StyleProperty::Strikethrough(true));
-                }
-                if span.flags & SPAN_MONO != 0 && !is_pre {
-                    props.push(StyleProperty::FontFamily(FontFamily::Source(
-                        Cow::Borrowed("monospace"),
-                    )));
-                    props.push(StyleProperty::FontSize(size * 0.9));
-                }
-                if span.flags & SPAN_HAS_COLOR != 0 {
-                    let c = Rgb(
-                        (span.color >> 16) as u8,
-                        (span.color >> 8) as u8,
-                        span.color as u8,
-                    );
-                    props.push(StyleProperty::Brush(c));
-                    props.push(StyleProperty::UnderlineBrush(Some(c)));
-                    props.push(StyleProperty::StrikethroughBrush(Some(c)));
-                }
-                builder.push_style_modification_span(&props);
-                builder.push_text(span.text);
-                builder.pop_style_span();
-            }
-            let (mut layout, _) = builder.build();
+            let keep = y < keep_below;
+            let mut own = Layout::new();
+            let layout = if keep { &mut own } else { &mut scratch };
+            self.text_layout(layout, &block.spans, is_pre, size, weight, line_h, scale);
             let pad = if is_pre { PRE_PAD } else { 0.0 };
             layout.break_all_lines(Some(((content_w - indent - 2.0 * pad) * scale).max(1.0)));
-            layout.align(Alignment::Start, AlignmentOptions::default());
+            if keep {
+                layout.align(Alignment::Start, AlignmentOptions::default());
+            }
+            let h = layout.height() / scale;
 
-            let marker = if block.marker.is_empty() {
+            let marker = if block.marker.is_empty() || !keep {
                 None
             } else {
                 let mut b = self
@@ -1283,9 +1430,8 @@ impl Renderer {
                 Some(Marker { layout: ml, x: mx })
             };
 
-            let h = layout.height() / scale;
             placed.push(Placed {
-                layout,
+                layout: own,
                 x: margin + indent + pad,
                 y: y + pad,
                 kind: block.kind,
@@ -1302,123 +1448,217 @@ impl Renderer {
     /// PNG reached `sink`.
     fn render(&mut self, blocks: &[Block], opts: LpRenderOpts, sink: &mut Sink) -> (u32, i32) {
         let scale = opts.scale;
-        let (placed, y) = self.layout(blocks, opts.width as f32, PAGE_MARGIN, scale);
+        let measure = opts.flags & RENDER_MEASURE_ONLY != 0;
+        let keep_below = if measure {
+            0.0
+        } else {
+            Strip::new(opts, u32::MAX).bottom() as f32 / scale
+        };
+        let (placed, y) = self.layout(blocks, opts.width as f32, PAGE_MARGIN, scale, keep_below);
         let content_h = y.ceil().max(1.0) as u32;
-        if opts.flags & RENDER_MEASURE_ONLY != 0 {
+        if measure {
             return (content_h, RC_OK);
         }
 
-        // Rasterize the requested strip (viewport or full page), then crop.
-        // A clip reaching past the strip extends it, but never past the
-        // content.
-        let mut out_h = if opts.height == 0 {
-            content_h
-        } else {
-            opts.height
-        };
-        if opts.clip_w > 0.0 {
-            let reach = (opts.clip_y as f64 + opts.clip_h as f64).ceil();
-            // A NaN reach clamps to NaN and casts to 0, leaving out_h alone.
-            out_h = out_h.max(reach.clamp(0.0, content_h as f64) as u32);
-        }
-        let pw = ((opts.width as f64 * scale as f64).ceil() as u64).clamp(1, MAX_RASTER_DIM);
-        let ph = ((out_h as f64 * scale as f64).ceil() as u64)
-            .clamp(1, MAX_RASTER_DIM)
-            .min((MAX_RASTER_PIXELS / pw).max(1));
-        let (pw, ph) = (pw as u32, ph as u32);
-        let Some(mut pixmap) = Pixmap::new(pw, ph) else {
-            return (content_h, RC_NO_RASTER);
-        };
-        pixmap.fill(Color::WHITE);
-
-        let mut paint = Paint::default();
-        paint.anti_alias = true;
-        for p in &placed {
-            let oy = p.y * scale;
-            if oy > ph as f32 {
-                break;
-            }
-            match p.kind {
-                BLOCK_RULE => {
-                    paint.set_color_rgba8(RULE_COLOR.0, RULE_COLOR.1, RULE_COLOR.2, 255);
-                    let w = (opts.width as f32 - PAGE_MARGIN) * scale - p.x * scale;
-                    if let Some(r) = Rect::from_xywh(p.x * scale, oy, w, 1.0 * scale) {
-                        pixmap.fill_rect(r, &paint, Transform::identity(), None);
-                    }
+        let slop = READER_SLOP * scale;
+        let pad = PRE_PAD * scale;
+        let rc = encode_bands(Strip::new(opts, content_h), sink, |band, top| {
+            let band_h = band.height() as f32;
+            for p in &placed {
+                let oy = p.y * scale - top;
+                if oy - pad - slop >= band_h {
+                    // Blocks are in y order
+                    break;
+                }
+                if oy + p.layout.height().max(scale) + pad + slop <= 0.0 {
                     continue;
                 }
-                BLOCK_PRE => {
-                    paint.set_color_rgba8(PRE_BG.0, PRE_BG.1, PRE_BG.2, 255);
-                    let x0 = (p.x - PRE_PAD) * scale;
-                    let w = (opts.width as f32 - PAGE_MARGIN) * scale - x0;
-                    if let Some(r) = Rect::from_xywh(
-                        x0,
-                        oy - PRE_PAD * scale,
-                        w,
-                        p.layout.height() + 2.0 * PRE_PAD * scale,
-                    ) {
-                        pixmap.fill_rect(r, &paint, Transform::identity(), None);
-                    }
-                }
-                _ => {}
+                self.draw_block(band, p, opts.width as f32, scale, oy, slop);
             }
-            for i in 0..p.quote_bars {
+        });
+        (content_h, rc)
+    }
+
+    /// Draws `p` with its top at row `oy` of `pixmap`.
+    fn draw_block(
+        &mut self,
+        pixmap: &mut Pixmap,
+        p: &Placed,
+        width: f32,
+        scale: f32,
+        oy: f32,
+        slop: f32,
+    ) {
+        let mut paint = Paint::default();
+        paint.anti_alias = true;
+        match p.kind {
+            BLOCK_RULE => {
                 paint.set_color_rgba8(RULE_COLOR.0, RULE_COLOR.1, RULE_COLOR.2, 255);
-                let bx = (p.quote_x + i as f32 * QUOTE_INDENT) * scale;
-                if let Some(r) = Rect::from_xywh(bx, oy, 3.0 * scale, p.layout.height()) {
+                let w = (width - PAGE_MARGIN) * scale - p.x * scale;
+                if let Some(r) = Rect::from_xywh(p.x * scale, oy, w, 1.0 * scale) {
+                    pixmap.fill_rect(r, &paint, Transform::identity(), None);
+                }
+                return;
+            }
+            BLOCK_PRE => {
+                paint.set_color_rgba8(PRE_BG.0, PRE_BG.1, PRE_BG.2, 255);
+                let x0 = (p.x - PRE_PAD) * scale;
+                let w = (width - PAGE_MARGIN) * scale - x0;
+                if let Some(r) = Rect::from_xywh(
+                    x0,
+                    oy - PRE_PAD * scale,
+                    w,
+                    p.layout.height() + 2.0 * PRE_PAD * scale,
+                ) {
                     pixmap.fill_rect(r, &paint, Transform::identity(), None);
                 }
             }
-            if let Some(m) = &p.marker {
-                self.draw_layout(&mut pixmap, &m.layout, m.x, oy);
-            }
-            self.draw_layout(&mut pixmap, &p.layout, p.x * scale, oy);
+            _ => {}
         }
-
-        let cropped;
-        let view = if opts.clip_w > 0.0 {
-            let x = ((opts.clip_x * scale).floor().max(0.0) as u32).min(pw - 1);
-            let y = ((opts.clip_y * scale).floor().max(0.0) as u32).min(ph - 1);
-            let w = ((opts.clip_w * scale).ceil().max(1.0) as u32).min(pw - x);
-            let h = ((opts.clip_h * scale).ceil().max(1.0) as u32).min(ph - y);
-            match IntRect::from_xywh(x as i32, y as i32, w, h).and_then(|r| pixmap.clone_rect(r)) {
-                Some(c) => {
-                    cropped = c;
-                    &cropped
-                }
-                None => &pixmap,
+        for i in 0..p.quote_bars {
+            paint.set_color_rgba8(RULE_COLOR.0, RULE_COLOR.1, RULE_COLOR.2, 255);
+            let bx = (p.quote_x + i as f32 * QUOTE_INDENT) * scale;
+            if let Some(r) = Rect::from_xywh(bx, oy, 3.0 * scale, p.layout.height()) {
+                pixmap.fill_rect(r, &paint, Transform::identity(), None);
             }
-        } else {
-            &pixmap
-        };
-
-        // Everything is opaque on an opaque background, so the premultiplied
-        // buffer is already straight RGBA (and RGB would save only ~3%).
-        let mut enc = png::Encoder::new(&mut *sink, view.width(), view.height());
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        // Measured on text pages: fdeflate "Fast" is 3-8x larger than this,
-        // level 6 is only ~5% smaller and 4x slower. Output is mostly
-        // base64'd over CDP, so size matters.
-        enc.set_deflate_compression(png::DeflateCompression::Level(2));
-        enc.set_filter(png::Filter::Adaptive);
-        let encoded = (|| -> Result<(), png::EncodingError> {
-            let mut w = enc.write_header()?;
-            w.write_image_data(view.data())?;
-            w.finish()
-        })();
-        (
-            content_h,
-            if encoded.is_ok() {
-                RC_OK
-            } else {
-                RC_ENCODE_FAILED
-            },
-        )
+        }
+        if let Some(m) = &p.marker {
+            self.draw_layout(pixmap, &m.layout, m.x, oy, slop);
+        }
+        self.draw_layout(pixmap, &p.layout, p.x * scale, oy, slop);
     }
 
-    fn draw_layout(&mut self, pixmap: &mut Pixmap, layout: &Layout<Rgb>, ox: f32, oy: f32) {
+    /// Like `render`, for boxes the caller has already placed. Each box's
+    /// text wraps at its width and, like overflow: visible, may run past its
+    /// bottom. The content height is the layout's alone, the bottom of the
+    /// lowest box: text is only shaped to be drawn.
+    unsafe fn render_boxes(
+        &mut self,
+        boxes: &[LpBox],
+        opts: LpRenderOpts,
+        sink: &mut Sink,
+    ) -> (u32, i32) {
+        let scale = opts.scale;
+        let measure = opts.flags & RENDER_MEASURE_ONLY != 0;
+        let limit = Strip::new(opts, u32::MAX);
+        let raster_w = limit.raster_w as f32;
+        let keep_below = if measure { 0.0 } else { limit.bottom() as f32 };
+
+        let mut bottom: f32 = 0.0;
+        let mut items: Vec<BoxItem> = Vec::new();
+        let mut spans: Vec<Span> = Vec::new();
+        for b in boxes {
+            let finite = [b.x, b.y, b.width, b.height, b.font_size]
+                .iter()
+                .all(|v| v.is_finite());
+            if !finite {
+                return (0, RC_INVALID);
+            }
+            let (x, y) = (b.x * scale, b.y * scale);
+            let (width, height) = (b.width.max(0.0) * scale, b.height.max(0.0) * scale);
+            let font_size = if b.font_size > 0.0 {
+                b.font_size
+            } else {
+                BASE_SIZE
+            };
+            bottom = bottom.max(b.y + b.height.max(0.0));
+            if x >= raster_w || y >= keep_below || x + width <= 0.0 {
+                continue;
+            }
+
+            if !spans_from_ffi(&mut spans, b.spans, b.spans_len) {
+                return (0, RC_INVALID);
+            }
+            let mut text = None;
+            let mut extent = height;
+            if !spans.is_empty() {
+                let mut layout = Layout::new();
+                self.text_layout(
+                    &mut layout,
+                    &spans,
+                    false,
+                    font_size,
+                    FontWeight::NORMAL,
+                    BOX_LINE_HEIGHT,
+                    scale,
+                );
+                layout.break_all_lines(Some(width.max(1.0)));
+                layout.align(Alignment::Start, AlignmentOptions::default());
+                extent = extent.max(layout.height());
+                text = Some(layout);
+            }
+            if y + extent > 0.0 {
+                items.push(BoxItem {
+                    x,
+                    y,
+                    width,
+                    height,
+                    extent,
+                    slop: font_size * BOX_LINE_HEIGHT * scale,
+                    outline: b.flags & BOX_OUTLINE != 0,
+                    text,
+                });
+            }
+        }
+        let content_h = bottom.ceil().clamp(1.0, u32::MAX as f32) as u32;
+        if measure {
+            return (content_h, RC_OK);
+        }
+
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(BOX_COLOR.0, BOX_COLOR.1, BOX_COLOR.2, 255);
+        let rc = encode_bands(Strip::new(opts, content_h), sink, |band, top| {
+            let band_h = band.height() as f32;
+            for item in &items {
+                let (x, y) = (item.x, item.y - top);
+                if y - item.slop >= band_h || y + item.extent + item.slop <= 0.0 {
+                    continue;
+                }
+                if item.outline {
+                    let (w, h) = (item.width, item.height);
+                    // One device px per edge, inside the box. Snapped to
+                    // whole pixels on the raster, not on the band: an edge
+                    // can't depend on where the bands fall.
+                    for edge in [
+                        Rect::from_xywh(x, item.y, w, 1.0),
+                        Rect::from_xywh(x, item.y + h - 1.0, w, 1.0),
+                        Rect::from_xywh(x, item.y, 1.0, h),
+                        Rect::from_xywh(x + w - 1.0, item.y, 1.0, h),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|edge| edge.round()?.translate(0, -(top as i32)))
+                    {
+                        band.fill_rect(edge.to_rect(), &paint, Transform::identity(), None);
+                    }
+                }
+                if let Some(layout) = &item.text {
+                    self.draw_layout(band, layout, x, y, item.slop);
+                }
+            }
+        });
+        (content_h, rc)
+    }
+
+    /// Draws the lines of `layout` that reach `pixmap`. A glyph can leave
+    /// its line box, by `slop` at most.
+    fn draw_layout(
+        &mut self,
+        pixmap: &mut Pixmap,
+        layout: &Layout<Rgb>,
+        ox: f32,
+        oy: f32,
+        slop: f32,
+    ) {
+        let bottom = pixmap.height() as f32;
         for line in layout.lines() {
+            let m = line.metrics();
+            if oy + m.block_max_coord + slop <= 0.0 {
+                continue;
+            }
+            if oy + m.block_min_coord - slop >= bottom {
+                break;
+            }
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(gr) = item {
                     self.draw_glyph_run(pixmap, &gr, ox, oy);
@@ -1507,6 +1747,104 @@ impl Renderer {
                 pixmap.fill_rect(r, &p2, Transform::identity(), None);
             }
         }
+    }
+}
+
+/// The part of the page that ends up in the PNG, in device px: the requested
+/// strip (viewport or full page) of a raster `raster_w` wide, cropped to the
+/// clip if there's one. A clip reaching past the strip extends it, but never
+/// past the content.
+#[derive(Clone, Copy)]
+struct Strip {
+    raster_w: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Strip {
+    fn new(opts: LpRenderOpts, content_h: u32) -> Strip {
+        let scale = opts.scale;
+        let mut out_h = if opts.height == 0 {
+            content_h
+        } else {
+            opts.height
+        };
+        if opts.clip_w > 0.0 {
+            let reach = (opts.clip_y as f64 + opts.clip_h as f64).ceil();
+            // A NaN reach clamps to NaN and casts to 0, leaving out_h alone.
+            out_h = out_h.max(reach.clamp(0.0, content_h as f64) as u32);
+        }
+        let pw = ((opts.width as f64 * scale as f64).ceil() as u64).clamp(1, MAX_RASTER_DIM);
+        let ph = ((out_h as f64 * scale as f64).ceil() as u64)
+            .clamp(1, MAX_RASTER_DIM)
+            .min((MAX_RASTER_PIXELS / pw).max(1));
+        let (pw, ph) = (pw as u32, ph as u32);
+        if opts.clip_w > 0.0 {
+            let x = ((opts.clip_x * scale).floor().max(0.0) as u32).min(pw - 1);
+            let y = ((opts.clip_y * scale).floor().max(0.0) as u32).min(ph - 1);
+            return Strip {
+                raster_w: pw,
+                x,
+                y,
+                width: ((opts.clip_w * scale).ceil().max(1.0) as u32).min(pw - x),
+                height: ((opts.clip_h * scale).ceil().max(1.0) as u32).min(ph - y),
+            };
+        }
+        Strip {
+            raster_w: pw,
+            x: 0,
+            y: 0,
+            width: pw,
+            height: ph,
+        }
+    }
+
+    fn bottom(&self) -> u32 {
+        self.y + self.height
+    }
+}
+
+/// Streams `strip` to `sink` as PNG, a band of rows at a time: `draw` gets a
+/// white pixmap the raster's width and the raster row its first row is.
+fn encode_bands(strip: Strip, sink: &mut Sink, mut draw: impl FnMut(&mut Pixmap, f32)) -> i32 {
+    let Some(mut band) = Pixmap::new(strip.raster_w, strip.height.min(BAND_ROWS)) else {
+        return RC_NO_RASTER;
+    };
+
+    // Everything is opaque on an opaque background, so the premultiplied
+    // buffer is already straight RGBA (and RGB would save only ~3%).
+    let mut enc = png::Encoder::new(&mut *sink, strip.width, strip.height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    // Measured on text pages: fdeflate "Fast" is 3-8x larger than this,
+    // level 6 is only ~5% smaller and 4x slower. Output is mostly
+    // base64'd over CDP, so size matters.
+    enc.set_deflate_compression(png::DeflateCompression::Level(2));
+    enc.set_filter(png::Filter::Adaptive);
+    let encoded = (|| -> Result<(), png::EncodingError> {
+        let mut writer = enc.write_header()?;
+        let mut w = writer.stream_writer()?;
+        let stride = strip.raster_w as usize * 4;
+        let columns = strip.x as usize * 4..(strip.x + strip.width) as usize * 4;
+        let mut y = strip.y;
+        while y < strip.bottom() {
+            band.fill(Color::WHITE);
+            draw(&mut band, y as f32);
+            let rows = band.height().min(strip.bottom() - y);
+            for row in band.data().chunks_exact(stride).take(rows as usize) {
+                w.write_all(&row[columns.clone()])?;
+            }
+            y += rows;
+        }
+        w.finish()?;
+        writer.finish()
+    })();
+    if encoded.is_ok() {
+        RC_OK
+    } else {
+        RC_ENCODE_FAILED
     }
 }
 

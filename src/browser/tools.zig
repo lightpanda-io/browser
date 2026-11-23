@@ -1150,6 +1150,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         selector: ?[]const u8 = null,
         backendNodeId: ?NodeRegistry.Id = null,
         fullPage: bool = false,
+        mode: lp.screenshot.Mode = .reader,
         strip: lp.dump.Opts.Strip = .{},
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
@@ -1163,7 +1164,9 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     const page = try ensurePage(session, registry, args.url, args.timeout);
     const scope = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
     const state = lp.RenderTree.resolve(arena, scope, args.strip, page) catch return ToolError.OutOfMemory;
-    const opts: lp.screenshot.Opts = .fromViewport(page.page.getViewport(), args.fullPage);
+    var opts: lp.screenshot.Opts = .fromViewport(page.page.getViewport(), args.fullPage, args.mode);
+    // The tool is for seeing where things are, not what the page looks like
+    opts.outline = true;
     var prepared = lp.screenshot.preparePng(arena, state, opts, page) catch
         return ToolError.InternalError;
 
