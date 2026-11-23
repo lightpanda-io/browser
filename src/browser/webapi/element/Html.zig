@@ -732,6 +732,11 @@ const InnerTextState = struct {
     // text-transform of the element whose text is being written
     transform: TextTransform = .none,
 
+    // For capitalize: the last character written continued a word, so the
+    // next letter isn't a word's first. Carried across text nodes, so
+    // "foo<b>bar</b>" is one word.
+    in_word: bool = false,
+
     // A row of the current table has been written, so the next one is
     // preceded by a newline. Kept per table rather than per row group, so the
     // rows of <thead>, <tbody> and <tfoot> are separated from each other too.
@@ -753,6 +758,7 @@ const InnerTextState = struct {
             }
         }
         self.pending_breaks = 0;
+        self.in_word = false;
         // A block boundary trims the whitespace on either side of it.
         self.pre_w = false;
         self.trim_left = true;
@@ -762,6 +768,7 @@ const InnerTextState = struct {
     fn writeSeparator(self: *InnerTextState, ch: u8) !void {
         try self.flushBreaks();
         try self.writer.writeByte(ch);
+        self.in_word = false;
         self.wrote_any = true;
         self.pre_w = false;
         self.trim_left = true;
@@ -972,9 +979,7 @@ fn isAllAsciiWhitespace(s: []const u8) bool {
 }
 
 fn writeText(c: *Node.CData, state: *InnerTextState) !void {
-    // `capitalize` is recognized (getComputedStyle reports it) but not
-    // applied: it needs word-boundary tracking across text runs.
-    if (state.transform != .uppercase and state.transform != .lowercase) {
+    if (state.transform == .none or state.transform == .inherit) {
         return writeRenderedText(c, state);
     }
 
@@ -989,7 +994,7 @@ fn writeText(c: *Node.CData, state: *InnerTextState) !void {
     try rendered;
 
     const text = scratch.written();
-    applyTextTransform(text, state.transform);
+    applyTextTransform(text, state.transform, &state.in_word);
     try out.writeAll(text);
 }
 
@@ -1038,8 +1043,9 @@ fn writeRenderedText(c: *Node.CData, state: *InnerTextState) !void {
     state.trim_left = state.pre_w;
 }
 
-// Maps `text` in place for `uppercase` / `lowercase`.
-fn applyTextTransform(text: []u8, transform: TextTransform) void {
+// Maps `text` in place for `uppercase`, `lowercase` and `capitalize`.
+// `in_word` carries capitalize's word state across calls.
+fn applyTextTransform(text: []u8, transform: TextTransform, in_word: *bool) void {
     var i: usize = 0;
     while (i < text.len) {
         const len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
@@ -1053,6 +1059,12 @@ fn applyTextTransform(text: []u8, transform: TextTransform) void {
         const mapped = switch (transform) {
             .uppercase => upperCodepoint(cp),
             .lowercase => lowerCodepoint(cp),
+            .capitalize => blk: {
+                // A word's first letter goes up; the rest keep their case.
+                const first = !in_word.*;
+                in_word.* = continuesWord(cp);
+                break :blk if (first) upperCodepoint(cp) else cp;
+            },
             else => cp,
         };
         if (mapped != cp) {
@@ -1060,6 +1072,22 @@ fn applyTextTransform(text: []u8, transform: TextTransform) void {
         }
         i += len;
     }
+}
+
+// What capitalize counts as part of a word: letters, digits, `_` and `'`,
+// which is where Chrome starts a new one ("it's", "state_of" and "2nd" are
+// one word each; "well-known" and "(minimum" are not). Other non-ASCII
+// characters count as letters, outside the punctuation blocks. No UAX #29.
+fn continuesWord(cp: u21) bool {
+    if (cp < 0x80) {
+        return std.ascii.isAlphanumeric(@intCast(cp)) or cp == '_' or cp == '\'';
+    }
+    return switch (cp) {
+        // Latin-1 punctuation and symbols, General Punctuation, CJK
+        // punctuation, fullwidth ASCII punctuation.
+        0x80...0xBF, 0xD7, 0xF7, 0x2000...0x206F, 0x3000...0x303F, 0xFF00...0xFF0F => false,
+        else => true,
+    };
 }
 
 // Simple case mappings that keep the UTF-8 length: Latin-1, Latin

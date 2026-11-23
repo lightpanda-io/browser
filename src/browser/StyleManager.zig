@@ -5585,8 +5585,8 @@ const Box = enum(u3) {
     }
 };
 
-/// The case-changing part of `text-transform`. innerText applies `uppercase`
-/// and `lowercase`; `capitalize` is a computed value only, and `full-width`,
+/// The case-changing part of `text-transform`. innerText applies `uppercase`,
+/// `lowercase` and `capitalize`; `full-width`,
 /// `full-size-kana` and `math-auto` are accepted but not applied. `.inherit` is both the
 /// `inherit`/`unset` keywords and "nothing declared": text-transform inherits.
 pub const TextTransform = enum(u3) {

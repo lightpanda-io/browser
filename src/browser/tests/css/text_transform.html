@@ -7,8 +7,8 @@
 <!--
   text-transform: computed value (cascade + inheritance) and its effect on
   innerText. The rendered text collection steps apply text-transform to each
-  text box, so innerText returns the transformed text. Only uppercase and
-  lowercase are applied; capitalize is reported but leaves the text as is.
+  text box, so innerText returns the transformed text: uppercase, lowercase
+  and capitalize (each word's first letter up, the rest untouched).
 -->
 
 <style>
@@ -37,6 +37,15 @@
 <span id=plain>Plain Text</span>
 <div id=mixed>a <b class=upper>bold</b> <i class=cap>two words</i> z</div>
 <div id=nested class=cap><span>one</span><span class=lower>TWO</span> three</div>
+<!-- The cases from lightpanda-io/browser#4707, with Chrome's results. -->
+<div class=cap id=cap-words>hello wide world</div>
+<div class=cap id=cap-punct>it's a "quoted" well-known state_of 2nd</div>
+<div class=cap id=cap-paren>is too short (minimum is 16 characters)</div>
+<div class=cap id=cap-split>foo<b>bar</b> baz</div>
+<button class=cap id=cap-button>save changes</button>
+<div class=upper><span class=cap id=cap-in-upper>hello world</span></div>
+<div class=cap id=cap-lines><div>one</div><div>two</div></div>
+<div class=cap id=cap-greek>ωμέγα привет</div>
 
 <script id=computed>
   const tt = (id) => getComputedStyle($('#' + id)).textTransform;
@@ -63,7 +72,7 @@
   testing.expectEqual('UNAVAILABLE', it('inherited'));
   testing.expectEqual('Mixed Case', it('reset'));
   testing.expectEqual('unavailable', it('lower'));
-  testing.expectEqual("hello wORLD, it's é-mail 1st", it('cap'));
+  testing.expectEqual("Hello WORLD, It's É-Mail 1st", it('cap'));
   testing.expectEqual('mixed', it('id-wins'));
   testing.expectEqual('WIDE', it('combo'));
   testing.expectEqual('STILL UPPER', it('bogus'));
@@ -71,8 +80,19 @@
   testing.expectEqual('KEPT', it('inline-inherit'));
   testing.expectEqual('plain', it('inline-initial'));
   testing.expectEqual('Plain Text', it('plain'));
-  testing.expectEqual('a BOLD two words z', it('mixed'));
-  testing.expectEqual('onetwo three', it('nested'));
+  testing.expectEqual('a BOLD Two Words z', it('mixed'));
+  // "two" continues the word "one" (and is lowercased), "three" starts one.
+  testing.expectEqual('Onetwo Three', it('nested'));
+  testing.expectEqual('Hello Wide World', it('cap-words'));
+  testing.expectEqual('It\'s A "Quoted" Well-Known State_of 2nd', it('cap-punct'));
+  testing.expectEqual('Is Too Short (Minimum Is 16 Characters)', it('cap-paren'));
+  testing.expectEqual('Foobar Baz', it('cap-split'));
+  testing.expectEqual('Save Changes', it('cap-button'));
+  // capitalize overrides the inherited uppercase.
+  testing.expectEqual('Hello World', it('cap-in-upper'));
+  // A line break ends a word.
+  testing.expectEqual('One\nTwo', it('cap-lines'));
+  testing.expectEqual('Ωμέγα Привет', it('cap-greek'));
   // textContent is not rendered text: untouched.
   testing.expectEqual('unavailable', $('#class').textContent);
 </script>
