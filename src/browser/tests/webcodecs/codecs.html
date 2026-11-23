@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=unconfigured>
@@ -38,9 +39,10 @@
 <script id=unsupported type=module>
   const state = await testing.async();
 
+  // We support no codecs: MPEG-4 Part 2 is one Chrome doesn't support either.
   const errors = [];
   const decoder = new VideoDecoder({output: () => {}, error: (e) => errors.push([e.name, decoder.state])});
-  decoder.configure({codec: 'vp09.00.10.08'});
+  decoder.configure({codec: 'mp4v.20.9'});
   testing.expectEqual('configured', decoder.state);
 
   testing.expectError('DataError', () => decoder.decode(new EncodedVideoChunk({type: 'delta', timestamp: 0, data: new Uint8Array(1)})));
@@ -85,15 +87,16 @@
 <script id=is_config_supported type=module>
   const state = await testing.async();
 
-  const support = await AudioEncoder.isConfigSupported({codec: 'opus', sampleRate: 48000, numberOfChannels: 2, unknown: 1, opus: {complexity: 5}});
-  const video = await VideoDecoder.isConfigSupported({codec: 'avc1.42001E', description: new Uint8Array([1, 2])});
+  // Codecs Chrome doesn't support either.
+  const support = await AudioEncoder.isConfigSupported({codec: 'vorbis', sampleRate: 48000, numberOfChannels: 2, unknown: 1, opus: {complexity: 5}});
+  const video = await VideoDecoder.isConfigSupported({codec: 'mp4v.20.9', description: new Uint8Array([1, 2])});
   let invalid = null;
   try { await VideoEncoder.isConfigSupported({codec: 'vp8'}); } catch (e) { invalid = e.name; }
 
   state.resolve();
   await state.done(() => {
     testing.expectEqual(false, support.supported);
-    testing.expectEqual('opus', support.config.codec);
+    testing.expectEqual('vorbis', support.config.codec);
     testing.expectEqual(48000, support.config.sampleRate);
     testing.expectEqual(undefined, support.config.unknown);
     testing.expectEqual(5, support.config.opus.complexity);

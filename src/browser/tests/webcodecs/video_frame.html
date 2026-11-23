@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=i420>
@@ -59,7 +60,8 @@
 
 <script id=rgb_swizzle type=module>
   const state = await testing.async();
-  const frame = new VideoFrame(new Uint8Array([1, 2, 3, 4]), {format: 'RGBA', timestamp: 0, codedWidth: 1, codedHeight: 1});
+  // opaque: Chrome converts through premultiplied alpha, which rounds dim colors at a low alpha
+  const frame = new VideoFrame(new Uint8Array([1, 2, 3, 255]), {format: 'RGBA', timestamp: 0, codedWidth: 1, codedHeight: 1});
   const bgrx = new Uint8Array(4);
   await frame.copyTo(bgrx, {format: 'BGRX'});
   const i420 = new VideoFrame(new Uint8Array(6), {format: 'I420', timestamp: 0, codedWidth: 2, codedHeight: 2});
@@ -69,8 +71,9 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual([3, 2, 1, 255], Array.from(bgrx));
-    // no YUV to RGB conversion
-    testing.expectEqual('NotSupportedError', error.name);
+    testing.diverges('We have no YUV to RGB conversion', () => {
+      testing.expectEqual('NotSupportedError', error?.name);
+    });
   });
 </script>
 
@@ -131,12 +134,19 @@
 <script id=canvas>
 {
   const canvas = new OffscreenCanvas(3, 2);
+  canvas.getContext('2d');
   testing.expectError('TypeError', () => new VideoFrame(canvas));
   const frame = new VideoFrame(canvas, {timestamp: 1});
-  testing.expectEqual('RGBA', frame.format);
+  // the pixel format is the implementation's: Chrome's canvas is BGRA
+  testing.expectEqual(true, ['RGBA', 'BGRA'].includes(frame.format));
   testing.expectEqual(3, frame.codedWidth);
   testing.expectEqual(2, frame.displayHeight);
-  testing.expectEqual('RGBX', new VideoFrame(canvas, {timestamp: 1, alpha: 'discard'}).format);
+  testing.expectEqual(frame.format.slice(0, 3) + 'X', new VideoFrame(canvas, {timestamp: 1, alpha: 'discard'}).format);
+
+  testing.diverges('Chrome rejects an OffscreenCanvas without a rendering context', () => {
+    // its bitmap is transparent black
+    testing.expectEqual(3, new VideoFrame(new OffscreenCanvas(3, 2), {timestamp: 1}).codedWidth);
+  });
   testing.expectError('InvalidStateError', () => new VideoFrame(new OffscreenCanvas(0, 2), {timestamp: 1}));
   // beyond Chrome's canvas limits: no bitmap to take, and no 40GB frame here
   testing.expectError('InvalidStateError', () => new VideoFrame(new OffscreenCanvas(100000, 100000), {timestamp: 1}));

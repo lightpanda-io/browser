@@ -31,7 +31,6 @@ const js = @import("js.zig");
 const v8 = js.v8;
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
-const Mime = @import("../Mime.zig");
 const Response = @import("../webapi/net/Response.zig");
 
 const log = lp.log;
@@ -82,8 +81,9 @@ fn onResponse(self: *WasmStreaming, value: js.Value, exec: *js.Execution) void {
     };
 
     const content_type = response.getHeaders().get("content-type", exec) catch |err| return self.abortZigError(local, err);
-    const essence = Mime.ContentTypeIterator.init(content_type orelse "").essence;
-    if (!std.ascii.eqlIgnoreCase(essence, "application/wasm")) {
+    // The whole value, not just the essence: "application/wasm;charset=binary" is rejected.
+    const mime = std.mem.trim(u8, content_type orelse "", " \t");
+    if (!std.ascii.eqlIgnoreCase(mime, "application/wasm")) {
         return self.abortTypeError(local, "Incorrect response MIME type. Expected 'application/wasm'.");
     }
     if (!response.isOK()) {
