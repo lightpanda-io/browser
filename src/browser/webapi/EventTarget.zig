@@ -239,7 +239,7 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
                 .node => self.subtype(Node).ownerFrame(caller) orelse caller,
                 .window => blk: {
                     const window = self.subtype(Window);
-                    break :blk if (window._closed) caller else window._frame;
+                    break :blk if (window._closed) caller else window._frame.get() orelse caller;
                 },
                 else => caller,
             };

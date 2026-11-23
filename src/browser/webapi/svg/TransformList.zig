@@ -29,7 +29,7 @@ const reflected_list = @import("reflected_list.zig");
 
 const TransformList = @This();
 
-_exec: *js.Execution,
+_frame: js.FrameHandle,
 _attr_name: lp.String,
 _read_only: bool,
 _element: *Element,
@@ -50,7 +50,7 @@ const M = reflected_list.Mixin(TransformList, Transform, .{
 
 pub fn createForAttribute(element: *Element, attr_name: lp.String, read_only: bool, frame: *Frame) !*TransformList {
     return frame._factory.create(TransformList{
-        ._exec = &frame.main_js.execution,
+        ._frame = frame.handle(),
         ._element = element,
         ._attr_name = attr_name,
         ._read_only = read_only,
@@ -128,7 +128,7 @@ fn releaseItem(transform: *Transform, page: *Page) void {
 
 fn mutateTransform(context: *anyopaque, transform: *Transform, state: Transform.State) anyerror!void {
     const self: *TransformList = @ptrCast(@alignCast(context));
-    const frame = self._exec.frame() orelse {
+    const frame = self._frame.get() orelse {
         // The transform still changes, the attribute it reflected is no longer
         // kept in sync.
         transform.applyStateRaw(state);

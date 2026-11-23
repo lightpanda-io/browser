@@ -30,13 +30,13 @@ const History = @This();
 const ScrollRestoration = enum { auto, manual };
 
 // Set by Frame.init, once the context exists.
-_exec: *js.Execution,
+_frame: js.FrameHandle,
 _scroll_restoration: ScrollRestoration = .auto,
 
 // The frame this history belongs to. Like Chrome, a History whose document
 // isn't active anymore (its frame was destroyed) throws a SecurityError.
 fn liveFrame(self: *const History) !*Frame {
-    return self._exec.frame() orelse error.SecurityError;
+    return self._frame.get() orelse error.SecurityError;
 }
 
 pub fn getLength(self: *const History) !u32 {

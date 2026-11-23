@@ -32,7 +32,7 @@ const BroadcastChannel = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_exec: *Execution,
+_exec: js.ExecutionHandle,
 _name: lp.String,
 _sequence: u64,
 _closed: bool = false,
@@ -46,7 +46,7 @@ pub fn init(name: lp.String.Global, exec: *Execution) !*BroadcastChannel {
     const page = exec.page;
     const self = try exec._factory.eventTarget(BroadcastChannel{
         ._proto = undefined,
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._name = name.str,
         ._sequence = page.broadcast_sequence,
     });
@@ -69,6 +69,10 @@ pub fn getName(self: *const BroadcastChannel) lp.String {
 pub fn postMessage(self: *BroadcastChannel, message: js.Value, exec: *Execution) !void {
     if (self._closed) {
         return error.InvalidStateError;
+    }
+    // As in Chrome, a channel whose realm is gone ignores the call.
+    if (self._exec.get() == null) {
+        return;
     }
 
     // StructuredSerialize runs synchronously (per spec): clone the message once
@@ -110,11 +114,10 @@ pub fn close(self: *BroadcastChannel) void {
         return;
     }
     self._closed = true;
-    if (!self._exec.isLive()) {
-        // The registry went with the channel's frame.
-        return;
+    // The registry goes with its `Frame` or `WorkerGlobalScope`.
+    if (self._exec.global()) |global| {
+        global.getBroadcastChannels().remove(&self._node);
     }
-    self._exec.getBroadcastChannels().remove(&self._node);
 }
 
 const PostMessageCallback = struct {

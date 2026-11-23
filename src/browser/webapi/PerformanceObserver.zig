@@ -47,9 +47,9 @@ _mode: enum { unset, single, multiple } = .unset,
 _entries: std.ArrayList(*Performance.Entry),
 /// The Performance that owns this observer (Window's or Worker's).
 _performance: *Performance,
-/// JS context the observer's callback was created in. Captured at init so
+/// The realm the observer's callback was created in. Captured at init so
 /// dispatch() can enter the right scope without needing an Execution.
-_js: *js.Context,
+_exec: js.ExecutionHandle,
 /// Long-lived arena (Frame's or WorkerGlobalScope's) for entry list growth
 /// and takeRecords' returned slice.
 _arena: Allocator,
@@ -64,7 +64,7 @@ pub fn init(callback: js.Function.Global, exec: *const Execution) !*PerformanceO
         ._interests = 0,
         ._entries = .empty,
         ._performance = exec.performance(),
-        ._js = exec.js,
+        ._exec = exec.handle(),
         ._arena = exec.page_arena,
     });
 }
@@ -192,10 +192,11 @@ pub inline fn hasRecords(self: *const PerformanceObserver) bool {
 
 /// Runs the PerformanceObserver's callback with records; emptying it out.
 pub fn dispatch(self: *PerformanceObserver) !void {
+    const context = self._exec.js() orelse return;
     const records = try self.takeRecords();
 
     var ls: js.Local.Scope = undefined;
-    self._js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
 
     ls.toLocal(self._callback).callWithThisReport(self, .{ EntryList{ ._entries = records }, self }) catch |err| {

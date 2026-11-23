@@ -578,7 +578,7 @@ pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
 const WaitAllHandlers = struct {
     navigation: *Navigation,
     signal: *AbortSignal,
-    frame: *Frame,
+    frame: js.FrameHandle,
     pending: usize,
     done: bool,
 
@@ -587,10 +587,11 @@ const WaitAllHandlers = struct {
         if (ctx.done) {
             return;
         }
+        const frame = ctx.frame.get() orelse return;
 
         if (reason) |r| {
             ctx.done = true;
-            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .{ .failure = r });
+            ctx.navigation.settleIntercept(ctx.signal, frame, .{ .failure = r });
             return;
         }
 
@@ -600,7 +601,7 @@ const WaitAllHandlers = struct {
         }
 
         ctx.done = true;
-        ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
+        ctx.navigation.settleIntercept(ctx.signal, frame, .success);
     }
 };
 
@@ -625,7 +626,7 @@ fn runInterceptHandlers(
     ctx.* = .{
         .navigation = self,
         .signal = signal,
-        .frame = frame,
+        .frame = frame.handle(),
         .pending = handlers.len,
         .done = false,
     };

@@ -47,20 +47,18 @@ pub const Proto = EventTarget;
 
 _proto: *EventTarget,
 _window: *Window,
-// Another frame can keep the ModelContext, and run tasks for it on its own
-// scheduler, after this one's frame is gone: checked with isLive() before use.
-_exec: *Execution,
+_exec: js.ExecutionHandle,
 _tools: std.ArrayList(*Tool) = .empty,
 // Bumped on every register and unregister, so an observer can tell the set
 // changed without keeping a copy of it.
 _generation: u32 = 0,
 
 pub fn init(window: *Window) !*ModelContext {
-    const frame = window._frame;
+    const frame = window._frame.get() orelse return error.InvalidStateError;
     return frame._factory.eventTarget(ModelContext{
         ._proto = undefined,
         ._window = window,
-        ._exec = &frame.js.execution,
+        ._exec = frame.js.execution.handle(),
     });
 }
 
@@ -147,15 +145,13 @@ pub const Tool = struct {
         defer registration.release();
 
         const mc = self.ctx;
-        if (!mc._exec.isLive()) {
-            return null;
-        }
+        const context = mc._exec.js() orelse return null;
         mc.dispatchToolChange() catch |err| {
             log.debug(.js, "toolchange dispatch", .{ .err = err });
         };
 
         var ls: js.Local.Scope = undefined;
-        mc._exec.js.localScope(&ls);
+        context.localScope(&ls);
         defer ls.deinit();
         registration.local(&ls.local).resolve("ModelContext.registerTool", {});
         return null;
@@ -188,7 +184,7 @@ pub fn registerTool(
     options_: ?SignalOptions,
     exec: *const Execution,
 ) !js.Promise {
-    if (self.findTool(tool.name) != null or !self._exec.isLive()) {
+    if (self.findTool(tool.name) != null or self._exec.get() == null) {
         return error.InvalidStateError;
     }
     try validateName(tool.name);
@@ -275,9 +271,9 @@ fn runToolChange(ctx: *anyopaque) anyerror!?u32 {
 }
 
 fn dispatchToolChange(self: *ModelContext) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
-    if (!exec.isLive() or !exec.hasDirectListeners(target, "toolchange")) {
+    if (!exec.hasDirectListeners(target, "toolchange")) {
         return;
     }
     const event = try Event.initTrusted(comptime .wrap("toolchange"), .{}, exec.page);
@@ -285,9 +281,9 @@ fn dispatchToolChange(self: *ModelContext) !void {
 }
 
 fn dispatchToolEvent(self: *ModelContext, comptime E: type, tool_name: []const u8) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
-    if (!exec.isLive() or !exec.hasDirectListeners(target, E.event_type)) {
+    if (!exec.hasDirectListeners(target, E.event_type)) {
         return;
     }
     const event = try E.initTrusted(tool_name, exec.page);
@@ -319,7 +315,7 @@ pub fn executeTool(
     options_: ?SignalOptions,
     exec: *const Execution,
 ) !js.Promise {
-    if (!self._exec.isLive()) {
+    if (self._exec.get() == null) {
         return error.InvalidStateError;
     }
     const arena = exec.page_arena;
@@ -389,14 +385,13 @@ pub const ToolCall = struct {
         const self: *ToolCall = @ptrCast(@alignCast(ctx));
         defer self.input_arena.release();
         const mc = self.ctx;
-        const exec = mc._exec;
-        if (!exec.isLive()) {
-            // The tool's frame is gone: there is no realm to run it in.
+        const exec = mc._exec.get() orelse {
+            // There is no realm left to run the tool in.
             if (self.settle()) |resolver| {
                 resolver.release();
             }
             return null;
-        }
+        };
 
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);
@@ -454,7 +449,7 @@ pub const ToolCall = struct {
     }
 
     fn onRejected(self: *ToolCall, reason: js.Value) void {
-        const message = reason.toStringSliceWithAlloc(self.ctx._exec.page_arena) catch "Unknown error";
+        const message = reason.toStringSliceWithAlloc(self.ctx._exec.page().arena) catch "Unknown error";
         self.fail(reason.local, executionFailed(message));
     }
 
@@ -468,7 +463,7 @@ pub const ToolCall = struct {
         // The promise copies the text, but a DOMException keeps its message.
         const text = resultText(local.call_arena, value) catch |err| {
             const message = if (try_catch.exceptionValue()) |exception|
-                exception.toStringSliceWithAlloc(self.ctx._exec.page_arena) catch @errorName(err)
+                exception.toStringSliceWithAlloc(self.ctx._exec.page().arena) catch @errorName(err)
             else
                 @errorName(err);
             return self.fail(local, executionFailed(message));
@@ -515,8 +510,8 @@ pub const ToolCall = struct {
         const self: *ToolCall = @ptrCast(@alignCast(ctx));
         if (!self.started) return null;
         const mc = self.ctx;
-        if (!mc._exec.isLive()) return null;
-        try self.signal.abort(null, mc._exec);
+        const exec = mc._exec.get() orelse return null;
+        try self.signal.abort(null, exec);
         try mc.dispatchToolEvent(ToolCancelEvent, self.name);
         return null;
     }

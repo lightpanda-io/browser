@@ -70,7 +70,10 @@ const Window = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_frame: *Frame,
+/// Set by `Frame.init`, once the `Context` exists. null for the window of a
+/// `Frame` that was destroyed with its parent's document: `Window` w/o a
+/// browsing context, which `_opener` or an event's source can still point at.
+_frame: js.FrameHandle,
 _document: *Document,
 _css: CSS = .init,
 _crypto: Crypto = .init,
@@ -171,16 +174,17 @@ pub fn setName(self: *Window, name: []const u8, frame: *Frame) !void {
     self._name = try frame.page_arena.dupe(u8, name);
 }
 
-pub fn getTop(self: *Window, frame: *Frame) Access {
-    var p = self._frame;
+pub fn getTop(self: *Window, frame: *Frame) ?Access {
+    var p = self._frame.get() orelse return null;
     while (p.parent) |parent| {
         p = parent;
     }
     return Access.init(frame.window, p.window);
 }
 
-fn getParent(self: *Window, frame: *Frame) Access {
-    if (self._frame.parent) |p| {
+fn getParent(self: *Window, frame: *Frame) ?Access {
+    const target = self._frame.get() orelse return null;
+    if (target.parent) |p| {
         return Access.init(frame.window, p.window);
     }
     return .{ .window = self };
@@ -315,19 +319,23 @@ fn setPerformance(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "performance");
 }
 
-fn bucketForOrigin(self: *Window) *storage.Bucket {
-    return self._frame._session.storage_shed.getOrPut(
-        self._frame._session.browser.app.allocator,
-        self._frame.js.origin.key,
+/// As in Chrome, null for a window without a browsing context.
+fn bucketForOrigin(self: *Window) ?*storage.Bucket {
+    const frame = self._frame.get() orelse return null;
+    return frame._session.storage_shed.getOrPut(
+        frame._session.browser.app.allocator,
+        frame.js.origin.key,
     ) catch @panic("OOM");
 }
 
-fn getLocalStorage(self: *Window) *storage.Lookup {
-    return &self.bucketForOrigin().local;
+fn getLocalStorage(self: *Window) ?*storage.Lookup {
+    const bucket = self.bucketForOrigin() orelse return null;
+    return &bucket.local;
 }
 
-fn getSessionStorage(self: *Window) *storage.Lookup {
-    return &self.bucketForOrigin().session;
+fn getSessionStorage(self: *Window) ?*storage.Lookup {
+    const bucket = self.bucketForOrigin() orelse return null;
+    return &bucket.session;
 }
 
 fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
@@ -360,7 +368,8 @@ fn getCaches(self: *Window, exec: *Execution) !*CacheStorage {
 }
 
 pub fn getOrigin(self: *const Window) []const u8 {
-    return self._frame.origin orelse "null";
+    const frame = self._frame.get() orelse return "null";
+    return frame.origin orelse "null";
 }
 
 pub fn setOrigin(self: *Window, value: js.Value) void {
@@ -372,11 +381,13 @@ fn getSelection(self: *const Window) *Selection {
 }
 
 fn getIsSecureContext(self: *const Window) bool {
-    return self._frame.isSecureContext();
+    const frame = self._frame.get() orelse return false;
+    return frame.isSecureContext();
 }
 
 fn getFrameElement(self: *const Window) ?*Element.Html.IFrame {
-    return self._frame.iframe;
+    const frame = self._frame.get() orelse return null;
+    return frame.iframe;
 }
 
 pub fn getLocation(self: *const Window) *Location {
@@ -681,7 +692,7 @@ pub fn close(self: *Window) void {
 
     // Per spec, close() is only honored on script-opened windows. That
     // maps exactly to membership in page.popups.
-    const frame = self._frame;
+    const frame = self._frame.get() orelse return;
     if (std.mem.findScalar(*Frame, frame.page.popups.items, frame) == null) {
         return;
     }
@@ -698,11 +709,15 @@ pub fn focus(_: *Window) void {}
 pub fn blur(_: *Window) void {}
 
 pub fn stop(self: *Window) void {
-    self._frame.stopLoading();
+    const frame = self._frame.get() orelse return;
+    frame.stopLoading();
 }
 
 // postMessage(message, targetOrigin, transfer) or postMessage(message, options).
 pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?js.Value, transfer: ?js.Value, frame: *Frame) !void {
+    // Like Chrome, nothing is posted to a window without a browsing context.
+    const target_frame = self._frame.get() orelse return;
+
     // postMessage(message, targetOrigin, transfer) or
     // postMessage(message, { targetOrigin, transfer }), where an absent
     // targetOrigin is "/".
@@ -720,7 +735,6 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?
         }
     }
 
-    const target_frame = self._frame;
     // If the sender's realm gone, like Chrome, the message is still delivered
     // but without a source.
     const maybe_incumbent = target_frame.js.getIncumbent();
@@ -829,7 +843,7 @@ pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
 }
 
 fn getFrame(self: *Window, idx: usize) !?*Window {
-    const frame = self._frame;
+    const frame = self._frame.get() orelse return null;
     const frames = frame.child_frames.items;
     if (idx >= frames.len) {
         return null;
@@ -852,7 +866,8 @@ fn getFrame(self: *Window, idx: usize) !?*Window {
 }
 
 fn getFramesLength(self: *const Window) u32 {
-    return @intCast(self._frame.child_frames.items.len);
+    const frame = self._frame.get() orelse return 0;
+    return @intCast(frame.child_frames.items.len);
 }
 
 pub fn getScrollX(self: *const Window) u32 {
@@ -875,8 +890,9 @@ pub fn getInnerHeight(self: *const Window, frame: *Frame) u32 {
 
 // The viewport of a window inside an iframe is the iframe's box.
 fn iframeViewport(self: *const Window, comptime axis: Element.Axis) ?u32 {
-    const iframe = self._frame.iframe orelse return null;
-    const parent = self._frame.parent orelse return null;
+    const frame = self._frame.get() orelse return 0;
+    const iframe = frame.iframe orelse return null;
+    const parent = frame.parent orelse return null;
     const el = iframe.asElement();
     if (!el.isVisible(parent)) {
         return 0;
@@ -905,9 +921,10 @@ fn getScreenPosition(_: *const Window) i32 {
 
 pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
-    const size = self._frame.document.scrollSize();
-    const max_x = scrollLimit(size.width, self.getInnerWidth(self._frame));
-    const max_y = scrollLimit(size.height, self.getInnerHeight(self._frame));
+    const target = self._frame.get() orelse return;
+    const size = target.document.scrollSize();
+    const max_x = scrollLimit(size.width, self.getInnerWidth(target));
+    const max_y = scrollLimit(size.height, self.getInnerHeight(target));
     const new_x: u32 = if (o.left) |left| @min(@as(u32, @intCast(@max(0, left))), max_x) else self._scroll_pos.x;
     const new_y: u32 = if (o.top) |top| @min(@as(u32, @intCast(@max(0, top))), max_y) else self._scroll_pos.y;
 
@@ -1020,7 +1037,8 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, promise: js.Pr
 // data properties on the underlying v8::object that represents the global (the
 // Window)
 fn replaceGlobalProperty(self: *Window, value: js.Value, comptime name: []const u8) void {
-    const global = self._frame.js.globalObject(value.local);
+    const frame = self._frame.get() orelse return;
+    const global = frame.js.globalObject(value.local);
     _ = global.defineOwnProperty(name, value, 0);
 }
 
@@ -1034,12 +1052,19 @@ pub const Access = union(enum) {
             return .{ .window = accessing };
         }
 
-        if (callee._frame.js.origin == accessing._frame.js.origin) {
+        if (sameOrigin(callee, accessing)) {
             // two different windows, but same origin, return the full window
             return .{ .window = accessing };
         }
 
         return .{ .cross_origin = &accessing._cross_origin_wrapper };
+    }
+
+    fn sameOrigin(a: *const Window, b: *const Window) bool {
+        // A window without a browsing context has no origin to match.
+        const frame_a = a._frame.get() orelse return false;
+        const frame_b = b._frame.get() orelse return false;
+        return frame_a.js.origin == frame_b.js.origin;
     }
 };
 
@@ -1392,11 +1417,11 @@ const CrossOriginWindow = struct {
         return self.window.postMessage(message, target_origin_or_options, transfer, frame);
     }
 
-    pub fn getTop(self: *CrossOriginWindow, frame: *Frame) Access {
+    pub fn getTop(self: *CrossOriginWindow, frame: *Frame) ?Access {
         return self.window.getParent(frame);
     }
 
-    fn getParent(self: *CrossOriginWindow, frame: *Frame) Access {
+    fn getParent(self: *CrossOriginWindow, frame: *Frame) ?Access {
         return self.window.getParent(frame);
     }
 

@@ -35,7 +35,7 @@ _proto: *EventTarget,
 
 // The context this port lives in. The two ends of an entangled pair can be in
 // different contexts. Delivery always goes through the *receiving* port's context.
-_exec: *Execution,
+_exec: js.ExecutionHandle,
 _enabled: bool = false,
 _closed: bool = false,
 
@@ -57,7 +57,7 @@ _node: std.DoublyLinkedList.Node = .{},
 pub fn init(exec: *Execution) !*MessagePort {
     const self = try exec._factory.eventTarget(MessagePort{
         ._proto = undefined,
-        ._exec = exec,
+        ._exec = exec.handle(),
     });
     exec.messagePorts().append(&self._node);
     return self;
@@ -91,14 +91,14 @@ pub fn postMessage(self: *MessagePort, message: js.Value, transfer: ?js.Value, e
 
     // The clone is made directly into the receiving port's context, which may
     // not be the sender's.
-    var target_exec = if (other) |o| o._exec else self._exec;
-    if (!target_exec.isLive()) {
-        // The port's frame navigated away or was torn down (which closed the
-        // port). The caller's realm is the one left to serialize into.
+    const receiving = if (other) |o| o._exec else self._exec;
+    const target = receiving.get() orelse blk: {
+        // The port's realm is gone (which closed the port). The caller's is the
+        // one left to serialize into.
         doomed = true;
-        target_exec = exec;
-    }
-    const cloned = try cloneMessage(message, ports, target_exec);
+        break :blk exec;
+    };
+    const cloned = try cloneMessage(message, ports, target);
     if (doomed) {
         cloned.release();
         return;
@@ -107,7 +107,7 @@ pub fn postMessage(self: *MessagePort, message: js.Value, transfer: ?js.Value, e
 
     const receiver = other.?;
     if (!receiver._enabled) {
-        try receiver._pending.append(receiver._exec.page_arena, cloned);
+        try receiver._pending.append(target.page_arena, cloned);
         return;
     }
 
@@ -244,10 +244,10 @@ fn transferTo(self: *MessagePort, exec: *Execution) !*MessagePort {
         const callback: *DeliverCallback = @fieldParentPtr("node", node);
         const message = callback.message.?;
         callback.message = null;
-        port.adoptPending(message, self._exec);
+        port.adoptPending(message, self._exec, exec);
     }
     for (self._pending.items) |message| {
-        port.adoptPending(message, self._exec);
+        port.adoptPending(message, self._exec, exec);
     }
     self._pending.clearRetainingCapacity();
 
@@ -259,11 +259,16 @@ fn transferTo(self: *MessagePort, exec: *Execution) !*MessagePort {
     return port;
 }
 
-// Queues a message the port's previous incarnation (in `from`) hadn't
-// delivered yet. The new port isn't started, so it waits in _pending.
-fn adoptPending(self: *MessagePort, message: Message, from: *Execution) void {
-    const moved = moveMessage(message, from, self._exec) orelse return;
-    self._pending.append(self._exec.page_arena, moved) catch |err| {
+/// Queues a message the port's previous incarnation (in `from`) hadn't
+/// delivered yet. The new port, in `to`, isn't started, so it waits in _pending.
+fn adoptPending(self: *MessagePort, message: Message, from: js.ExecutionHandle, to: *Execution) void {
+    const source = from.get() orelse {
+        // The message was cloned into a realm that is gone.
+        message.release();
+        return;
+    };
+    const moved = moveMessage(message, source, to) orelse return;
+    self._pending.append(to.page_arena, moved) catch |err| {
         log.debug(.dom, "MessagePort transfer", .{ .err = err });
         moved.release();
     };
@@ -311,7 +316,10 @@ pub fn close(self: *MessagePort) void {
         return;
     }
     self._closed = true;
-    self._exec.messagePorts().remove(&self._node);
+    // The list goes with its Frame or WorkerGlobalScope.
+    if (self._exec.global()) |global| {
+        global.messagePorts().remove(&self._node);
+    }
 
     for (self._pending.items) |message| {
         message.release();
@@ -328,7 +336,7 @@ pub fn close(self: *MessagePort) void {
 // Queues delivery of `message` (a clone already living in this port's
 // context) on this port's scheduler.
 fn scheduleDelivery(self: *MessagePort, message: Message) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return error.InvalidStateError;
     const callback = try exec._factory.create(DeliverCallback{
         .port = self,
         .message = message,
@@ -365,7 +373,7 @@ const DeliverCallback = struct {
     }
 
     fn deinit(self: *DeliverCallback) void {
-        self.port._exec._factory.destroy(self);
+        self.port._exec.page().factory.destroy(self);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
@@ -373,7 +381,6 @@ const DeliverCallback = struct {
         defer self.deinit();
 
         const port = self.port;
-        const exec = port._exec;
 
         const message = self.message orelse return null;
         port._in_flight.remove(&self.node);
@@ -382,12 +389,13 @@ const DeliverCallback = struct {
         // The MessageEvent takes ownership of the cloned temp and releases it on
         // teardown; on any path where we don't hand it over, release it here so
         // it doesn't leak.
-        if (port._closed) {
+        const live = if (port._closed) null else port._exec.get();
+        const exec = live orelse {
             if (message.data) |d| {
                 d.release();
             }
             return null;
-        }
+        };
 
         const target = port.asEventTarget();
         const data = message.data orelse {

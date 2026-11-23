@@ -30,7 +30,6 @@ const Direction = IDBCursor.Direction;
 
 const IDBKeyRange = @This();
 
-_exec: *Execution,
 // Encoded bound bytes (page-arena lived), null when that side is unbounded.
 _lower: ?[]const u8,
 _upper: ?[]const u8,
@@ -39,7 +38,6 @@ _upper_open: bool,
 
 fn create(exec: *Execution, lower: ?[]const u8, upper: ?[]const u8, lower_open: bool, upper_open: bool) !*IDBKeyRange {
     return exec._factory.create(IDBKeyRange{
-        ._exec = exec,
         ._lower = lower,
         ._upper = upper,
         ._lower_open = lower_open,

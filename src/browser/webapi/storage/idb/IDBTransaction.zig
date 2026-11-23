@@ -40,7 +40,7 @@ const IDBTransaction = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_exec: *Execution,
+_exec: js.ExecutionHandle,
 _db: *IDBDatabase,
 _engine: *Engine,
 _mode: Mode,
@@ -137,7 +137,7 @@ pub fn init(db: *IDBDatabase, mode: Mode, durability: Durability, exec: *Executi
         errdefer arena.release();
         const s = try exec._factory.eventTargetWithAllocator(arena.allocator(), IDBTransaction{
             ._proto = undefined,
-            ._exec = exec,
+            ._exec = exec.handle(),
             ._db = db,
             ._engine = db._engine,
             ._mode = mode,
@@ -165,7 +165,7 @@ pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
 
     const self = try exec._factory.eventTargetWithAllocator(arena.allocator(), IDBTransaction{
         ._proto = undefined,
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._db = db,
         ._engine = db._engine,
         ._mode = .versionchange,
@@ -361,10 +361,10 @@ fn scheduleAbortDelivery(self: *IDBTransaction, exec: *Execution) void {
 
 fn deliverAbort(ctx: *anyopaque) !?u32 {
     const self: *IDBTransaction = @ptrCast(@alignCast(ctx));
-    const exec = self._exec;
     // The task pin; may free the transaction — must be the last touch.
-    defer self.releaseRef(exec.page);
+    defer self.releaseRef(self._exec.page());
     defer self._abort_pending = false;
+    const exec = self._exec.get() orelse return null;
 
     // Scheduler tasks run without a js local; dispatch needs one (see deliverBatch).
     const prev_local = exec.js.local;
@@ -389,7 +389,7 @@ fn deliverAbort(ctx: *anyopaque) !?u32 {
 fn abortFinalize(ctx: *anyopaque) void {
     const self: *IDBTransaction = @ptrCast(@alignCast(ctx));
     self._abort_pending = false;
-    self.releaseRef(self._exec.page);
+    self.releaseRef(self._exec.page());
 }
 
 // The abort event bubbles from the transaction to its connection.
@@ -485,7 +485,8 @@ pub fn assertActive(self: *const IDBTransaction) !void {
     if (self._settled or self._committing or self._cloning) {
         return error.TransactionInactiveError;
     }
-    if (self._active_turn != self._exec.js.scheduler.generation) {
+    const context = self._exec.js() orelse return error.TransactionInactiveError;
+    if (self._active_turn != context.scheduler.generation) {
         return error.TransactionInactiveError;
     }
 }
@@ -503,7 +504,7 @@ pub fn ensureBegun(self: *IDBTransaction) !void {
 }
 
 pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
-    const request = try self._exec._factory.eventTargetWithAllocator(self._arena.allocator(), IDBRequest{ ._proto = undefined });
+    const request = try self._exec.page().factory.eventTargetWithAllocator(self._arena.allocator(), IDBRequest{ ._proto = undefined });
     request._txn = .{ .owned = self };
     try self._requests.append(self._arena.allocator(), request);
     return request;
@@ -610,9 +611,10 @@ fn fire(self: *IDBTransaction, exec: *Execution, typ: lp.String) void {
 // Schedule the drain task, which pins the transaction until it runs to completion
 // (or its scheduler finalizer runs).
 fn scheduleDrain(self: *IDBTransaction) !void {
+    const context = self._exec.js() orelse return error.InvalidStateError;
     self.acquireRef();
-    errdefer self.releaseRef(self._exec.page);
-    try self._exec.js.scheduler.add(self, drain, 0, .{
+    errdefer self.releaseRef(context.page);
+    try context.scheduler.add(self, drain, 0, .{
         .name = "IDBTransaction.drain",
         .finalizer = finalize,
     });
@@ -624,7 +626,7 @@ fn drain(ctx: *anyopaque) !?u32 {
     if (repeat == null) {
         // The drain task is done; drop its pin. May free the transaction —
         // must be the last touch.
-        self.releaseRef(self._exec.page);
+        self.releaseRef(self._exec.page());
     }
     return repeat;
 }
@@ -637,7 +639,10 @@ fn drainInner(self: *IDBTransaction) ?u32 {
         return null;
     }
 
-    const exec = self._exec;
+    const exec = self._exec.get() orelse {
+        _ = self._engine.releaseGate(&self._gate_waiter);
+        return null;
+    };
 
     if (self._queue.items.len > 0) {
         if (self._engine.acquireGate(&self._gate_waiter) == false) {
@@ -670,7 +675,7 @@ fn unpark(self: *IDBTransaction) void {
         std.debug.assert(self._parked);
     }
     self._parked = false;
-    self.releaseRef(self._exec.page);
+    self.releaseRef(self._exec.page());
 }
 
 // Scheduler wake-up: the gate was handed to us, so run the drain again.
@@ -702,7 +707,7 @@ fn finalize(ctx: *anyopaque) void {
     self._settled = true;
     _ = self._engine.releaseGate(&self._gate_waiter);
     // The task pin; may free the transaction — must be the last touch.
-    self.releaseRef(self._exec.page);
+    self.releaseRef(self._exec.page());
 }
 
 // Engine.detach cancel: our context is going away; the unlink/hand-off is

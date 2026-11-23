@@ -36,7 +36,6 @@ const IDBDatabase = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_exec: *Execution,
 _engine: *Engine,
 _database_id: i64,
 _name: []const u8,
@@ -47,7 +46,6 @@ _closed: bool = false,
 pub fn init(exec: *Execution, engine: *Engine, database_id: i64, name: []const u8, version: i64) !*IDBDatabase {
     return exec._factory.eventTarget(IDBDatabase{
         ._proto = undefined,
-        ._exec = exec,
         ._engine = engine,
         ._database_id = database_id,
         ._name = name,

@@ -21,6 +21,7 @@ const std = @import("std");
 const zlib = @import("../../../sys/zlib.zig");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
 
 const Execution = js.Execution;
@@ -39,14 +40,15 @@ const State = enum {
 /// Covers gzip, deflate and deflate-raw.
 pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
     return struct {
-        exec: *const Execution,
+        // Whose allocator zlib uses. The stream can outlive its realm.
+        page: *Page,
         state: State = .idle,
         format: Format,
         /// Internal zlib stream; lazily initialized. Valid if `state` is `active`.
         stream: zlib.z_stream = undefined,
 
         pub fn init(exec: *const Execution, format: Format) Deflate(mode) {
-            return .{ .format = format, .exec = exec };
+            return .{ .format = format, .page = exec.page };
         }
 
         /// Initializes internal `stream`.
@@ -55,7 +57,7 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
             // zfree, and opaque fields in the strm structure must be initialized
             // before calling deflateInit().
             // https://zlib.net/zlib_how.html
-            self.stream = .{ .zalloc = alloc, .zfree = free, .@"opaque" = @constCast(self.exec) };
+            self.stream = .{ .zalloc = alloc, .zfree = free, .@"opaque" = self.page };
             // TODO: Match Chrome.
             const window_bits: c_int = switch (self.format) {
                 .deflate => zlib.MAX_WBITS,
@@ -244,8 +246,8 @@ const HEADER = 16;
 const alignment: std.mem.Alignment = .fromByteUnits(HEADER);
 
 fn alloc(userdata: ?*anyopaque, items: zlib.uInt, size: zlib.uInt) callconv(.c) ?*anyopaque {
-    const exec: *const Execution = @ptrCast(@alignCast(userdata.?));
-    const allocator = exec.page.recycling;
+    const page: *const Page = @ptrCast(@alignCast(userdata.?));
+    const allocator = page.recycling;
 
     const len = std.math.mul(usize, items, size) catch return null;
     const total = std.math.add(usize, len, HEADER) catch return null;
@@ -258,8 +260,8 @@ fn alloc(userdata: ?*anyopaque, items: zlib.uInt, size: zlib.uInt) callconv(.c) 
 
 fn free(userdata: ?*anyopaque, ptr: ?*anyopaque) callconv(.c) void {
     const payload = ptr orelse return;
-    const exec: *const Execution = @ptrCast(@alignCast(userdata.?));
-    const allocator = exec.page.recycling;
+    const page: *const Page = @ptrCast(@alignCast(userdata.?));
+    const allocator = page.recycling;
 
     const base: [*]align(HEADER) u8 = @ptrCast(@alignCast(@as([*]u8, @ptrCast(payload)) - HEADER));
     const total = std.mem.readInt(usize, base[0..@sizeOf(usize)], .native);

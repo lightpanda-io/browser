@@ -1878,7 +1878,7 @@ fn hasFocus(self: *Document) bool {
         const active = candidate.document._active_element orelse return false;
         const iframe = active.is(Element.Html.IFrame) orelse return false;
         const window = iframe._window orelse return false;
-        candidate = window._frame;
+        candidate = window._frame.get() orelse return false;
     }
 }
 

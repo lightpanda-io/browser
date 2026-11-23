@@ -165,7 +165,7 @@ fn addAll(self: *Cache, inputs: []const Request.Input, exec: *const Execution) !
 // An addAll in flight.
 const Batch = struct {
     arena: *lp.Arena,
-    exec: *const Execution,
+    exec: js.ExecutionHandle,
     origin: *Store.Origin,
     bucket: *Store.Bucket,
     resolver: js.PromiseResolver.Global,
@@ -186,7 +186,7 @@ const Batch = struct {
         const self = try arena.create(Batch);
         self.* = .{
             .arena = arena,
-            .exec = exec,
+            .exec = exec.handle(),
             .origin = cache._origin,
             .bucket = cache._bucket,
             .resolver = resolver,
@@ -246,8 +246,9 @@ const Batch = struct {
             return;
         }
 
+        const context = self.exec.js() orelse return;
         var ls: js.Local.Scope = undefined;
-        self.exec.js.localScope(&ls);
+        context.localScope(&ls);
         defer ls.deinit();
 
         const resolver = ls.toLocal(self.resolver);

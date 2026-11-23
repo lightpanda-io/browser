@@ -423,7 +423,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = undefined,
-        ._history = .{ ._exec = undefined },
+        ._history = .{ ._frame = undefined },
         ._performance = try .init(factory, page_arena),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
@@ -816,11 +816,11 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
                 // creator's policy container, including the referrer policy
                 self.referrer_policy = parent.referrer_policy;
             }
-        } else if (self.window._opener) |opener| {
-            self.origin = opener._frame.origin;
+        } else if (openerFrame(self.window)) |opener| {
+            self.origin = opener.origin;
             if (is_about_blank) {
-                self.inherited_base_url = opener._frame.base();
-                self.referrer_policy = opener._frame.referrer_policy;
+                self.inherited_base_url = opener.base();
+                self.referrer_policy = opener.referrer_policy;
             }
         } else {
             self.origin = null;
@@ -1078,7 +1078,8 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     const target = switch (nt) {
         .form, .anchor => |p| p,
         .script => |p| p orelse originator,
-        .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
+        // Only a `Frame` with existing content can be navigated.
+        .iframe => |iframe| iframe._window.?._frame.get().?,
     };
 
     // The competing navigation, if any, is queued on the target, which isn't
@@ -2901,7 +2902,8 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
 // A document.open() from within this event mutes the element's later loads.
 fn fireIFrameLoad(self: *Frame, iframe: *IFrame) !void {
-    const child_doc = if (iframe._window) |w| w._frame.document else null;
+    const child = if (iframe._window) |w| w._frame.get() else null;
+    const child_doc = if (child) |f| f.document else null;
     if (child_doc) |doc| {
         if (doc._mute_iframe_load) return;
         doc._iframe_load_in_progress = true;
