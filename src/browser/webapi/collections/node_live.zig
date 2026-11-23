@@ -552,13 +552,20 @@ fn growth(
     large_count: usize,
     scan: fn (*Node, usize, *Frame) void,
 ) f64 {
-    const start_small = lp.datetime.microTimestamp(.awake);
-    scan(small, small_count, frame);
-    const small_us = lp.datetime.microTimestamp(.awake) - start_small;
+    var small_us: u64 = std.math.maxInt(u64);
+    var large_us: u64 = std.math.maxInt(u64);
+    // A pause (preemption, page fault) only ever adds time, so the fastest of
+    // a few runs is the work itself. A single run is ~1ms on the large set, so
+    // one 2ms hiccup on a busy CI runner was enough to trip LIMIT.
+    for (0..5) |_| {
+        const start_small = lp.datetime.microTimestamp(.awake);
+        scan(small, small_count, frame);
+        small_us = @min(small_us, lp.datetime.microTimestamp(.awake) - start_small);
 
-    const start_large = lp.datetime.microTimestamp(.awake);
-    scan(large, large_count, frame);
-    const large_us = lp.datetime.microTimestamp(.awake) - start_large;
+        const start_large = lp.datetime.microTimestamp(.awake);
+        scan(large, large_count, frame);
+        large_us = @min(large_us, lp.datetime.microTimestamp(.awake) - start_large);
+    }
 
     return @as(f64, @floatFromInt(large_us)) / @as(f64, @floatFromInt(@max(small_us, 1)));
 }
