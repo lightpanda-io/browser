@@ -526,6 +526,31 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
 // marker interface
 pub const Undefined = struct {};
 
+// zig -> js without identity tracking. Should only be used with great care, as
+// correctness requires that nothing in the WebAPI depends on identity.
+// Requires that the type's JsApi.Meta be flagged with `optional_identity` just
+// as extra precaution. When enabled, the entry isn't inserted into the
+// identity_map and isn't turned into a v8.Global.
+pub fn NoIdentity(comptime T: type) type {
+    return struct {
+        ptr: *T,
+
+        pub const NoIdentityOf = T;
+
+        comptime {
+            // safety, to make sure someone doesn't return a NoIdentity
+            // thoughtlessly.
+            if (!@hasDecl(T.JsApi.Meta, "optional_identity")) {
+                @compileError(@typeName(T) ++ ": js.NoIdentity needs JsApi.Meta.optional_identity");
+            }
+        }
+
+        pub fn wrap(ptr: *T) @This() {
+            return .{ .ptr = ptr };
+        }
+    };
+}
+
 // These are here, and not in Inspector.zig, because Inspector.zig isn't always
 // included (e.g. in the wpt build).
 

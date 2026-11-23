@@ -1786,10 +1786,6 @@ fn documentOrigin(self: *Element, frame: *Frame) layout.Origin {
     return layout.boxOrigin(self, owner, frame);
 }
 
-pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
-    return DOMRect.create(self.boundingClientRectValues(frame), frame._factory);
-}
-
 // Plain rect values, no JS-backed allocation: the internal fast path shared by
 // getBoundingClientRect, getClientRects, and IntersectionObserver. A DOMRect is
 // only materialized at the JS boundary.
@@ -2986,7 +2982,11 @@ pub const JsApi = struct {
     pub const offsetHeight = bridge.accessor(Element.getOffsetHeight, null, .{});
     pub const offsetParent = bridge.accessor(Element.getOffsetParent, null, .{});
     pub const getClientRects = bridge.function(Element.getClientRects, .{});
-    pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
+    pub const getBoundingClientRect = bridge.function(struct {
+        fn wrap(self: *Element, frame: *Frame) !js.NoIdentity(DOMRect) {
+            return .wrap(try DOMRect.create(self.boundingClientRectValues(frame), frame._factory));
+        }
+    }.wrap, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
     pub const getElementsByTagNameNS = bridge.function(Element.getElementsByTagNameNS, .{});
     pub const getElementsByClassName = bridge.function(Element.getElementsByClassName, .{});

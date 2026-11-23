@@ -37,3 +37,28 @@
   testing.expectEqual(a1, document.elementFromPoint(rect1.x, rect1.y))
   testing.expectEqual(a2, document.elementFromPoint(rect2.x, rect2.y))
 </script>
+
+<script id="fresh_rect">
+{
+  // The rect has no identity entry: it still behaves as a full DOMRect when
+  // it comes back from JS.
+  const el = document.querySelector('[href="amiibo/"]');
+  const r1 = el.getBoundingClientRect();
+  const r2 = el.getBoundingClientRect();
+  testing.expectTrue(r1 !== r2);
+  testing.expectTrue(r1 instanceof DOMRect);
+  testing.expectTrue(r1 instanceof DOMRectReadOnly);
+
+  r1.tag = 'kept';
+  r1.x = 12;
+  testing.expectEqual(12, r1.left);
+  testing.expectEqual('kept', r1.tag);
+  testing.expectEqual(r2.width, r1.width);
+
+  const copy = DOMRect.fromRect(r1);
+  testing.expectEqual(12, copy.x);
+  testing.expectEqual(r1.height, copy.height);
+  testing.expectEqual(12, structuredClone(r1).x);
+  testing.expectEqual(12, r1.toJSON().x);
+}
+</script>

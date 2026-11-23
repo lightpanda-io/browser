@@ -367,6 +367,9 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
             else => {},
         },
         .@"struct" => |s| {
+            if (@hasDecl(T, "NoIdentityOf")) {
+                return .{ .local = self, .handle = @ptrCast(try self.wrapNoIdentity(T.NoIdentityOf, value.ptr)) };
+            }
             if (@hasDecl(T, "JsApi")) {
                 if (bridge.JsApiLookup.has(T.JsApi)) {
                     const js_obj = try self.mapZigInstanceToJs(null, value);
@@ -1389,6 +1392,25 @@ fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: ty
     return self.wrapNew(js_obj_handle, &resolved, slot, store_tagged);
 }
 
+fn wrapNoIdentity(self: *const Local, comptime T: type, value: *T) !*const v8.Object {
+    comptime {
+        if (@hasField(T, "_type") or findFinalizerType(T) != null) {
+            @compileError(@typeName(T) ++ ": js.NoIdentity needs a most specific type without a finalizer");
+        }
+    }
+    if (comptime lp.IS_DEBUG) {
+        assertChainContiguity(T, value);
+        const identity = self.ctx.identity;
+        const key = js.Identity.keyOf(value);
+        std.debug.assert(identity.identity_map.contains(key) == false);
+        const gop = try identity.no_identity.getOrPut(identity.allocator, key);
+        std.debug.assert(gop.found_existing == false);
+    }
+    const resolved = resolveT(T, value);
+    const store_tagged = comptime !@hasDecl(T.JsApi.Meta, "empty_with_no_proto");
+    return self.wrapNew(null, &resolved, null, store_tagged);
+}
+
 const IdentityLookup = union(enum) {
     // We've seen this instance before: its JS object.
     found: *const v8.Object,
@@ -1400,6 +1422,10 @@ fn lookupIdentity(self: *const Local, value: anytype) !IdentityLookup {
     const gop = try self.ctx.addIdentity(js.Identity.keyOf(value));
     if (gop.found_existing) {
         return .{ .found = @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle)) };
+    }
+    if (comptime lp.IS_DEBUG) {
+        // It already went to JS as a js.NoIdentity, this would be a second object.
+        std.debug.assert(self.ctx.identity.no_identity.contains(js.Identity.keyOf(value)) == false);
     }
     return .{ .empty = gop.value_ptr };
 }
@@ -1439,7 +1465,8 @@ fn embedsProto(comptime S: type, comptime T: type) bool {
 
 // The first time an instance goes to JS. Kept out of line: wrapLeaf is
 // instantiated once per concrete type.
-noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolved: *const Resolved, global: *v8.Global, store_tagged: bool) !*const v8.Object {
+// `identity_slot` is null for a js.NoIdentity, which has no identity slot.
+noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolved: *const Resolved, identity_slot: ?*v8.Global, store_tagged: bool) !*const v8.Object {
     const ctx = self.ctx;
     const identity_key = resolved.tagged.base;
     const isolate = self.isolate;
@@ -1471,6 +1498,8 @@ noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolv
         // TaggedOpaque, we'll also know there that
         // the type is empty and can create an empty instance.
     }
+
+    const global = identity_slot orelse return js_obj.handle;
 
     // dont' use js_obj.persist(), because we don't want to track this in
     // context.global_objects, we want to track it in context.identity_map.

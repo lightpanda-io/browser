@@ -706,13 +706,13 @@ fn getElementCssValue(cmd: *BiDi.Command, p: ElementName) !void {
 fn getElementRect(cmd: *BiDi.Command, p: ElementId) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const element = (try requireElement(cmd, p.id, frame)) orelse return;
-    const rect = try element.getBoundingClientRect(frame);
+    const rect = element.boundingClientRectValues(frame);
     const window = frame.window;
     return cmd.sendResult(.{
-        .x = rect.getX() + @as(f64, @floatFromInt(window.getScrollX())),
-        .y = rect.getY() + @as(f64, @floatFromInt(window.getScrollY())),
-        .width = rect.getWidth(),
-        .height = rect.getHeight(),
+        .x = rect.x + @as(f64, @floatFromInt(window.getScrollX())),
+        .y = rect.y + @as(f64, @floatFromInt(window.getScrollY())),
+        .width = rect.width,
+        .height = rect.height,
     });
 }
 
