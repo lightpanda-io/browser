@@ -87,6 +87,10 @@ fn getRealms(cmd: *BiDi.Command) !void {
         break :blk &(bidi.browsing_context orelse return cmd.sendResult(.{ .realms = none }));
     };
 
+    if (!ctx.realm_announced) {
+        return cmd.sendResult(.{ .realms = none });
+    }
+
     if (p.type) |t| {
         if (t != .window) {
             return cmd.sendResult(.{ .realms = none });
