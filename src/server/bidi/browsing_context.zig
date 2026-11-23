@@ -670,32 +670,45 @@ fn captureScreenshot(cmd: *BiDi.Command) !void {
         return cmd.sendError("no such frame", "no frame");
     };
 
-    var root = frame.window._document.asNode();
-    var opts: lp.screenshot.Opts = .fromViewport(bidi.browser.getViewport(), p.origin == .document);
+    var opts: lp.screenshot.Opts = .fromViewport(bidi.browser.getViewport(), p.origin == .document, .layout);
 
-    if (p.clip) |clip| switch (clip.type) {
-        // Passed through like CDP's Page.captureScreenshot: a clip past the
-        // viewport extends the image, up to the end of the content.
-        .box => opts.clip = .{ .x = clip.x, .y = clip.y, .width = clip.width, .height = clip.height },
-        .element => {
-            const shared_id = switch (clip.element) {
-                .object => |o| o.get("sharedId") orelse .null,
-                else => .null,
-            };
-            const node = remote_value.nodeFromSharedId(&bidi.node_registry, shared_id) catch {
-                return cmd.sendError("no such node", "unknown element");
-            };
-            if (node.is(Node.Element) == null) {
-                return cmd.sendError("no such element", "clip target is not an element");
-            }
-            // The text layout has no element boxes to crop to: render the
-            // element's subtree on its own, like an element-scoped LP.getMarkdown png.
-            root = node;
-            opts.height = 0;
-        },
-    };
+    if (p.clip) |clip| {
+        // The render's clip is in document coordinates; BiDi's are relative
+        // to the origin, and the viewport one is scrolled.
+        const window = frame.window;
+        const scroll_x: f32 = if (p.origin == .viewport) @floatFromInt(window.getScrollX()) else 0;
+        const scroll_y: f32 = if (p.origin == .viewport) @floatFromInt(window.getScrollY()) else 0;
+        switch (clip.type) {
+            // Passed through like CDP's Page.captureScreenshot: a clip past the
+            // viewport extends the image, up to the end of the content.
+            .box => opts.clip = .{ .x = clip.x + scroll_x, .y = clip.y + scroll_y, .width = clip.width, .height = clip.height },
+            .element => {
+                const shared_id = switch (clip.element) {
+                    .object => |o| o.get("sharedId") orelse .null,
+                    else => .null,
+                };
+                const node = remote_value.nodeFromSharedId(&bidi.node_registry, shared_id) catch {
+                    return cmd.sendError("no such node", "unknown element");
+                };
+                const el = node.is(Node.Element) orelse {
+                    return cmd.sendError("no such element", "clip target is not an element");
+                };
+                // Client rects are viewport-relative, whatever the origin
+                const rect = el.boundingClientRectValues(frame);
+                if (rect.width <= 0 or rect.height <= 0) {
+                    return cmd.sendError("unable to capture screen", "element has no box");
+                }
+                opts.clip = .{
+                    .x = @floatCast(rect.x + @as(f64, @floatFromInt(window.getScrollX()))),
+                    .y = @floatCast(rect.y + @as(f64, @floatFromInt(window.getScrollY()))),
+                    .width = @floatCast(rect.width),
+                    .height = @floatCast(rect.height),
+                };
+            },
+        }
+    }
 
-    const shot = lp.screenshot.preparePng(cmd.arena, .{ .root = root }, opts, frame) catch |err| switch (err) {
+    const shot = lp.screenshot.preparePng(cmd.arena, .{ .root = frame.window._document.asNode() }, opts, frame) catch |err| switch (err) {
         error.InvalidScreenshotOptions => return cmd.sendError("invalid argument", "invalid screenshot options"),
         else => return err,
     };
@@ -1216,7 +1229,7 @@ test "bidi.browsing_context: captureScreenshot" {
     // document origin: the whole content, which is shorter than the viewport
     {
         const frame = try ctx.frame();
-        const content_height = try lp.screenshot.contentHeight(testing.arena, frame.window._document.asNode(), 300, frame);
+        const content_height = try lp.screenshot.contentHeight(testing.arena, frame.window._document.asNode(), 300, .layout, frame);
         try ctx.processMessage(.{ .id = 4, .method = "browsingContext.captureScreenshot", .params = .{ .context = context_id, .origin = "document" } });
         const png = try screenshotResult(&ctx, 4);
         try testing.expectEqual(600, pngWidth(png));
@@ -1234,8 +1247,15 @@ test "bidi.browsing_context: captureScreenshot" {
         try testing.expectEqual(80, pngHeight(png));
     }
 
-    // element clip renders the element's own subtree
+    // element clip crops to the element's box. Back to the default width
+    // (keeping the scale): the root's layout width doesn't follow the viewport.
     {
+        try ctx.processMessage(.{
+            .id = 6,
+            .method = "browsingContext.setViewport",
+            .params = .{ .context = context_id, .viewport = null },
+        });
+        try ctx.expectSentResult(null, .{ .id = 6 });
         try ctx.processMessage(.{
             .id = 9,
             .method = "browsingContext.locateNodes",
@@ -1248,8 +1268,10 @@ test "bidi.browsing_context: captureScreenshot" {
             .params = .{ .context = context_id, .clip = .{ .type = "element", .element = .{ .sharedId = "1" } } },
         });
         const png = try screenshotResult(&ctx, 10);
-        try testing.expectEqual(600, pngWidth(png));
-        try testing.expect(pngHeight(png) < 400);
+        const frame = try ctx.frame();
+        const rect = frame.window._document.getElementById("other").?.boundingClientRectValues(frame);
+        try testing.expectEqual(@as(u32, @intFromFloat(rect.width * 2)), pngWidth(png));
+        try testing.expectEqual(@as(u32, @intFromFloat(rect.height * 2)), pngHeight(png));
     }
 
     try ctx.processMessage(.{
