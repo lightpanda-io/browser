@@ -34,6 +34,7 @@ const Factory = @import("../Factory.zig");
 
 const v8 = js.v8;
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("lightpanda").IS_DEBUG;
 
 const Identity = @This();
 
@@ -42,6 +43,10 @@ allocator: Allocator,
 
 // Maps Zig instance pointers to their v8::Global(Object) wrappers.
 identity_map: std.HashMapUnmanaged(usize, v8.Global, PtrContext, std.hash_map.default_max_load_percentage) = .empty,
+
+// Keys of the instances wrapped without an entry above. These should never be
+// handed out twice, and in debug, we track it here to catch it.
+no_identity: if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, void) else void = if (IS_DEBUG) .empty else {},
 
 // Keys are object addresses, so a multiply-xorshift is enough and cheaper than
 // the default Wyhash. The map takes the slot from the low bits and the
@@ -77,4 +82,8 @@ pub fn deinit(self: *Identity) void {
     // Left usable: Page.deinit's finalizer cleanup still looks entries up, and
     // a CDP isolated world reuses its Identity for the next page.
     self.identity_map = .empty;
+    if (comptime IS_DEBUG) {
+        self.no_identity.deinit(self.allocator);
+        self.no_identity = .empty;
+    }
 }

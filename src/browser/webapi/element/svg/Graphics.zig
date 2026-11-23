@@ -127,7 +127,11 @@ pub const JsApi = struct {
     pub const transform = bridge.accessor(Graphics.getTransform, null, .{});
     pub const requiredExtensions = bridge.accessor(Graphics.getRequiredExtensions, null, .{});
     pub const systemLanguage = bridge.accessor(Graphics.getSystemLanguage, null, .{});
-    pub const getBBox = bridge.function(Graphics.getBBox, .{});
+    pub const getBBox = bridge.function(struct {
+        fn wrap(self: *Graphics, frame: *Frame) !js.NoIdentity(DOMRect) {
+            return .wrap(try DOMRect.create(try self.bbox(frame), frame._factory));
+        }
+    }.wrap, .{});
     pub const getCTM = bridge.function(Graphics.getCTM, .{});
     pub const getScreenCTM = bridge.function(Graphics.getScreenCTM, .{});
 };
@@ -135,7 +139,7 @@ pub const JsApi = struct {
 // SVGBoundingBoxOptions is not modelled: Chrome declares no parameter at all
 // and Firefox's flags degenerate to the fill geometry, so both engines answer
 // every call with the fill box.
-fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
+fn bbox(self: *Graphics, frame: *Frame) !DOMRect.Data {
     var bounds: PathData.Bounds = .{};
     switch (self._type) {
         .geometry => {
@@ -151,15 +155,15 @@ fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
         .defs, .switch_element, .use, .image => {},
     }
     if (bounds.isEmpty()) {
-        return DOMRect.create(.{}, frame._factory);
+        return .{};
     }
 
-    return DOMRect.create(.{
+    return .{
         .x = bounds.min_x,
         .y = bounds.min_y,
         .width = bounds.width(),
         .height = bounds.height(),
-    }, frame._factory);
+    };
 }
 
 fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathData.Bounds, frame: *Frame) !void {

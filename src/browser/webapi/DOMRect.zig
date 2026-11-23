@@ -93,6 +93,7 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "DOMRect";
         pub var class_id: bridge.ClassId = undefined;
+        pub const optional_identity = true;
     };
 
     pub const constructor = bridge.constructor(DOMRect.init, .{});

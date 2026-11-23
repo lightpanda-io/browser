@@ -828,14 +828,9 @@ fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
     return null;
 }
 
-pub fn getBoundingClientRect(self: *const Range, frame: *Frame) !*DOMRect {
-    const rect = try self.clientRect(frame) orelse DOMRect.Data{};
-    return DOMRect.create(rect, frame._factory);
-}
-
 // One rect per selected element whose parent isn't selected, and one per
 // selected piece of text, including text inside those elements.
-fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
+fn clientRects(self: *const Range, frame: *Frame) ![]DOMRect.Data {
     if (self._proto.getCollapsed()) {
         return &.{};
     }
@@ -844,7 +839,7 @@ fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
     const start_offset = self._proto._start_offset;
     const end_offset = self._proto._end_offset;
 
-    var rects: std.ArrayList(*DOMRect) = .empty;
+    var rects: std.ArrayList(DOMRect.Data) = .empty;
 
     if (start_node == end_node) {
         if (start_node.is(Node.CData)) |cdata| {
@@ -890,7 +885,7 @@ fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
         }
         covering = node;
         if (el.isVisible(frame)) {
-            try rects.append(frame.local_arena, try DOMRect.create(el.boundingClientRectValuesForVisible(frame), frame._factory));
+            try rects.append(frame.local_arena, el.boundingClientRectValuesForVisible(frame));
         }
     }
 
@@ -903,9 +898,9 @@ fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
 }
 
 // The rect of cdata's text between two UTF-16 offsets; a null end is its end.
-fn appendTextRect(rects: *std.ArrayList(*DOMRect), cdata: *Node.CData, start: u32, end: ?u32, frame: *Frame) !void {
+fn appendTextRect(rects: *std.ArrayList(DOMRect.Data), cdata: *Node.CData, start: u32, end: ?u32, frame: *Frame) !void {
     const rect = textRangeRect(cdata, start, end, frame) orelse return;
-    try rects.append(frame.local_arena, try DOMRect.create(rect, frame._factory));
+    try rects.append(frame.local_arena, rect);
 }
 
 // The rect of a whole text node, in the viewport of its own frame.
@@ -1067,8 +1062,21 @@ pub const JsApi = struct {
     pub const surroundContents = bridge.function(Range.surroundContents, .{ .ce_reactions = true });
     pub const createContextualFragment = bridge.function(Range.createContextualFragment, .{ .ce_reactions = true });
     pub const toString = bridge.function(Range.toString, .{});
-    pub const getBoundingClientRect = bridge.function(Range.getBoundingClientRect, .{});
-    pub const getClientRects = bridge.function(Range.getClientRects, .{});
+    pub const getBoundingClientRect = bridge.function(struct {
+        fn wrap(self: *const Range, frame: *Frame) !js.NoIdentity(DOMRect) {
+            return .wrap(try DOMRect.create(try self.clientRect(frame) orelse .{}, frame._factory));
+        }
+    }.wrap, .{});
+    pub const getClientRects = bridge.function(struct {
+        fn wrap(self: *const Range, frame: *Frame) ![]js.NoIdentity(DOMRect) {
+            const rects = try self.clientRects(frame);
+            const wrapped = try frame.local_arena.alloc(js.NoIdentity(DOMRect), rects.len);
+            for (rects, wrapped) |rect, *w| {
+                w.* = .wrap(try DOMRect.create(rect, frame._factory));
+            }
+            return wrapped;
+        }
+    }.wrap, .{});
 };
 
 const testing = @import("../../testing.zig");
