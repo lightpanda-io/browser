@@ -549,7 +549,7 @@ pub const JsApi = struct {
 
     pub const url = bridge.accessor(EventSource.getUrl, null, .{});
     pub const readyState = bridge.accessor(EventSource.getReadyState, null, .{});
-    pub const withCredentials = bridge.accessor("_with_credentials", null, .{});
+    pub const withCredentials = bridge.fastAccessor("_with_credentials", null, .{});
 
     pub const onopen = EventTarget.handlerAccessor(EventSource, "open");
     pub const onmessage = EventTarget.handlerAccessor(EventSource, "message");

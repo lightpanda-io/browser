@@ -346,9 +346,9 @@ pub const JsApi = struct {
 
     pub const value = bridge.accessor(AudioParam.getValue, AudioParam.setValue, .{});
     pub const automationRate = bridge.accessor(AudioParam.getAutomationRate, AudioParam.setAutomationRate, .{});
-    pub const defaultValue = bridge.accessor("_default", null, .{});
-    pub const minValue = bridge.accessor("_min", null, .{});
-    pub const maxValue = bridge.accessor("_max", null, .{});
+    pub const defaultValue = bridge.fastAccessor("_default", null, .{});
+    pub const minValue = bridge.fastAccessor("_min", null, .{});
+    pub const maxValue = bridge.fastAccessor("_max", null, .{});
     pub const setValueAtTime = bridge.function(AudioParam.setValueAtTime, .{});
     pub const linearRampToValueAtTime = bridge.function(AudioParam.linearRampToValueAtTime, .{});
     pub const exponentialRampToValueAtTime = bridge.function(AudioParam.exponentialRampToValueAtTime, .{});

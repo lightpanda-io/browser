@@ -390,7 +390,7 @@ pub const JsApi = struct {
     };
 
     pub const root = bridge.accessor(DOMTreeWalker.getRoot, null, .{});
-    pub const whatToShow = bridge.accessor("_what_to_show", null, .{});
+    pub const whatToShow = bridge.fastAccessor("_what_to_show", null, .{});
     pub const filter = bridge.accessor(DOMTreeWalker.getFilter, null, .{});
     pub const currentNode = bridge.accessor(DOMTreeWalker.getCurrentNode, DOMTreeWalker.setCurrentNode, .{});
 

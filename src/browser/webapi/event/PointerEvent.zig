@@ -157,18 +157,18 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(PointerEvent.init, .{});
-    pub const pointerId = bridge.accessor("_pointer_id", null, .{});
+    pub const pointerId = bridge.fastAccessor("_pointer_id", null, .{});
     pub const pointerType = bridge.accessor(PointerEvent.getPointerType, null, .{});
-    pub const width = bridge.accessor("_width", null, .{});
-    pub const height = bridge.accessor("_height", null, .{});
-    pub const pressure = bridge.accessor("_pressure", null, .{});
-    pub const tangentialPressure = bridge.accessor("_tangential_pressure", null, .{});
-    pub const tiltX = bridge.accessor("_tilt_x", null, .{});
-    pub const tiltY = bridge.accessor("_tilt_y", null, .{});
-    pub const twist = bridge.accessor("_twist", null, .{});
-    pub const altitudeAngle = bridge.accessor("_altitude_angle", null, .{});
-    pub const azimuthAngle = bridge.accessor("_azimuth_angle", null, .{});
-    pub const isPrimary = bridge.accessor("_is_primary", null, .{});
+    pub const width = bridge.fastAccessor("_width", null, .{});
+    pub const height = bridge.fastAccessor("_height", null, .{});
+    pub const pressure = bridge.fastAccessor("_pressure", null, .{});
+    pub const tangentialPressure = bridge.fastAccessor("_tangential_pressure", null, .{});
+    pub const tiltX = bridge.fastAccessor("_tilt_x", null, .{});
+    pub const tiltY = bridge.fastAccessor("_tilt_y", null, .{});
+    pub const twist = bridge.fastAccessor("_twist", null, .{});
+    pub const altitudeAngle = bridge.fastAccessor("_altitude_angle", null, .{});
+    pub const azimuthAngle = bridge.fastAccessor("_azimuth_angle", null, .{});
+    pub const isPrimary = bridge.fastAccessor("_is_primary", null, .{});
 };
 
 const testing = @import("../../../testing.zig");

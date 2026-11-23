@@ -430,11 +430,11 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(AudioData.init, .{});
     pub const format = bridge.accessor(AudioData.getFormat, null, .{});
-    pub const sampleRate = bridge.accessor("_sample_rate", null, .{});
-    pub const numberOfFrames = bridge.accessor("_number_of_frames", null, .{});
-    pub const numberOfChannels = bridge.accessor("_number_of_channels", null, .{});
+    pub const sampleRate = bridge.fastAccessor("_sample_rate", null, .{});
+    pub const numberOfFrames = bridge.fastAccessor("_number_of_frames", null, .{});
+    pub const numberOfChannels = bridge.fastAccessor("_number_of_channels", null, .{});
     pub const duration = bridge.accessor(AudioData.getDuration, null, .{});
-    pub const timestamp = bridge.accessor("_timestamp", null, .{});
+    pub const timestamp = bridge.fastAccessor("_timestamp", null, .{});
     pub const allocationSize = bridge.function(AudioData.allocationSize, .{});
     pub const copyTo = bridge.function(AudioData.copyTo, .{});
     pub const clone = bridge.function(AudioData.clone, .{});

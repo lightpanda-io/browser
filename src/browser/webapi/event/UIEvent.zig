@@ -163,7 +163,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(UIEvent.init, .{});
-    pub const detail = bridge.accessor("_detail", null, .{});
+    pub const detail = bridge.fastAccessor("_detail", null, .{});
     pub const view = bridge.accessor(UIEvent.getView, null, .{});
     pub const which = bridge.accessor(UIEvent.getWhich, null, .{});
     pub const initUIEvent = bridge.function(UIEvent.initUIEvent, .{});

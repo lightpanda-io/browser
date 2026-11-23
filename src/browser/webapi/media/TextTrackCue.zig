@@ -90,9 +90,9 @@ pub const JsApi = struct {
 
     pub const track = bridge.accessor(TextTrackCue.getTrack, null, .{});
     pub const id = bridge.accessor(TextTrackCue.getId, TextTrackCue.setId, .{});
-    pub const startTime = bridge.accessor("_start_time", TextTrackCue.setStartTime, .{});
-    pub const endTime = bridge.accessor("_end_time", TextTrackCue.setEndTime, .{});
-    pub const pauseOnExit = bridge.accessor("_pause_on_exit", TextTrackCue.setPauseOnExit, .{});
+    pub const startTime = bridge.fastAccessor("_start_time", TextTrackCue.setStartTime, .{});
+    pub const endTime = bridge.fastAccessor("_end_time", TextTrackCue.setEndTime, .{});
+    pub const pauseOnExit = bridge.fastAccessor("_pause_on_exit", TextTrackCue.setPauseOnExit, .{});
     pub const onenter = EventTarget.handlerAccessor(TextTrackCue, "enter");
     pub const onexit = EventTarget.handlerAccessor(TextTrackCue, "exit");
 };

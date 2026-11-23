@@ -662,7 +662,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(IDBObjectStore.getName, IDBObjectStore.setName, .{});
     pub const keyPath = bridge.accessor(IDBObjectStore.getKeyPath, null, .{});
-    pub const autoIncrement = bridge.accessor("_auto_increment", null, .{});
+    pub const autoIncrement = bridge.fastAccessor("_auto_increment", null, .{});
     pub const transaction = bridge.accessor(IDBObjectStore.getTransaction, null, .{ .null_as_undefined = true });
     pub const add = bridge.function(IDBObjectStore.add, .{});
     pub const put = bridge.function(IDBObjectStore.put, .{});

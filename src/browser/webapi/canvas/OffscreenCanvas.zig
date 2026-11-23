@@ -151,8 +151,8 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(OffscreenCanvas.constructor, .{});
-    pub const width = bridge.accessor("_width", OffscreenCanvas.setWidth, .{});
-    pub const height = bridge.accessor("_height", OffscreenCanvas.setHeight, .{});
+    pub const width = bridge.fastAccessor("_width", OffscreenCanvas.setWidth, .{});
+    pub const height = bridge.fastAccessor("_height", OffscreenCanvas.setHeight, .{});
     pub const getContext = bridge.function(OffscreenCanvas.getContext, .{});
     pub const convertToBlob = bridge.function(OffscreenCanvas.convertToBlob, .{});
     pub const transferToImageBitmap = bridge.function(OffscreenCanvas.transferToImageBitmap, .{});

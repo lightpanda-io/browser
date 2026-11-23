@@ -89,9 +89,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const latitude = bridge.accessor("_latitude", null, .{});
-    pub const longitude = bridge.accessor("_longitude", null, .{});
-    pub const accuracy = bridge.accessor("_accuracy", null, .{});
+    pub const latitude = bridge.fastAccessor("_latitude", null, .{});
+    pub const longitude = bridge.fastAccessor("_longitude", null, .{});
+    pub const accuracy = bridge.fastAccessor("_accuracy", null, .{});
     pub const altitude = bridge.accessor(GeolocationCoordinates.getAltitude, null, .{});
     pub const altitudeAccuracy = bridge.accessor(GeolocationCoordinates.getAltitudeAccuracy, null, .{});
     pub const heading = bridge.accessor(GeolocationCoordinates.getHeading, null, .{});

@@ -444,7 +444,7 @@ pub const JsApi = struct {
     pub const ownerNode = bridge.accessor(CSSStyleSheet.getOwnerNode, null, .{ .null_as_undefined = true });
     pub const href = bridge.accessor(CSSStyleSheet.getHref, null, .{ .null_as_undefined = true });
     pub const title = bridge.accessor(CSSStyleSheet.getTitle, null, .{});
-    pub const disabled = bridge.accessor("_disabled", CSSStyleSheet.setDisabled, .{});
+    pub const disabled = bridge.fastAccessor("_disabled", CSSStyleSheet.setDisabled, .{});
     pub const cssRules = bridge.accessor(CSSStyleSheet.getCssRules, null, .{});
     pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{});
     pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{});

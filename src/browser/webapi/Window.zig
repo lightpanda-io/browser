@@ -1378,7 +1378,7 @@ pub const JsApi = struct {
     pub const screenTop = bridge.accessor(Window.getScreenPosition, Window.setScreenTop, .{});
 
     pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
-    pub const closed = bridge.accessor("_closed", null, .{});
+    pub const closed = bridge.fastAccessor("_closed", null, .{});
     pub const name = bridge.accessor(Window.getName, Window.setName, .{});
     pub const open = bridge.function(Window.open, .{});
     pub const close = bridge.function(Window.close, .{});

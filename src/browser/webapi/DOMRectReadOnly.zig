@@ -137,10 +137,10 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(DOMRectReadOnly.init, .{});
     pub const fromRect = bridge.function(DOMRectReadOnly.fromRect, .{ .static = true });
 
-    pub const x = bridge.accessor("_x", null, .{});
-    pub const y = bridge.accessor("_y", null, .{});
-    pub const width = bridge.accessor("_width", null, .{});
-    pub const height = bridge.accessor("_height", null, .{});
+    pub const x = bridge.fastAccessor("_x", null, .{});
+    pub const y = bridge.fastAccessor("_y", null, .{});
+    pub const width = bridge.fastAccessor("_width", null, .{});
+    pub const height = bridge.fastAccessor("_height", null, .{});
     pub const top = bridge.accessor(DOMRectReadOnly.getTop, null, .{});
     pub const right = bridge.accessor(DOMRectReadOnly.getRight, null, .{});
     pub const bottom = bridge.accessor(DOMRectReadOnly.getBottom, null, .{});

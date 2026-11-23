@@ -254,8 +254,8 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(IDBIndex.getName, IDBIndex.setName, .{});
     pub const keyPath = bridge.accessor(IDBIndex.getKeyPath, null, .{});
-    pub const unique = bridge.accessor("_unique", null, .{});
-    pub const multiEntry = bridge.accessor("_multi_entry", null, .{});
+    pub const unique = bridge.fastAccessor("_unique", null, .{});
+    pub const multiEntry = bridge.fastAccessor("_multi_entry", null, .{});
     pub const objectStore = bridge.accessor(IDBIndex.getObjectStore, null, .{});
     pub const get = bridge.function(IDBIndex.get, .{});
     pub const getKey = bridge.function(IDBIndex.getKey, .{});

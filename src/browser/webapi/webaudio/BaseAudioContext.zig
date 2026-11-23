@@ -481,7 +481,7 @@ pub const JsApi = struct {
     };
 
     pub const destination = bridge.accessor(BaseAudioContext.getDestination, null, .{});
-    pub const sampleRate = bridge.accessor("_sample_rate", null, .{});
+    pub const sampleRate = bridge.fastAccessor("_sample_rate", null, .{});
     pub const currentTime = bridge.accessor(BaseAudioContext.getCurrentTime, null, .{});
     pub const state = bridge.accessor(BaseAudioContext.getState, null, .{});
     pub const onstatechange = EventTarget.handlerAccessor(BaseAudioContext, "statechange");
