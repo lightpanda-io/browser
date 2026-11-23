@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=defaults>
@@ -8,7 +9,7 @@
   testing.expectEqual(null, cs.transfer);
   testing.expectEqual(null, cs.matrix);
   testing.expectEqual(null, cs.fullRange);
-  testing.expectEqual('{"primaries":null,"transfer":null,"matrix":null,"fullRange":null}', JSON.stringify(cs));
+  testing.expectEqual('{"fullRange":null,"matrix":null,"primaries":null,"transfer":null}', JSON.stringify(cs));
 }
 </script>
 

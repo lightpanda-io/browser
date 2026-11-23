@@ -111,19 +111,21 @@ fn getFullRange(self: *const VideoColorSpace) ?bool {
     return self._value.fullRange;
 }
 
+// A VideoColorSpaceInit: WebIDL converts dictionary members in lexicographic
+// order, and the bridge follows field order.
 const Json = struct {
+    fullRange: ?bool,
+    matrix: ?[]const u8,
     primaries: ?[]const u8,
     transfer: ?[]const u8,
-    matrix: ?[]const u8,
-    fullRange: ?bool,
 };
 
 fn toJSON(self: *const VideoColorSpace) Json {
     return .{
+        .fullRange = self.getFullRange(),
+        .matrix = self.getMatrix(),
         .primaries = self.getPrimaries(),
         .transfer = self.getTransfer(),
-        .matrix = self.getMatrix(),
-        .fullRange = self.getFullRange(),
     };
 }
 

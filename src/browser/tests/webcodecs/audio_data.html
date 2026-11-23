@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=construct>
@@ -37,8 +38,11 @@
   testing.expectError('TypeError', () => new AudioData({...init, sampleRate: 0}));
   testing.expectError('TypeError', () => new AudioData({...init, data: new Int16Array(1)}));
   testing.expectError('TypeError', () => new AudioData({...init, format: 'nope'}));
-  // a duration beyond u64 saturates
-  testing.expectEqual(2 ** 64, new AudioData({...init, sampleRate: 1e-30}).duration);
+
+  testing.diverges('Chrome limits sampleRate to [3000, 768000] with a NotSupportedError', () => {
+    // a duration beyond u64 saturates
+    testing.expectEqual(2 ** 64, new AudioData({...init, sampleRate: 1e-30}).duration);
+  });
 }
 </script>
 
@@ -50,7 +54,9 @@
   });
   const s16 = new Int16Array(3);
   data.copyTo(s16, {planeIndex: 0, format: 's16'});
-  testing.expectEqual([-32768, 0, 32512], Array.from(s16));
+  testing.expectEqual([-32768, 0], Array.from(s16.subarray(0, 2)));
+  // u8 max may map anywhere in WPT's [32511, INT16_MAX]: we shift (32512), Chrome scales (32767)
+  testing.expectEqual(true, s16[2] >= 32511 && s16[2] <= 32767);
 
   const f32 = new Float32Array(3);
   data.copyTo(f32, {planeIndex: 0, format: 'f32-planar'});

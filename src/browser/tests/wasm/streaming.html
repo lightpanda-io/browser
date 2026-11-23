@@ -26,12 +26,12 @@
 </script>
 
 <script id=response_argument type=module>
-  // A Response rather than a promise, built in-page, with MIME type
-  // parameters and mixed case: only the essence has to match.
+  // A Response rather than a promise, built in-page, with a mixed-case MIME
+  // type and surrounding whitespace.
   const state = await testing.async();
   const bytes = await (await fetch('add.wasm')).arrayBuffer();
   const response = new Response(bytes, {
-    headers: { 'Content-Type': 'Application/WASM; charset=binary' },
+    headers: { 'Content-Type': ' Application/WASM ' },
   });
   const { instance } = await WebAssembly.instantiateStreaming(response);
   state.resolve(instance);
@@ -59,6 +59,7 @@
 
   await attempt('not_a_response', Promise.resolve({}));
   await attempt('wrong_mime', new Response(bytes, { headers: { 'Content-Type': 'application/octet-stream' } }));
+  await attempt('mime_params', new Response(bytes, { headers: { 'Content-Type': 'application/wasm;charset=binary' } }));
   await attempt('not_ok', new Response(bytes, { status: 404, headers: wasmHeaders }));
   await attempt('body_used', used);
   await attempt('rejected_source', Promise.reject(new RangeError('boom')));
@@ -68,6 +69,7 @@
   await state.done((errors) => {
     testing.expectEqual(true, errors.not_a_response instanceof TypeError);
     testing.expectEqual(true, errors.wrong_mime instanceof TypeError);
+    testing.expectEqual(true, errors.mime_params instanceof TypeError);
     testing.expectEqual(true, errors.not_ok instanceof TypeError);
     testing.expectEqual(true, errors.body_used instanceof TypeError);
     testing.expectEqual(true, errors.rejected_source instanceof RangeError);
