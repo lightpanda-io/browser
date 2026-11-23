@@ -325,6 +325,25 @@
   testing.expectEqual($('#bm-m-td-b'), document.elementFromPoint(rect('bm-m-td-b').left + 2, rect('bm-m-td-b').top + 2));
   testing.expectEqual($('#bm-m-td-a'), document.elementFromPoint(rect('bm-m-td-a').left + 48, rect('bm-m-td-a').top + 2));
 
+  // A row group's margins do nothing either, auto ones included
+  wrap.innerHTML = '<table style="border-collapse: collapse"><tbody id="bm-m-tbody" style="margin-left: 20px"><tr>' +
+    '<td id="bm-m-tbody-td" style="padding: 0; width: 50px; height: 10px"></td></tr></tbody></table>' +
+    '<div><div id="bm-m-div-group" style="display: table-row-group; width: 100px; height: 10px; margin: 0 auto"></div></div>';
+  testing.expectEqual(0, left('bm-m-tbody'));
+  testing.expectEqual(0, left('bm-m-tbody-td'));
+  testing.expectEqual(0, left('bm-m-div-group'));
+
+  // display: contents has no box, so no margins, and its children are the
+  // row's items
+  wrap.innerHTML = '<div style="display: flex">' +
+    '<div style="display: contents; margin-left: auto"><i style="display: block; width: 50px; height: 10px"></i></div>' +
+    '<div id="bm-m-after-contents" style="width: 50px; height: 10px; margin-left: auto"></div></div>' +
+    '<div style="display: flex">' +
+    '<div style="display: contents"><i style="display: block; width: 50px; height: 10px; margin-right: 5px"></i></div>' +
+    '<div id="bm-m-past-contents" style="width: 50px; height: 10px"></div></div>';
+  testing.expectEqual(550, left('bm-m-after-contents'));
+  testing.expectEqual(55, left('bm-m-past-contents'));
+
   // An inset places the margin box: the left margin after a left inset, the
   // right one before a right inset
   wrap.innerHTML = '<div style="position: relative; height: 20px">' +

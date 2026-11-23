@@ -2939,7 +2939,7 @@ pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
         .position = flow.position,
         .layer = layer,
         .line = switch (visibility.box) {
-            .block_level, .table, .table_row => if (in_flow) .block else .line,
+            .block_level, .table, .table_row, .table_row_group => if (in_flow) .block else .line,
             .table_cell => if (in_flow) .cell else .line,
             .inline_level, .atomic_inline, .contents => .line,
         },
@@ -3124,7 +3124,7 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
         return .fill;
     }
     // A row fills its table; the table and its cells shrink to their content
-    if ((vis.box != .block_level and vis.box != .table_row) or el.getTag().isReplacedOrControl() or flow.floated) {
+    if ((vis.box != .block_level and vis.box != .table_row and vis.box != .table_row_group) or el.getTag().isReplacedOrControl() or flow.floated) {
         return .shrink;
     }
     const parent = self.boxParent(el) orelse return .fill;
@@ -3272,10 +3272,14 @@ pub fn margin(self: *StyleManager, el: *Element, comptime side: Side) Margin {
     return .{ .length = .{ .fraction = 0, .px = length.resolve(self, el) orelse 0 } };
 }
 
-/// How many of el's left and right margins are auto
+/// How many of el's left and right margins are auto: none on a box that
+/// takes no margins (display: contents, a table's cell, row or row group).
 pub fn autoMargins(self: *StyleManager, el: *Element) u2 {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return 0;
+    if (self.takesMargins(el) == false) {
+        return 0;
+    }
     const left, const right = self.geometry.ownPair(self.arena.allocator(), el, "margin_left", "margin_right", self.frame);
     return @as(u2, @intFromBool(left.unit == .auto)) + @intFromBool(right.unit == .auto);
 }
@@ -3430,7 +3434,7 @@ pub fn wrapsOwnText(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
     return switch (self.visibilityProps(el).box) {
         .inline_level, .contents => false,
-        .atomic_inline, .block_level, .table, .table_row, .table_cell => true,
+        .atomic_inline, .block_level, .table, .table_row, .table_row_group, .table_cell => true,
     };
 }
 
@@ -3507,7 +3511,7 @@ pub fn alongside(self: *StyleManager, el: *Element) Alongside {
     }
     return switch (self.visibilityProps(el).box) {
         .table_cell => .row,
-        .block_level, .table, .table_row => .block,
+        .block_level, .table, .table_row, .table_row_group => .block,
         .inline_level, .atomic_inline, .contents => .line,
     };
 }
@@ -3556,13 +3560,13 @@ fn gridProps(self: *StyleManager, el: *Element) Grid.Computed {
 }
 
 /// Whether `el`'s margins apply: not without a box, and not on a table's
-/// cell or row (CSS 2 §8.3), which the table places. Out of the flow those
-/// are blocks.
+/// cell, row or row group (CSS 2 §8.3), which the table places. Out of the
+/// flow those are blocks.
 pub fn takesMargins(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     switch (self.visibilityProps(el).box) {
         .contents => return self.generatesBox(el),
-        .table_cell, .table_row => {
+        .table_cell, .table_row, .table_row_group => {
             const flow = self.flowProps(el);
             return flow.position.outOfFlow() or flow.floated;
         },
@@ -3585,7 +3589,7 @@ pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     switch (self.visibilityProps(el).box) {
-        .block_level, .table, .table_row => {},
+        .block_level, .table, .table_row, .table_row_group => {},
         .inline_level, .atomic_inline, .contents, .table_cell => return false,
     }
     const flow = self.flowProps(el);
@@ -3617,7 +3621,7 @@ pub fn flowRole(self: *StyleManager, el: *Element) FlowRole {
         return .out_of_flow;
     }
     return switch (visibility.box) {
-        .block_level, .table, .table_row => if (flow.floated) .line else .block,
+        .block_level, .table, .table_row, .table_row_group => if (flow.floated) .line else .block,
         .inline_level, .atomic_inline, .contents, .table_cell => .line,
     };
 }
@@ -5260,6 +5264,9 @@ const Box = enum(u3) {
     table,
     // Stacks like a block, lays its cells out side by side
     table_row,
+    // table-row-group, -header-group, -footer-group: stacks its rows like a
+    // block, but takes no margins
+    table_row_group,
     // Sits beside its siblings, like in an anonymous row when its parent
     // isn't one
     table_cell,
@@ -5279,11 +5286,14 @@ const Box = enum(u3) {
         if (std.ascii.eqlIgnoreCase(trimmed, "table-cell")) {
             return .table_cell;
         }
-        // Row groups and captions stack their children like a block
-        inline for (.{ "table-row-group", "table-header-group", "table-footer-group", "table-caption" }) |keyword| {
+        inline for (.{ "table-row-group", "table-header-group", "table-footer-group" }) |keyword| {
             if (std.ascii.eqlIgnoreCase(trimmed, keyword)) {
-                return .block_level;
+                return .table_row_group;
             }
+        }
+        // A caption stacks its children like a block, margins included
+        if (std.ascii.eqlIgnoreCase(trimmed, "table-caption")) {
+            return .block_level;
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed, "inline") or std.ascii.eqlIgnoreCase(trimmed, "inline flow")) {
@@ -5313,7 +5323,8 @@ const Box = enum(u3) {
             .td, .th => .table_cell,
             .slot => .contents,
             .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup, .legend, .html, .body, .optgroup, .option => .block_level,
-            .tbody, .thead, .tfoot, .caption => .block_level,
+            .tbody, .thead, .tfoot => .table_row_group,
+            .caption => .block_level,
             else => if (tag.isBlock()) .block_level else .inline_level,
         };
     }

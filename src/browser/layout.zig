@@ -148,7 +148,12 @@ pub fn contentStart(self: *Element, comptime axis: Element.Axis, owner: *Frame) 
 pub fn marginOn(self: *Element, comptime side: StyleManager.Side, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     switch (style_manager.margin(self, side)) {
-        .auto => return if (side == .left) autoMarginLeft(self, owner) else 0,
+        .auto => {
+            if (side == .right or style_manager.takesMargins(self) == false) {
+                return 0;
+            }
+            return autoMarginLeft(self, owner);
+        },
         .length => |margin| {
             if (margin.fraction == 0 and margin.px == 0) {
                 return 0;
@@ -246,6 +251,12 @@ fn widthContribution(self: *Element, comptime mode: ContentMode, owner: *Frame) 
         .contents => unreachable,
     };
     return clampWidth(self, width, .contribution, edges, owner) + style_manager.inlineMargins(self, null);
+}
+
+/// What a display: contents item of a flex row takes on it: its children
+/// with their margins, unshrunk, as rowFit counts it.
+pub fn contentsItemWidth(self: *Element, owner: *Frame) f64 {
+    return widthContribution(self, .full, owner);
 }
 
 const FlexBase = struct {
@@ -385,10 +396,7 @@ fn rowFit(self: *Element, owner: *Frame) f64 {
         if (sizing == .grow) {
             grows = true;
         }
-        // display: contents has no box, so no margins
-        if (sizing != .contents) {
-            autos += @floatFromInt(style_manager.autoMargins(el));
-        }
+        autos += @floatFromInt(style_manager.autoMargins(el));
     }
     if (row_items.text_width > 0) {
         total += row_items.text_width;

@@ -2181,7 +2181,13 @@ pub const LineCursor = struct {
                     self.autos += @floatFromInt(style_manager.autoMargins(sibling));
                 }
             }
-            self.x += layout.boxWidth(sibling, owner) + layout.inlineMargins(sibling, owner);
+            const width = layout.boxWidth(sibling, owner);
+            if (width == 0 and self.mode == .row and style_manager.widthSizing(sibling) == .contents) {
+                // No box, but its children are the row's items
+                self.x += layout.contentsItemWidth(sibling, owner);
+                continue;
+            }
+            self.x += width + layout.inlineMargins(sibling, owner);
         }
         if (self.mode == .row) {
             self.addTextItem();
@@ -2189,7 +2195,8 @@ pub const LineCursor = struct {
             var autos = self.autos;
             if (placed.auto != 0) {
                 if (node.is(Element)) |el| {
-                    autos += @floatFromInt(@intFromBool(style_manager.margin(el, .left) == .auto));
+                    const left = style_manager.margin(el, .left) == .auto and style_manager.takesMargins(el);
+                    autos += @floatFromInt(@intFromBool(left));
                 }
             }
             return self.x + placed.lead + placed.between * self.items + placed.auto * autos;
