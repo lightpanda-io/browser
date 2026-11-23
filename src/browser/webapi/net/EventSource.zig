@@ -41,7 +41,7 @@ const EventSource = @This();
 pub const Proto = EventTarget;
 
 _rc: lp.RC = .{},
-_exec: *const Execution,
+_exec: js.ExecutionHandle,
 _proto: *EventTarget,
 _arena: *lp.Arena,
 
@@ -98,7 +98,7 @@ pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource
     };
 
     const self = try exec._factory.eventTargetWithAllocator(arena.allocator(), EventSource{
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._arena = arena,
         ._proto = undefined,
         ._url = resolved,
@@ -149,7 +149,7 @@ pub fn asEventTarget(self: *EventSource) *EventTarget {
 }
 
 fn connect(self: *EventSource) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return error.InvalidStateError;
     self._skip_lf = false;
     self._bom_checked = false;
     self._line_buf.clearRetainingCapacity();
@@ -225,7 +225,7 @@ fn deactivate(self: *EventSource) void {
         self._transfer = null;
         transfer.cancel();
     }
-    self.releaseRef(self._exec.page);
+    self.releaseRef(self._exec.page());
 }
 
 fn failConnection(self: *EventSource) void {
@@ -261,7 +261,7 @@ fn scheduleTask(self: *EventSource, comptime task: fn (*EventSource) void, ms: u
     const Wrapper = struct {
         fn run(ctx: *anyopaque) anyerror!?u32 {
             const es: *EventSource = @ptrCast(@alignCast(ctx));
-            defer es.releaseRef(es._exec.page);
+            defer es.releaseRef(es._exec.page());
             task(es);
             return null;
         }
@@ -273,13 +273,14 @@ fn scheduleTask(self: *EventSource, comptime task: fn (*EventSource) void, ms: u
             const es: *EventSource = @ptrCast(@alignCast(ctx));
             es._ready_state = .closed;
             es.deactivate();
-            es.releaseRef(es._exec.page);
+            es.releaseRef(es._exec.page());
         }
     };
 
     self.acquireRef();
-    errdefer self.releaseRef(self._exec.page);
-    try self._exec._scheduler.add(self, Wrapper.run, ms, .{
+    errdefer self.releaseRef(self._exec.page());
+    const exec = self._exec.get() orelse return error.InvalidStateError;
+    try exec._scheduler.add(self, Wrapper.run, ms, .{
         .name = name,
         .finalizer = Wrapper.finalize,
     });
@@ -309,7 +310,10 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    if (!self._exec.isSameOrigin(self._url)) {
+    // The transfer belongs to the `Frame` or `Worker`, which an isolated
+    // world's source can be left with once that world is gone.
+    const exec = self._exec.get() orelse return .abort;
+    if (!exec.isSameOrigin(self._url)) {
         CorsGate.validateResponse(transfer) catch {
             self.failConnection();
             return .abort;
@@ -317,7 +321,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     var ls: js.Local.Scope = undefined;
-    self._exec.js.localScope(&ls);
+    exec.js.localScope(&ls);
     defer ls.deinit();
 
     const final_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
@@ -491,7 +495,7 @@ fn dispatchPending(self: *EventSource) !void {
     const type_buf = self._event_type_buf.items;
     const is_message = type_buf.len == 0;
 
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
 
     if (is_message) {
@@ -513,7 +517,7 @@ fn dispatchPending(self: *EventSource) !void {
 }
 
 fn dispatchEvent(self: *EventSource, comptime name: []const u8) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
     if (exec.hasDirectListeners(target, name)) {
         const event = try Event.initTrusted(comptime .wrap(name), .{}, exec.page);

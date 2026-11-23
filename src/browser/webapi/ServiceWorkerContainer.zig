@@ -37,7 +37,7 @@ const ServiceWorkerContainer = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_exec: *js.Execution,
+_frame: js.FrameHandle,
 
 // One per scope this container has registered
 _registrations: std.ArrayList(*ServiceWorkerRegistration) = .empty,
@@ -54,7 +54,7 @@ const RegisterOptions = struct {
 pub fn init(frame: *Frame) !*ServiceWorkerContainer {
     const self = try frame._factory.eventTargetWithAllocator(frame.page_arena, ServiceWorkerContainer{
         ._proto = undefined,
-        ._exec = &frame.main_js.execution,
+        ._frame = frame.handle(),
     });
     return self;
 }
@@ -93,15 +93,15 @@ pub fn workerActivated(self: *ServiceWorkerContainer) void {
 }
 
 fn scheduleReady(self: *ServiceWorkerContainer) !void {
-    const exec = self._exec;
+    const frame = self._frame.get() orelse return;
 
-    const arena = try exec.session.getArena(.tiny, "ServiceWorkerContainer.ready");
+    const arena = try frame._session.getArena(.tiny, "ServiceWorkerContainer.ready");
     errdefer arena.release();
 
     const callback = try arena.create(ReadyCallback);
     callback.* = .{ .container = self, .arena = arena };
 
-    try exec._scheduler.add(callback, ReadyCallback.run, 0, .{
+    try frame.js.scheduler.add(callback, ReadyCallback.run, 0, .{
         .name = "ServiceWorkerContainer.ready",
         .finalizer = ReadyCallback.cancelled,
     });
@@ -156,10 +156,10 @@ fn track(self: *ServiceWorkerContainer, scope: *ServiceWorkerGlobalScope) !*Serv
         }
     }
 
-    const exec = self._exec;
-    const registration = try ServiceWorkerRegistration.init(scope, self, exec);
+    const frame = self._frame.get() orelse return error.InvalidStateError;
+    const registration = try ServiceWorkerRegistration.init(scope, self, &frame.js.execution);
     errdefer registration.detach();
-    try self._registrations.append(exec.page_arena, registration);
+    try self._registrations.append(frame.page_arena, registration);
 
     if (scope.hasActiveWorker()) {
         self.workerActivated();
@@ -229,7 +229,7 @@ pub fn getRegistrations(self: *ServiceWorkerContainer, exec: *const js.Execution
 
 // The registration with an active worker whose scope covers this frame's URL.
 fn activeRegistration(self: *ServiceWorkerContainer) ?*ServiceWorkerRegistration {
-    const frame = self._exec.frame() orelse return null;
+    const frame = self._frame.get() orelse return null;
     return self.matchScope(true, frame.url);
 }
 
@@ -272,6 +272,7 @@ const ReadyCallback = struct {
         defer self.arena.release();
 
         const container = self.container;
+        const frame = container._frame.get() orelse return null;
         const resolver = container._ready_resolver orelse return null;
         const registration = container.activeRegistration() orelse return null;
 
@@ -280,7 +281,7 @@ const ReadyCallback = struct {
         defer resolver.release();
 
         var ls: js.Local.Scope = undefined;
-        container._exec.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         ls.toLocal(resolver).resolve("ServiceWorkerContainer.ready", registration);

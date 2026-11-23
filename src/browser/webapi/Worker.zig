@@ -49,20 +49,18 @@ _frame_id: u32,
 _loader_id: u32,
 
 _proto: *EventTarget,
-_exec: *js.Execution,
+/// `Frame` that created the `Worker`, which goes away with it.
+_frame: js.FrameHandle,
 _arena: *lp.Arena,
-_worker_scope: *DedicatedWorkerGlobalScope,
+/// null once deinitialized. Another `Frame` can keep the `Worker` object past
+/// that.
+_worker_scope: ?*DedicatedWorkerGlobalScope,
 
 _url: [:0]const u8,
 _type: WorkerType = .classic,
 _script_loaded: bool = false,
 _script_arena: ?*lp.Arena = null,
 _http_transfer: ?*Transfer = null,
-
-// Set by deinit, when the frame that created the worker is destroyed. Another
-// frame can keep the Worker object past that: the struct lives as long as the
-// Page, and its methods do nothing once this is set.
-_destroyed: bool = false,
 
 // Event handlers
 
@@ -80,10 +78,10 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     const self = try frame._factory.eventTarget(Worker{
         ._arena = arena,
         ._proto = undefined,
-        ._exec = &frame.main_js.execution,
+        ._frame = frame.handle(),
         ._url = resolved_url,
         ._type = if (options) |o| o.type else .classic,
-        ._worker_scope = undefined,
+        ._worker_scope = null,
         ._frame_id = session.nextFrameId(),
         ._loader_id = session.nextLoaderId(),
     });
@@ -140,15 +138,17 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 // Called from Frame.deinit when the frame is destroyed, so we don't need to
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
-    self._destroyed = true;
     // No pending frame for workers, so we can abort all frames.
     if (self._http_transfer) |res| {
         res.cancel();
         self._http_transfer = null;
     }
     self.releaseScriptArena();
-    self._worker_scope.deinit();
-    self._exec.page.event_listeners.removeTarget(self.asEventTarget());
+    if (self._worker_scope) |scope| {
+        self._worker_scope = null;
+        scope.deinit();
+    }
+    self._frame.page().event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -191,7 +191,8 @@ fn httpDoneCallback(transfer: *Transfer) !void {
 }
 
 fn loadInitialScript(self: *Worker, script: []const u8) !void {
-    const js_context = self._worker_scope._proto.js;
+    const worker_scope = self._worker_scope orelse return;
+    const js_context = worker_scope._proto.js;
 
     if (js_context.env.terminatePending()) {
         return;
@@ -211,7 +212,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     // httpErrorCallback path.
     defer {
         self._script_loaded = true;
-        self._worker_scope.drainPendingMessages();
+        worker_scope.drainPendingMessages();
     }
 
     var ls: js.Local.Scope = undefined;
@@ -281,7 +282,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // dropped at the "no listener" check) rather than accumulating until
     // worker teardown. Future postMessages then schedule normally.
     self._script_loaded = true;
-    self._worker_scope.drainPendingMessages();
+    if (self._worker_scope) |worker_scope| {
+        worker_scope.drainPendingMessages();
+    }
 
     if (!canceled) {
         self.fireErrorEvent(@errorName(err), null);
@@ -302,10 +305,13 @@ fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Glo
 }
 
 fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Global) !void {
-    const exec = self._exec;
     const target = self.asEventTarget();
+    const frame = self._frame.get() orelse {
+        if (error_value) |ev| ev.release();
+        return;
+    };
     // Check if there are any listeners
-    if (!exec.hasDirectListeners(target, "error")) {
+    if (!frame._event_manager.hasDirectListeners(target, "error")) {
         if (error_value) |ev| ev.release();
         return;
     }
@@ -316,17 +322,14 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
         .filename = self._url,
         .bubbles = false,
         .cancelable = true,
-    }, exec.page);
+    }, frame.page);
 
-    try exec.dispatch(target, error_event.asEvent(), .{
+    try frame._event_manager.dispatchDirect(target, error_event.asEvent(), .{
         .context = "Worker.onerror",
     });
 }
 
 pub fn terminate(self: *Worker) void {
-    if (self._destroyed) {
-        return;
-    }
     // Abort any pending script fetch
     if (self._http_transfer) |resp| {
         resp.cancel();
@@ -337,25 +340,26 @@ pub fn terminate(self: *Worker) void {
 // Posts a message from the frame to the worker.
 pub fn postMessage(self: *Worker, data: js.Value, transfer: ?js.Value, exec: *js.Execution) !void {
     const ports = try MessagePort.transferList(transfer);
-    if (self._destroyed) {
+    const worker_scope = self._worker_scope orelse {
         // Dropped, as for a terminated worker. It's still serialized, into the
         // caller's realm, so the transferred ports detach and bad data throws.
         const cloned = try MessagePort.cloneMessage(data, ports, exec);
         cloned.release();
         return;
-    }
-    try self._worker_scope.receiveMessage(data, ports);
+    };
+    try worker_scope.receiveMessage(data, ports);
 }
 
 // Called internally by DedicatedWorkerGlobalScope when it wants to post a message to us
 pub fn receiveMessage(self: *Worker, data: js.Value, transfer: []const *MessagePort) !void {
-    const exec = self._exec;
+    // The worker doesn't run past the frame that created it.
+    const frame = self._frame.get() orelse return;
 
     // clones from where it currently is (the Worker context) to our Page's context
-    const message = try MessagePort.cloneMessage(data, transfer, exec);
+    const message = try MessagePort.cloneMessage(data, transfer, &frame.js.execution);
     errdefer message.release();
 
-    const message_arena = try exec.session.getArena(.tiny, "Worker.receiveMessage");
+    const message_arena = try frame.getArena(.tiny, "Worker.receiveMessage");
     errdefer message_arena.release();
 
     const callback = try message_arena.create(ReceiveMessageCallback);
@@ -365,7 +369,7 @@ pub fn receiveMessage(self: *Worker, data: js.Value, transfer: []const *MessageP
         .arena = message_arena,
     };
 
-    try exec._scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
+    try frame.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "Worker.receiveMessage",
         .kind = .message,
         .parent = message.task,
@@ -394,25 +398,30 @@ const ReceiveMessageCallback = struct {
         defer self.message.releasePorts();
 
         const worker = self.worker;
-        const exec = worker._exec;
         const target = worker.asEventTarget();
+        const frame = worker._frame.get() orelse {
+            if (self.message.data) |d| {
+                d.release();
+            }
+            return null;
+        };
 
         // If data is null, deserialization failed - fire messageerror
         const data = self.message.data orelse {
-            if (!exec.hasDirectListeners(target, "messageerror")) {
+            if (!frame._event_manager.hasDirectListeners(target, "messageerror")) {
                 return null;
             }
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                 .ports = self.message.ports,
                 .bubbles = false,
                 .cancelable = false,
-            }, exec.page)).asEvent();
-            try exec.dispatch(target, event, .{ .context = "Worker.messageerror" });
+            }, frame.page)).asEvent();
+            try frame._event_manager.dispatchDirect(target, event, .{ .context = "Worker.messageerror" });
             return null;
         };
 
         // Check if there are any listeners before creating the event
-        if (!exec.hasDirectListeners(target, "message")) {
+        if (!frame._event_manager.hasDirectListeners(target, "message")) {
             data.release();
             return null;
         }
@@ -422,9 +431,9 @@ const ReceiveMessageCallback = struct {
             .ports = self.message.ports,
             .bubbles = false,
             .cancelable = false,
-        }, exec.page)).asEvent();
+        }, frame.page)).asEvent();
 
-        try exec.dispatch(target, event, .{ .context = "Worker.receiveMessage" });
+        try frame._event_manager.dispatchDirect(target, event, .{ .context = "Worker.receiveMessage" });
 
         return null;
     }

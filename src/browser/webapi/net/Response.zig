@@ -534,7 +534,7 @@ fn package(kind: Package, body: []const u8, content_type: ?[]const u8, resolver:
 const StreamConsumer = struct {
     const ReadableStreamDefaultReader = @import("../streams/ReadableStreamDefaultReader.zig");
 
-    execution: *const Execution,
+    execution: js.ExecutionHandle,
     kind: Package,
     content_type: ?[]const u8,
     total_len: usize,
@@ -552,7 +552,7 @@ const StreamConsumer = struct {
 
         const state = try exec.page_arena.create(StreamConsumer);
         state.* = .{
-            .execution = exec,
+            .execution = exec.handle(),
             .kind = kind,
             .content_type = if (content_type) |ct| try exec.page_arena.dupe(u8, ct) else null,
             .reader = reader,
@@ -562,13 +562,13 @@ const StreamConsumer = struct {
             .resolver = try resolver.persist(),
         };
 
-        try state.pumpRead();
+        try state.pumpRead(exec);
         return promise;
     }
 
-    fn pumpRead(self: *StreamConsumer) !void {
-        const local = self.execution.js.local.?;
-        const read_promise = try self.reader.read(self.execution);
+    fn pumpRead(self: *StreamConsumer, exec: *const Execution) !void {
+        const local = exec.js.local.?;
+        const read_promise = try self.reader.read(exec);
 
         const then_fn = local.newCallback(onReadFulfilled, self);
         const catch_fn = local.newCallback(onReadRejected, self);
@@ -579,14 +579,13 @@ const StreamConsumer = struct {
     }
 
     fn onReadFulfilled(self: *StreamConsumer, result: js.Value) void {
-        const local = self.execution.js.local.?;
-        self._onReadFulfilled(result) catch {
-            self.finish(local, null);
+        const exec = self.execution.get() orelse return;
+        self._onReadFulfilled(result, exec) catch {
+            self.finish(exec.js.local.?, null);
         };
     }
 
-    fn _onReadFulfilled(self: *StreamConsumer, result: js.Value) !void {
-        const exec = self.execution;
+    fn _onReadFulfilled(self: *StreamConsumer, result: js.Value, exec: *const Execution) !void {
         const local = exec.js.local.?;
 
         if (result.isObject() == false) {
@@ -607,11 +606,12 @@ const StreamConsumer = struct {
         const chunk_copy = try self.arena.dupe(u8, (try local.jsValueToZig(js.AllowSharedBufferSource, value)).bytes());
         try self.chunks.append(self.arena, chunk_copy);
         self.total_len += chunk_copy.len;
-        try self.pumpRead();
+        try self.pumpRead(exec);
     }
 
     fn onReadRejected(self: *StreamConsumer, reason: js.Value) void {
-        self.finishWithReason(self.execution.js.local.?, reason);
+        const context = self.execution.js() orelse return;
+        self.finishWithReason(context.local.?, reason);
     }
 
     fn concatenateChunks(self: *StreamConsumer, allocator: Allocator) ![]const u8 {

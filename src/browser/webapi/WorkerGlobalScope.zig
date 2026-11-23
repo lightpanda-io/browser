@@ -60,7 +60,9 @@ const WorkerGlobalScope = @This();
 pub const Proto = EventTarget;
 
 _type: Type,
-_frame: *Frame,
+/// The `Frame` that created the `Worker`. Dedicated worker goes away with it;
+/// a shared or `ServiceWorker` belongs to the `Page` and can outlive it.
+_frame: JS.FrameHandle,
 _is_module: bool,
 
 // Meant to follow the same field naming as Page so that an anytype of generic
@@ -161,7 +163,7 @@ pub fn init(
             ._local_arena = local_arena,
             .call_arena = call_arena.allocator(),
             .local_arena = local_arena.allocator(),
-            ._frame = frame,
+            ._frame = frame.handle(),
             .page = frame.page,
             ._session = session,
             ._identity = .{ .allocator = session.browser.app.allocator },
@@ -259,7 +261,8 @@ pub fn hasDirectListeners(self: *WorkerGlobalScope, target: *EventTarget, typ: [
 // Workers don't have their own Referer; per spec, dedicated worker requests
 // use the parent document's URL. Delegate to the owning frame.
 pub fn headersForRequest(self: *WorkerGlobalScope, transfer: *HttpClient.Transfer, opts: JS.Execution.HeadersForRequestOptions) !void {
-    return self._frame.headersForRequest(transfer, opts);
+    const frame = self._frame.get() orelse return;
+    return frame.headersForRequest(transfer, opts);
 }
 
 pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {

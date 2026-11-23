@@ -127,7 +127,7 @@ pub const GlobalScope = union(enum) {
     pub fn referrerPolicy(self: GlobalScope) referrer.Policy {
         return switch (self) {
             .frame => |frame| frame.referrer_policy,
-            .worker => |worker| worker._frame.referrer_policy,
+            .worker => |worker| if (worker._frame.get()) |frame| frame.referrer_policy else .default,
         };
     }
 
@@ -236,16 +236,20 @@ pub const GlobalScope = union(enum) {
                 .loader_id = frame._loader_id,
                 .log_page = &frame.page.log_context,
             },
-            .worker => |worker| .{
-                .scope = self,
-                .url = null,
-                .parent = &worker._frame._http_owner,
-                .frame_id = worker._frame_id,
-                .document_frame_id = worker._frame._frame_id,
-                .root_frame_id = worker.page.frame._frame_id,
-                .loader_id = worker._loader_id,
-                .log_page = &worker.page.log_context,
-                .block_all = worker._frame._http_owner.block_all,
+            .worker => |worker| blk: {
+                // For WorkerGlobalScope.init, which the creating frame calls.
+                const creator = worker._frame.get().?;
+                break :blk .{
+                    .scope = self,
+                    .url = null,
+                    .parent = &creator._http_owner,
+                    .frame_id = worker._frame_id,
+                    .document_frame_id = creator._frame_id,
+                    .root_frame_id = worker.page.frame._frame_id,
+                    .loader_id = worker._loader_id,
+                    .log_page = &worker.page.log_context,
+                    .block_all = creator._http_owner.block_all,
+                };
             },
         };
     }
