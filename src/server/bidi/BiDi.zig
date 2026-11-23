@@ -190,6 +190,7 @@ pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
     try self.newUserContext("default");
     try @import("browsing_context.zig").registerNotifications(self);
     try script.registerNotifications(self);
+    try @import("lp.zig").registerNotifications(self);
 }
 
 pub fn deinit(self: *BiDi) void {
@@ -359,6 +360,7 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         input,
         storage,
         emulation,
+        lp,
     }, method[0..i]) orelse return unknownCommand(&cmd, method);
 
     // Only the session module is reachable without a session (it's what
@@ -376,6 +378,7 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         .input => @import("input.zig").processMessage(&cmd, action),
         .storage => @import("storage.zig").processMessage(&cmd, action),
         .emulation => @import("emulation.zig").processMessage(&cmd, action),
+        .lp => @import("lp.zig").processMessage(&cmd, action),
     };
     result catch |err| {
         if (err == error.UnknownCommand and cmd.answered == false) {

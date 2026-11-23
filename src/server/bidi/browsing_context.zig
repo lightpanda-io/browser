@@ -62,6 +62,10 @@ pub const Context = struct {
     // Whether script.realmCreated was sent or not. If sent, we'll send
     // script.realmDestroyed on teardown.
     realm_announced: bool = false,
+
+    // The answer for the next alert/confirm/prompt, saved ahead of time by
+    // lp.handleUserPrompt. The next dialog uses it and clears it.
+    pending_prompt_response: ?Notification.DialogResponse = null,
 };
 
 const PendingNavigate = struct {
