@@ -540,7 +540,6 @@ const DispatchError = error{
     CompilationError,
     JsException,
     ExecutionTerminated,
-    SchedulerClosed,
 };
 
 fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) DispatchError!void {
