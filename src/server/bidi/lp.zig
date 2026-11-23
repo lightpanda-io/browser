@@ -35,10 +35,6 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     }
 }
 
-pub fn registerNotifications(bidi: *BiDi) !void {
-    try bidi.notification.register(.javascript_dialog_opening, bidi, onJavascriptDialogOpening);
-}
-
 // The BiDi version of CDP's LP.handleJavaScriptDialog.
 //
 // alert(), confirm() and prompt() never block: they return as soon as they're
@@ -48,7 +44,8 @@ pub fn registerNotifications(bidi: *BiDi) !void {
 // lp.handleUserPrompt lets a client choose the answer *before* it runs the JS
 // that opens the dialog. It takes the same params as
 // browsingContext.handleUserPrompt. The answer is saved on the browsing
-// context, and the next dialog uses it and clears it.
+// context, and the next dialog uses it and clears it (see
+// browsing_context.onJavascriptDialogOpening).
 //
 // Without a saved answer, the dialog is dismissed: confirm returns false,
 // prompt returns null.
@@ -72,18 +69,6 @@ fn handleUserPrompt(cmd: *BiDi.Command) !void {
         .prompt_text = user_text,
     };
     return cmd.sendDone();
-}
-
-// Gives the saved answer, if any, to the dialog that is opening. Dialogs from
-// iframes use the top-level context's answer too: it's the only context we
-// report.
-fn onJavascriptDialogOpening(ptr: *anyopaque, event: *const Notification.JavascriptDialogOpening) !void {
-    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
-    const ctx = &(bidi.browsing_context orelse return);
-    if (ctx.pending_prompt_response) |pending| {
-        event.response.* = pending;
-        ctx.pending_prompt_response = null;
-    }
 }
 
 const testing = @import("testing.zig");

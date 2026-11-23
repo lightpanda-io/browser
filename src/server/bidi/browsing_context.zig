@@ -776,6 +776,34 @@ pub fn registerNotifications(bidi: *BiDi) !void {
     try notification.register(.frame_navigate, bidi, onFrameNavigate);
     try notification.register(.frame_navigate_failed, bidi, onFrameNavigateFailed);
     try notification.register(.frame_dom_content_loaded, bidi, onFrameDOMContentLoaded);
+    try notification.register(.javascript_dialog_opening, bidi, onJavascriptDialogOpening);
+}
+
+// Gives the answer saved by lp.handleUserPrompt, if any, to the dialog that
+// is opening, then reports the dialog. Both happen here so the event's
+// `handler` is the answer the dialog really gets.
+//
+// Dialogs from iframes use the top-level context too: it's the only context
+// we report.
+fn onJavascriptDialogOpening(ptr: *anyopaque, event: *const Notification.JavascriptDialogOpening) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    const ctx = &(bidi.browsing_context orelse return);
+
+    // A saved answer applies to one dialog only.
+    if (ctx.pending_prompt_response) |pending| {
+        event.response.* = pending;
+        ctx.pending_prompt_response = null;
+    }
+
+    return bidi.sendEvent("browsingContext.userPromptOpened", .{
+        .context = &ctx.id,
+        .handler = if (event.response.accept) "accept" else "dismiss",
+        .message = event.message,
+        .type = event.dialog_type,
+        // We don't report the prompt's default text, the same as CDP's
+        // Page.javascriptDialogOpening.
+        .defaultValue = "",
+    });
 }
 
 // The page whose nodes and persisted values these belong to is going away.
@@ -1319,4 +1347,50 @@ fn pngWidth(png: []const u8) u32 {
 }
 fn pngHeight(png: []const u8) u32 {
     return std.mem.readInt(u32, png[20..24], .big);
+}
+
+test "bidi.browsing_context: userPromptOpened" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const context_id = try ctx.createContext(.{});
+
+    // not subscribed: no event
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "script.evaluate",
+        .params = .{ .expression = "alert('quiet')", .awaitPromise = false, .target = .{ .context = context_id } },
+    });
+    // session.new, browsingContext.create and the evaluate result
+    try ctx.expectSentCount(3);
+
+    try ctx.processMessage(.{ .id = 2, .method = "session.subscribe", .params = .{ .events = .{"browsingContext.userPromptOpened"} } });
+
+    // no saved answer: dismissed
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "script.evaluate",
+        .params = .{ .expression = "confirm('sure?')", .awaitPromise = false, .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentEvent("browsingContext.userPromptOpened", .{
+        .context = context_id,
+        .handler = "dismiss",
+        .message = "sure?",
+        .type = "confirm",
+        .defaultValue = "",
+    });
+
+    // saved answer: accepted
+    try ctx.processMessage(.{ .id = 4, .method = "lp.handleUserPrompt", .params = .{ .context = context_id } });
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "script.evaluate",
+        .params = .{ .expression = "prompt('name?', 'Guest')", .awaitPromise = false, .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentEvent("browsingContext.userPromptOpened", .{
+        .context = context_id,
+        .handler = "accept",
+        .message = "name?",
+        .type = "prompt",
+        .defaultValue = "",
+    });
 }

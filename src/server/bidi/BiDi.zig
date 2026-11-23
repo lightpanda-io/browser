@@ -190,7 +190,6 @@ pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
     try self.newUserContext("default");
     try @import("browsing_context.zig").registerNotifications(self);
     try script.registerNotifications(self);
-    try @import("lp.zig").registerNotifications(self);
 }
 
 pub fn deinit(self: *BiDi) void {
