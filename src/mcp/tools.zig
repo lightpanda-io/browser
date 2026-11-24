@@ -1843,24 +1843,24 @@ test "MCP - run: a script that outlives its timeout is stopped" {
 
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nawait page.evaluate('while (true) {}');"}}}
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"timeout":150,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nawait page.evaluate('while (true) {}');"}}}
     );
-    try testing.expect(std.mem.find(u8, out.written(), "script timed out after 300 ms") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "script timed out after 150 ms") != null);
     try testing.expectEqual(0, server.active_session.session.pages.items.len);
 
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"console.log('before');\nawait null;\nwhile (true) {}"}}}
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run","arguments":{"timeout":200,"script":"console.log('before');\nawait null;\nwhile (true) {}"}}}
     );
-    try testing.expectEqual("before\nscript timed out after 300 ms\n", try testToolText(aa, out.written()));
+    try testing.expectEqual("before\nscript timed out after 200 ms\n", try testToolText(aa, out.written()));
 
     // /xhr/hang replies after 2 s.
     out.clearRetainingCapacity();
     const started = std.Io.Timestamp.now(lp.io, .boot);
     try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"await new Page().goto('http://localhost:9582/xhr/hang');"}}}
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run","arguments":{"timeout":100,"script":"await new Page().goto('http://localhost:9582/xhr/hang');"}}}
     );
-    try testing.expectEqual("script timed out after 300 ms\n", try testToolText(aa, out.written()));
+    try testing.expectEqual("script timed out after 100 ms\n", try testToolText(aa, out.written()));
     try testing.expect(started.untilNow(lp.io, .boot).toMilliseconds() < 1500);
 
     out.clearRetainingCapacity();

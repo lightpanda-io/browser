@@ -10473,36 +10473,46 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
 
             // The walk places a box from what it read on the way down; each
             // box asked on its own must land in the same place
+            const Placed = struct { el: *Element, layer: HitFacts.PaintLayer, top: f64, left: f64, bottom: f64, right: f64 };
+            var placed: std.ArrayList(Placed) = .empty;
+            var tw = TreeWalker.Full.init(html, .{});
+            while (tw.next()) |n| {
+                const el = n.is(Element) orelse continue;
+                var shown = true;
+                var layer: HitFacts.PaintLayer = .flow;
+                var up: ?*Element = el;
+                while (up) |e| : (up = e.asNode().parentElement()) {
+                    if (sm.hasDisplayNone(e)) {
+                        shown = false;
+                    }
+                    layer = layer.under(sm.hitFacts(e).layer);
+                }
+                if (shown == false or sm.isHitTestable(el) == false) {
+                    continue;
+                }
+                const top = layout.boxTop(el, frame);
+                const left = el.horizontalPosition(frame);
+                try placed.append(arena, .{
+                    .el = el,
+                    .layer = layer,
+                    .top = top,
+                    .left = left,
+                    .bottom = top + layout.boxHeight(el, frame),
+                    .right = left + el.boxAxis(frame, .width),
+                });
+            }
             for (0..24) |_| {
                 const x: f64 = @floatFromInt(random.uintLessThan(u16, 320));
                 const y: f64 = @floatFromInt(random.uintLessThan(u16, 400));
-                // Positioned boxes and their subtrees paint above the flow,
-                // or below it with a negative z-index
                 var expected_flow: ?*Element = null;
                 var expected_positioned: ?*Element = null;
                 var expected_below: ?*Element = null;
-                var tw = TreeWalker.Full.init(html, .{});
-                while (tw.next()) |n| {
-                    const el = n.is(Element) orelse continue;
-                    var shown = true;
-                    var layer: HitFacts.PaintLayer = .flow;
-                    var up: ?*Element = el;
-                    while (up) |e| : (up = e.asNode().parentElement()) {
-                        if (sm.hasDisplayNone(e)) {
-                            shown = false;
-                        }
-                        layer = layer.under(sm.hitFacts(e).layer);
-                    }
-                    if (shown == false or sm.isHitTestable(el) == false) {
-                        continue;
-                    }
-                    const top = layout.boxTop(el, frame);
-                    const left = el.horizontalPosition(frame);
-                    if (y >= top and y <= top + layout.boxHeight(el, frame) and x >= left and x <= left + el.boxAxis(frame, .width)) {
-                        switch (layer) {
-                            .below => expected_below = el,
-                            .positioned => expected_positioned = el,
-                            .flow => expected_flow = el,
+                for (placed.items) |p| {
+                    if (y >= p.top and y <= p.bottom and x >= p.left and x <= p.right) {
+                        switch (p.layer) {
+                            .below => expected_below = p.el,
+                            .positioned => expected_positioned = p.el,
+                            .flow => expected_flow = p.el,
                         }
                     }
                 }
