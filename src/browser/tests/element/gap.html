@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<style>
+  .gapRem { gap: 1rem; }
+  .gapItem { width: 50px; height: 10px; }
+</style>
+
+<div id="gap-body"></div>
+
+<script id="flexRow">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const item = (id) => `<div id="${id}" class="gapItem"></div>`;
+
+  // The column gap sits between the items, not before the first
+  wrap.innerHTML = `<div id="gap-row" style="display: flex; gap: 10px 20px; width: 400px">${item('gap-a')}${item('gap-b')}${item('gap-c')}</div>`;
+  testing.expectEqual(rect('gap-row').left, rect('gap-a').left);
+  testing.expectEqual(rect('gap-a').left + 70, rect('gap-b').left);
+  testing.expectEqual(rect('gap-a').left + 140, rect('gap-c').left);
+  testing.expectEqual(rect('gap-a').top, rect('gap-c').top);
+
+  // The longhands, the legacy names, and `normal`
+  $('#gap-row').style.cssText = 'display: flex; column-gap: 5px; width: 400px';
+  testing.expectEqual(rect('gap-a').left + 55, rect('gap-b').left);
+  $('#gap-row').style.cssText = 'display: flex; row-gap: 30px; width: 400px';
+  testing.expectEqual(rect('gap-a').left + 50, rect('gap-b').left);
+  $('#gap-row').style.cssText = 'display: flex; grid-gap: 8px; width: 400px';
+  testing.expectEqual(rect('gap-a').left + 58, rect('gap-b').left);
+  $('#gap-row').style.cssText = 'display: flex; gap: normal; width: 400px';
+  testing.expectEqual(rect('gap-a').left + 50, rect('gap-b').left);
+
+  // From a sheet, in a relative unit; an inline write replaces it
+  $('#gap-row').style.cssText = 'display: flex; width: 400px';
+  $('#gap-row').className = 'gapRem';
+  testing.expectEqual(rect('gap-a').left + 66, rect('gap-b').left);
+  $('#gap-row').style.gap = '4px';
+  testing.expectEqual(rect('gap-a').left + 54, rect('gap-b').left);
+
+  // A block's children take no gap
+  $('#gap-row').style.cssText = 'gap: 10px; width: 400px';
+  testing.expectEqual(rect('gap-a').top + 10, rect('gap-b').top);
+
+  wrap.remove();
+}
+</script>
+
+<script id="flexRowSpace">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const left = (id) => $('#' + id).getBoundingClientRect().left - $('#gap-space-row').getBoundingClientRect().left;
+  const item = (id, style = '') => `<div id="${id}" class="gapItem" style="${style}"></div>`;
+  const row = (style, items) => `<div id="gap-space-row" style="display: flex; gap: 20px; width: 400px; ${style}">${items}</div>`;
+
+  // The free space an auto margin or justify-content places is what the
+  // items and their gaps leave
+  wrap.innerHTML = row('', item('gap-s-a') + item('gap-s-b', 'margin-left: auto'));
+  testing.expectEqual(350, left('gap-s-b'));
+  wrap.innerHTML = row('justify-content: center', item('gap-s-a') + item('gap-s-b'));
+  testing.expectEqual(140, left('gap-s-a'));
+  testing.expectEqual(210, left('gap-s-b'));
+  wrap.innerHTML = row('justify-content: space-between', item('gap-s-a') + item('gap-s-b') + item('gap-s-c'));
+  testing.expectEqual(175, left('gap-s-b'));
+  testing.expectEqual(350, left('gap-s-c'));
+
+  // A display: contents child's child is an item, a gap from the next
+  wrap.innerHTML = row('', '<div style="display: contents">' + item('gap-s-a') + '</div>' + item('gap-s-b'));
+  testing.expectEqual(70, left('gap-s-b'));
+}
+</script>
+
+<script id="flexRowSizes">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // The gaps don't shrink: the items give up the overflow they add
+  const wide = (id) => `<div id="${id}" style="width: 200px; height: 10px"></div>`;
+  wrap.innerHTML = `<div style="display: flex; gap: 20px; width: 400px">${wide('gap-s1')}${wide('gap-s2')}${wide('gap-s3')}</div>`;
+  testing.expectEqual(120, rect('gap-s1').width);
+  testing.expectEqual(rect('gap-s1').left + 140, rect('gap-s2').left);
+  testing.expectEqual(rect('gap-s1').left + 280, rect('gap-s3').left);
+
+  // A growing item takes what the gaps leave
+  wrap.innerHTML = '<div style="display: flex; gap: 20px; width: 400px"><div id="gap-fixed" style="width: 100px; height: 10px"></div><div id="gap-grow" style="flex: 1; height: 10px"></div></div>';
+  testing.expectEqual(280, rect('gap-grow').width);
+  testing.expectEqual(rect('gap-fixed').left + 120, rect('gap-grow').left);
+
+  // A row sized by its content is as wide as its items and their gaps
+  wrap.innerHTML = '<div id="gap-inline" style="display: inline-flex; gap: 10px"><div class="gapItem"></div><div class="gapItem"></div><div class="gapItem"></div></div>';
+  testing.expectEqual(170, rect('gap-inline').width);
+
+  // A run of text is an item
+  const titled = (id, gap) => `<div style="display: flex; gap: ${gap}; width: 400px">Title<b id="${id}">date</b></div>`;
+  wrap.innerHTML = titled('gap-text', '10px') + titled('gap-no-text', '0');
+  testing.expectEqual(rect('gap-no-text').left + 10, rect('gap-text').left);
+
+  wrap.remove();
+}
+</script>
+
+<script id="stacked">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const block = (id) => `<div id="${id}" style="height: 20px"></div>`;
+
+  // A flex column's row gap is between its items: none below the last
+  wrap.innerHTML = `<div id="gap-col" style="display: flex; flex-direction: column; gap: 10px 20px">${block('gap-c1')}${block('gap-c2')}${block('gap-c3')}</div><div id="gap-after" style="height: 5px"></div>`;
+  testing.expectEqual(rect('gap-col').top, rect('gap-c1').top);
+  testing.expectEqual(rect('gap-c1').top + 30, rect('gap-c2').top);
+  testing.expectEqual(rect('gap-c1').top + 60, rect('gap-c3').top);
+  testing.expectEqual(80, rect('gap-col').height);
+  testing.expectEqual(rect('gap-col').top + 80, rect('gap-after').top);
+
+  // An appended item goes a gap below the last
+  const more = document.createElement('div');
+  more.style.height = '20px';
+  $('#gap-col').appendChild(more);
+  testing.expectEqual(rect('gap-c1').top + 90, more.getBoundingClientRect().top);
+  testing.expectEqual(110, rect('gap-col').height);
+
+  // A grid without column tracks stacks its items the same way
+  wrap.innerHTML = `<div id="gap-stack" style="display: grid; gap: 8px">${block('gap-g1')}${block('gap-g2')}</div>`;
+  testing.expectEqual(rect('gap-g1').top + 28, rect('gap-g2').top);
+  testing.expectEqual(48, rect('gap-stack').height);
+
+  wrap.remove();
+}
+</script>
+
+<script id="gridColumns">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const cell = (id, css = '') => `<div id="${id}" style="height: 30px; ${css}"></div>`;
+
+  // The tracks share what the column gaps leave; rows are a row gap apart
+  wrap.innerHTML = `<div id="gap-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 20px; width: 400px">${cell('gap-1')}${cell('gap-2')}${cell('gap-3')}${cell('gap-4')}${cell('gap-5', 'grid-column: span 2')}</div>`;
+  testing.expectEqual(120, rect('gap-1').width);
+  testing.expectEqual(rect('gap-1').left + 140, rect('gap-2').left);
+  testing.expectEqual(rect('gap-1').left + 280, rect('gap-3').left);
+  testing.expectEqual(rect('gap-1').left, rect('gap-4').left);
+  testing.expectEqual(rect('gap-1').top + 40, rect('gap-4').top);
+  // An item spanning two tracks covers the gap between them
+  testing.expectEqual(260, rect('gap-5').width);
+  testing.expectEqual(rect('gap-1').left + 140, rect('gap-5').left);
+  testing.expectEqual(70, rect('gap-grid').height);
+
+  // auto-fill fits as many tracks as the gaps allow: 3 here, 4 without
+  wrap.innerHTML = `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 20px; width: 400px">${cell('gap-f1')}${cell('gap-f2')}${cell('gap-f3')}${cell('gap-f4')}</div>`;
+  testing.expectEqual(120, rect('gap-f1').width);
+  testing.expectEqual(rect('gap-f1').left + 280, rect('gap-f3').left);
+  testing.expectEqual(rect('gap-f1').left, rect('gap-f4').left);
+  testing.expectEqual(rect('gap-f1').top + 50, rect('gap-f4').top);
+
+  wrap.remove();
+}
+</script>

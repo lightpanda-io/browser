@@ -1679,7 +1679,7 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
     if (root) {
         const doc = self.asNode().ownerDocument(frame) orelse return .{ .value = 0.0 };
         return .{ .value = switch (axis) {
-            .width => 1920.0,
+            .width => @floatFromInt(frame.page.getViewport().width),
             .height => if (tag == .body) doc.bodyHeight(self) else doc.extent().height,
         } };
     }
@@ -2080,7 +2080,9 @@ pub const LineCursor = struct {
     text: ?layout.LineText(.full) = null,
     // A flex row's free space, read at the first offset; null for none
     space: ??layout.RowSpace = null,
-    // In a row with space to place: the items before `next`, and their
+    // A row's gap between its items, read at the first offsetOf
+    gap: ?f64 = null,
+    // In a row: the items before `next`, and, with space to place, their
     // auto margins
     items: f64 = 0,
     autos: f64 = 0,
@@ -2149,6 +2151,9 @@ pub const LineCursor = struct {
             self.space = space;
             break :blk space;
         };
+        if (self.mode == .row and self.gap == null) {
+            self.gap = if (self.text) |t| style_manager.gap(t.parent, .width) else 0;
+        }
         while (self.next) |s| : (self.next = s.flatNextSibling(self.frame)) {
             if (s == node) break;
             const sibling = s.is(Element) orelse {
@@ -2174,24 +2179,28 @@ pub const LineCursor = struct {
             if (comptime lp.IS_TEST) {
                 style_manager.line_steps += 1;
             }
+            const width = layout.boxWidth(sibling, owner);
             if (self.mode == .row) {
+                // The text since the last item is an item of its own
                 self.addTextItem();
-                self.items += 1;
                 if (space != null and space.?.auto != 0) {
                     self.autos += @floatFromInt(style_manager.autoMargins(sibling));
                 }
-            }
-            const width = layout.boxWidth(sibling, owner);
-            if (width == 0 and self.mode == .row and style_manager.widthSizing(sibling) == .contents) {
-                // No box, but its children are the row's items
-                self.x += layout.contentsItemWidth(sibling, owner);
+                if (width == 0 and style_manager.widthSizing(sibling) == .contents) {
+                    // No box, but its children are the row's items
+                    self.addItem(layout.contentsItemWidth(sibling, owner));
+                } else {
+                    self.addItem(width + layout.inlineMargins(sibling, owner));
+                }
                 continue;
             }
             self.x += width + layout.inlineMargins(sibling, owner);
         }
         if (self.mode == .row) {
             self.addTextItem();
-            const placed = space orelse return self.x;
+            // The node goes a gap after the item before it
+            const x = if (self.items > 0) self.x + self.gap.? else self.x;
+            const placed = space orelse return x;
             var autos = self.autos;
             if (placed.auto != 0) {
                 if (node.is(Element)) |el| {
@@ -2199,9 +2208,18 @@ pub const LineCursor = struct {
                     autos += @floatFromInt(@intFromBool(left));
                 }
             }
-            return self.x + placed.lead + placed.between * self.items + placed.auto * autos;
+            return x + placed.lead + placed.between * self.items + placed.auto * autos;
         }
         return self.x + if (self.text) |*t| t.widthBefore() else 0;
+    }
+
+    // A row's next item, a gap after the one before it
+    fn addItem(self: *LineCursor, width: f64) void {
+        if (self.items > 0) {
+            self.x += self.gap.?;
+        }
+        self.x += width;
+        self.items += 1;
     }
 
     // The text since the last item is an item of its own. Snapped to
@@ -2210,8 +2228,7 @@ pub const LineCursor = struct {
         const t = &(self.text orelse return);
         const width = @round(t.end() * 64) / 64;
         if (width > 0) {
-            self.x += width;
-            self.items += 1;
+            self.addItem(width);
         }
     }
 };
