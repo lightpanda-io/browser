@@ -2831,6 +2831,13 @@ pub fn display(self: *StyleManager, el: *Element) Display {
     return self.visibilityProps(el).display;
 }
 
+/// The `display` the cascade gave el, for getComputedStyle.
+pub fn displayKeyword(self: *StyleManager, el: *Element) DisplayKeyword {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .ua;
+    return self.visibilityProps(el).keyword;
+}
+
 /// True when `el` generates an inline-level box: a plain `inline` box or an
 /// atomic inline (`inline-block`, `inline-flex`, ...). Block containers,
 /// tables and `display: contents` are false.
@@ -5234,12 +5241,180 @@ pub const Display = enum(u2) {
     flex,
     grid,
     other,
+};
 
-    fn parse(value: []const u8) Display {
-        if (std.ascii.eqlIgnoreCase(value, "none")) return .none;
-        if (std.ascii.eqlIgnoreCase(value, "flex") or std.ascii.eqlIgnoreCase(value, "inline-flex")) return .flex;
-        if (std.ascii.eqlIgnoreCase(value, "grid") or std.ascii.eqlIgnoreCase(value, "inline-grid")) return .grid;
-        return .other;
+/// A `display` value as getComputedStyle reports it, from the one parse the
+/// cascade makes of it. Display and Box are what layout reads of it.
+pub const DisplayKeyword = enum(u5) {
+    // No author value, or `revert`: the tag's default
+    ua,
+    // The parent's value
+    inherit,
+    none,
+    contents,
+    block,
+    inline_,
+    inline_block,
+    flow_root,
+    list_item,
+    inline_list_item,
+    flow_root_list_item,
+    inline_flow_root_list_item,
+    flex,
+    inline_flex,
+    grid,
+    inline_grid,
+    table,
+    inline_table,
+    table_row_group,
+    table_header_group,
+    table_footer_group,
+    table_row,
+    table_cell,
+    table_column_group,
+    table_column,
+    table_caption,
+    ruby,
+    block_ruby,
+    ruby_text,
+    webkit_box,
+    webkit_inline_box,
+
+    /// Null for an invalid value, which the cascade drops, and for
+    /// `revert-layer`, which isn't modelled: an earlier rule wins instead.
+    pub fn parse(value: []const u8) ?DisplayKeyword {
+        var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+        const first = it.next() orelse return null;
+        const second = it.next() orelse {
+            if (single_keywords.get(first)) |keyword| {
+                return keyword;
+            }
+            return fromParts(&.{first});
+        };
+        const third = it.next() orelse return fromParts(&.{ first, second });
+        if (it.next() != null) {
+            return null;
+        }
+        return fromParts(&.{ first, second, third });
+    }
+
+    /// Whether a declaration of it is kept: parse's values and `revert-layer`.
+    pub fn isValid(value: []const u8) bool {
+        if (parse(value) != null) {
+            return true;
+        }
+        return std.ascii.eqlIgnoreCase(std.mem.trim(u8, value, &std.ascii.whitespace), "revert-layer");
+    }
+
+    // The keywords outside the outer/inner/list-item grammar
+    const single_keywords = std.StaticStringMapWithEql(DisplayKeyword, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
+        .{ "none", .none },                             .{ "contents", .contents },
+        .{ "inline-block", .inline_block },             .{ "inline-flex", .inline_flex },
+        .{ "inline-grid", .inline_grid },               .{ "inline-table", .inline_table },
+        .{ "table-row-group", .table_row_group },       .{ "table-header-group", .table_header_group },
+        .{ "table-footer-group", .table_footer_group }, .{ "table-row", .table_row },
+        .{ "table-cell", .table_cell },                 .{ "table-column-group", .table_column_group },
+        .{ "table-column", .table_column },             .{ "table-caption", .table_caption },
+        .{ "ruby-text", .ruby_text },                   .{ "-webkit-box", .webkit_box },
+        .{ "-webkit-inline-box", .webkit_inline_box },  .{ "-webkit-flex", .flex },
+        .{ "-webkit-inline-flex", .inline_flex },       .{ "inherit", .inherit },
+        .{ "initial", .inline_ },                       .{ "unset", .inline_ },
+        .{ "revert", .ua },
+    });
+
+    // `<display-outside> || <display-inside>`, or a list item with an
+    // optional outer type and flow or flow-root, in any order
+    fn fromParts(parts: []const []const u8) ?DisplayKeyword {
+        const Outer = enum { block, @"inline" };
+        const Inner = enum { flow, @"flow-root", flex, grid, table, ruby, math };
+        var outer: ?Outer = null;
+        var inner: ?Inner = null;
+        var list_item = false;
+        for (parts) |part| {
+            if (std.ascii.eqlIgnoreCase(part, "list-item")) {
+                if (list_item) return null;
+                list_item = true;
+            } else if (enumIgnoreCase(Outer, part)) |o| {
+                if (outer != null) return null;
+                outer = o;
+            } else if (enumIgnoreCase(Inner, part)) |i| {
+                if (inner != null) return null;
+                inner = i;
+            } else {
+                return null;
+            }
+        }
+        const is_inline = if (outer) |o| o == .@"inline" else (inner == .ruby or inner == .math);
+        if (list_item) {
+            return switch (inner orelse .flow) {
+                .flow => if (is_inline) .inline_list_item else .list_item,
+                .@"flow-root" => if (is_inline) .inline_flow_root_list_item else .flow_root_list_item,
+                else => null,
+            };
+        }
+        return switch (inner orelse .flow) {
+            // Math layout only applies to MathML elements: flow elsewhere
+            .flow, .math => if (is_inline) .inline_ else .block,
+            .@"flow-root" => if (is_inline) .inline_block else .flow_root,
+            .flex => if (is_inline) .inline_flex else .flex,
+            .grid => if (is_inline) .inline_grid else .grid,
+            .table => if (is_inline) .inline_table else .table,
+            .ruby => if (is_inline) .ruby else .block_ruby,
+        };
+    }
+
+    fn enumIgnoreCase(comptime E: type, value: []const u8) ?E {
+        inline for (@typeInfo(E).@"enum".field_names) |name| {
+            if (std.ascii.eqlIgnoreCase(value, name)) {
+                return @field(E, name);
+            }
+        }
+        return null;
+    }
+
+    /// The value getComputedStyle reports; null for ua and inherit, which
+    /// the element's tag or parent decide.
+    pub fn computed(self: DisplayKeyword) ?[]const u8 {
+        return switch (self) {
+            .ua, .inherit => null,
+            .inline_ => "inline",
+            .inline_list_item => "inline list-item",
+            .flow_root_list_item => "flow-root list-item",
+            .inline_flow_root_list_item => "inline flow-root list-item",
+            .block_ruby => "block ruby",
+            .webkit_box => "-webkit-box",
+            .webkit_inline_box => "-webkit-inline-box",
+            inline else => |keyword| comptime blk: {
+                var name = @tagName(keyword)[0..].*;
+                std.mem.replaceScalar(u8, &name, '_', '-');
+                const final = name;
+                break :blk &final;
+            },
+        };
+    }
+
+    fn display(self: DisplayKeyword) Display {
+        return switch (self) {
+            .none => .none,
+            .flex, .inline_flex => .flex,
+            .grid, .inline_grid => .grid,
+            else => .other,
+        };
+    }
+
+    // Null for the tag's default box
+    fn box(self: DisplayKeyword) ?Box {
+        return switch (self) {
+            .ua, .inherit, .none, .table_column_group, .table_column => null,
+            .contents => .contents,
+            .block, .flow_root, .list_item, .flow_root_list_item, .flex, .grid, .table_caption, .block_ruby, .webkit_box => .block_level,
+            .inline_, .inline_list_item, .ruby, .ruby_text => .inline_level,
+            .inline_block, .inline_flow_root_list_item, .inline_flex, .inline_grid, .inline_table, .webkit_inline_box => .atomic_inline,
+            .table => .table,
+            .table_row => .table_row,
+            .table_row_group, .table_header_group, .table_footer_group => .table_row_group,
+            .table_cell => .table_cell,
+        };
     }
 };
 
@@ -5290,51 +5465,6 @@ const Box = enum(u3) {
     // Sits beside its siblings, like in an anonymous row when its parent
     // isn't one
     table_cell,
-
-    fn parse(value: []const u8) ?Box {
-        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
-        if (std.ascii.eqlIgnoreCase(trimmed, "contents")) {
-            return .contents;
-        }
-
-        if (std.ascii.eqlIgnoreCase(trimmed, "table")) {
-            return .table;
-        }
-        if (std.ascii.eqlIgnoreCase(trimmed, "table-row")) {
-            return .table_row;
-        }
-        if (std.ascii.eqlIgnoreCase(trimmed, "table-cell")) {
-            return .table_cell;
-        }
-        inline for (.{ "table-row-group", "table-header-group", "table-footer-group" }) |keyword| {
-            if (std.ascii.eqlIgnoreCase(trimmed, keyword)) {
-                return .table_row_group;
-            }
-        }
-        // A caption stacks its children like a block, margins included
-        if (std.ascii.eqlIgnoreCase(trimmed, "table-caption")) {
-            return .block_level;
-        }
-
-        if (std.ascii.eqlIgnoreCase(trimmed, "inline") or std.ascii.eqlIgnoreCase(trimmed, "inline flow")) {
-            return .inline_level;
-        }
-        if (std.ascii.startsWithIgnoreCase(trimmed, "inline")) {
-            return .atomic_inline;
-        }
-
-        inline for (.{ "block", "flow-root", "list-item", "flex", "grid", "flow" }) |keyword| {
-            if (std.ascii.eqlIgnoreCase(trimmed, keyword)) {
-                return .block_level;
-            }
-        }
-
-        // Multi-keyword values start with the outer type
-        if (std.ascii.startsWithIgnoreCase(trimmed, "block ")) {
-            return .block_level;
-        }
-        return null;
-    }
 
     fn uaDefault(tag: Tag) Box {
         return switch (tag) {
@@ -5940,8 +6070,8 @@ const Visibility = struct {
         // A shorthand comes before its longhands, so a later longhand wins
         const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-flow", "flex-direction", "flex-wrap", "justify-content" };
 
-        display: ?Display = null,
-        box: ?Box = null,
+        // Null for an invalid value: the declaration is dropped
+        keyword: ?DisplayKeyword = null,
         flex_column: ?bool = null,
         flex_wrap: ?bool = null,
         justify: ?Justify = null,
@@ -5950,11 +6080,14 @@ const Visibility = struct {
         opacity_zero: ?bool = null,
         pointer_events_none: ??bool = null,
 
+        pub fn accepts(id: properties.Id, value: []const u8) bool {
+            return id != .display or DisplayKeyword.parse(value) != null;
+        }
+
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
                 .display => {
-                    self.display = Display.parse(value);
-                    self.box = Box.parse(value);
+                    self.keyword = DisplayKeyword.parse(value);
                 },
                 .@"flex-direction" => {
                     self.flex_column = isColumnDirection(value);
@@ -6009,7 +6142,8 @@ const Visibility = struct {
 
     // The element's own values, from the cascade.
     pub const Cascaded = struct {
-        // Author value (inline or sheet). Without `author_display` it's the UA
+        keyword: DisplayKeyword = .ua,
+        // From the keyword, see finish. Without `author_display` it's the UA
         // fallback: .none when matchesUaDisplayNoneRule, else .other.
         display: Display = .other,
         // Without an author `display` it's the tag's UA default, see finish
@@ -6026,9 +6160,11 @@ const Visibility = struct {
         outside_flat_tree: bool = false,
     };
 
-    const Computed = packed struct(u15) {
+    const Computed = packed struct(u20) {
         display: Display = .other,
         box: Box = .inline_level,
+        // Unresolved: `inherit` reads the parent's, `ua` the tag's default
+        keyword: DisplayKeyword = .ua,
         flex_column: bool = false,
         flex_wrap: bool = false,
         justify: Justify = .start,
@@ -6039,16 +6175,19 @@ const Visibility = struct {
         in_opacity_zero: bool = false, // This element or an ancestor
 
         fn resolve(own: Cascaded, parent: Computed) Computed {
+            const inherits = own.keyword == .inherit;
+            const kind = if (inherits) parent.display else own.display;
             return .{
-                .display = own.display,
-                .box = own.box,
+                .display = kind,
+                .box = if (inherits) parent.box else own.box,
+                .keyword = own.keyword,
                 .flex_column = own.flex_column,
                 .flex_wrap = own.flex_wrap,
                 .justify = own.justify,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
-                .in_display_none = own.display == .none or own.outside_flat_tree or parent.in_display_none,
+                .in_display_none = kind == .none or own.outside_flat_tree or parent.in_display_none,
                 .in_opacity_zero = own.opacity_zero or parent.in_opacity_zero,
             };
         }
@@ -6065,12 +6204,12 @@ const Visibility = struct {
     // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
     // origin regardless of specificity, so `.x { display: flex }` on a
     // `<div class="x" hidden>` must report visible.
-    pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
+    pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, _: *const Priorities(Declared)) void {
         p.outside_flat_tree = el.asNode().isOutsideFlatTree();
-        p.author_display = priorities.get(.display) != 0;
-        if (priorities.get(.box) == 0) {
-            p.box = Box.uaDefault(el.getTag());
-        }
+        // `revert` is the UA's value, as if nothing declared one
+        p.author_display = p.keyword != .ua;
+        p.display = p.keyword.display();
+        p.box = p.keyword.box() orelse Box.uaDefault(el.getTag());
         if (!p.author_display and matchesUaDisplayNoneRule(el, frame)) {
             p.display = .none;
         }
@@ -7221,9 +7360,17 @@ fn Slots(comptime Declared: type) type {
                 return;
             }
             const slot = slot_of[index];
-            if (slot != untracked) {
-                self.slots[slot].apply(value, important);
+            if (slot == untracked) {
+                return;
             }
+            if (comptime @hasDecl(Declared, "accepts")) {
+                // An invalid value is dropped, so an earlier one in the same
+                // block still holds
+                if (value.len != 0 and Declared.accepts(id, value) == false) {
+                    return;
+                }
+            }
+            self.slots[slot].apply(value, important);
         }
 
         fn props(self: *const Self, comptime importance: Importance) Declared {
@@ -8067,11 +8214,11 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         \\<i style="width: fit-content(10px); position: relative; float: none"></i>
     );
     const expected = [_]Declarations{
-        .{ .visibility = .{ .display = .none } },
-        .{ .visibility = .{ .display = .none } },
-        .{ .visibility = .{ .display = .none } },
-        .{ .visibility = .{ .display = .other, .box = .block_level } },
-        .{ .visibility = .{ .display = .none, .visibility_hidden = true } },
+        .{ .visibility = .{ .keyword = .none } },
+        .{ .visibility = .{ .keyword = .none } },
+        .{ .visibility = .{ .keyword = .none } },
+        .{ .visibility = .{ .keyword = .block } },
+        .{ .visibility = .{ .keyword = .none, .visibility_hidden = true } },
         .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true } },
         .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true } },
         .{ .visibility = .{ .visibility_hidden = true } },
@@ -8088,8 +8235,8 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .height = .{} } },
         .{ .geometry = .{ .width = .{ .value = 50, .unit = .percent }, .height = .{} } },
         .{ .geometry = .{ .width = .{ .value = 2, .unit = .em } } },
-        .{ .visibility = .{ .display = .flex, .box = .block_level } },
-        .{ .visibility = .{ .display = .grid, .box = .atomic_inline } },
+        .{ .visibility = .{ .keyword = .flex } },
+        .{ .visibility = .{ .keyword = .inline_grid } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .absolute, .floated = true } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .relative, .floated = false } },
     };
