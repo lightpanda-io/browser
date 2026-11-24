@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Lightpanda-specific BiDi commands, called as "lp.<command>".
+// Lightpanda-specific BiDi commands, called as "lp:<module>.<command>".
 
 const std = @import("std");
 
@@ -41,7 +41,7 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
 // called. So a standard WebDriver BiDi handleUserPrompt always comes too late and
 // answers "no such alert".
 //
-// lp.handleUserPrompt lets a client choose the answer *before* it runs the JS
+// lp:browsingContext.handleUserPrompt lets a client choose the answer *before* it runs the JS
 // that opens the dialog. It takes the same params as
 // browsingContext.handleUserPrompt. The answer is saved on the browsing
 // context, and the next dialog uses it and clears it (see
@@ -77,9 +77,9 @@ test "bidi.lp: handleUserPrompt" {
     defer ctx.deinit();
     const context_id = try ctx.createContext(.{});
 
-    try ctx.processMessage(.{ .id = 1, .method = "lp.handleUserPrompt", .params = .{ .context = "nope" } });
+    try ctx.processMessage(.{ .id = 1, .method = "lp:browsingContext.handleUserPrompt", .params = .{ .context = "nope" } });
     try ctx.expectSentError("no such frame", null, .{ .id = 1 });
-    try ctx.processMessage(.{ .id = 2, .method = "lp.nope", .params = .{ .context = context_id } });
+    try ctx.processMessage(.{ .id = 2, .method = "lp:browsingContext.nope", .params = .{ .context = context_id } });
     try ctx.expectSentError("unknown command", null, .{ .id = 2 });
 
     const Case = struct {
@@ -109,7 +109,7 @@ test "bidi.lp: handleUserPrompt" {
         if (case.accept) |accept| {
             try ctx.processMessage(.{
                 .id = id,
-                .method = "lp.handleUserPrompt",
+                .method = "lp:browsingContext.handleUserPrompt",
                 .params = .{ .context = context_id, .accept = accept, .userText = case.user_text },
             });
             try ctx.expectSentResult(null, .{ .id = id });

@@ -64,7 +64,7 @@ pub const Context = struct {
     realm_announced: bool = false,
 
     // The answer for the next alert/confirm/prompt, saved ahead of time by
-    // lp.handleUserPrompt. The next dialog uses it and clears it.
+    // lp:browsingContext.handleUserPrompt. The next dialog uses it and clears it.
     pending_prompt_response: ?Notification.DialogResponse = null,
 };
 
@@ -779,7 +779,7 @@ pub fn registerNotifications(bidi: *BiDi) !void {
     try notification.register(.javascript_dialog_opening, bidi, onJavascriptDialogOpening);
 }
 
-// Gives the answer saved by lp.handleUserPrompt, if any, to the dialog that
+// Gives the answer saved by lp:browsingContext.handleUserPrompt, if any, to the dialog that
 // is opening, then reports the dialog. Both happen here so the event's
 // `handler` is the answer the dialog really gets.
 //
@@ -1380,7 +1380,7 @@ test "bidi.browsing_context: userPromptOpened" {
     });
 
     // saved answer: accepted
-    try ctx.processMessage(.{ .id = 4, .method = "lp.handleUserPrompt", .params = .{ .context = context_id } });
+    try ctx.processMessage(.{ .id = 4, .method = "lp:browsingContext.handleUserPrompt", .params = .{ .context = context_id } });
     try ctx.processMessage(.{
         .id = 5,
         .method = "script.evaluate",
