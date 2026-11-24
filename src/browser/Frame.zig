@@ -1993,12 +1993,28 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, body: []const u8) !
 
         switch (mime.content_type) {
             .text_html => {
-                // Normalize and store the charset using encoding_rs canonical names
-                const charset_str = mime.charsetString();
-                const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
-                if (info.isValid()) {
-                    const name = info.name();
-                    self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
+                if (Mime.bomCharset(body)) |name| {
+                    // BOM overrides the Content-Type charset and <meta>
+                    self.charset = name;
+                } else {
+                    // Normalize and store the charset using encoding_rs canonical names
+                    const charset_str = mime.charsetString();
+                    const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
+                    if (info.isValid()) {
+                        const name = info.name();
+                        self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
+                    }
+                    // Nothing declared a charset. The spec leaves this fallback to
+                    // the browser.
+                    if (mime.is_default_charset and html_prescan_found_charset == false and Mime.isLegacyEncoded(body)) {
+                        // We keep it as UTF8 unless it clearly isn't (too many
+                        // invalid multibyte sequences). In that case, we
+                        // fallback to windows-1252. Why? It shares the ascii
+                        // range, and it + ISO-8859-1 are the most common legacy
+                        // encodings (windows-1252 is a superset of ISO-8859-1)
+                        // Want something fancier? encoding_rs crate.
+                        self.charset = "windows-1252";
+                    }
                 }
                 self._parse_state = .{ .html = .{ .xml = false } };
             },
