@@ -40,27 +40,73 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
 
 pub fn registerNotifications(bidi: *BiDi) !void {
     try bidi.notification.register(.http_request_start, bidi, onHttpRequestStart);
+    try bidi.notification.register(.http_response_header_done, bidi, onHttpResponseHeaderDone);
+    try bidi.notification.register(.http_request_done, bidi, onHttpRequestDone);
 }
 
 fn onHttpRequestStart(ptr: *anyopaque, msg: *const Notification.RequestStart) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    const transfer = msg.transfer;
+
+    // A redirect keeps the same transfer. The response of the previous hop
+    // (the 3xx) is still on it, and is never delivered: report it here,
+    // before the request of the next hop.
+    if (msg.redirect_response) {
+        try sendResponseEvent(bidi, "network.responseStarted", transfer, .redirect, .started);
+        try sendResponseEvent(bidi, "network.responseCompleted", transfer, .redirect, .completed);
+    }
+
     const method = "network.beforeRequestSent";
     if (!bidi.subscribed(method)) {
         return;
     }
     // The spec's "get the initiator" no longer sets anything, so the event
     // has no `initiator`.
-    return bidi.sendEvent(method, BaseParameters.init(bidi, msg.transfer));
+    return bidi.sendEvent(method, BaseParameters{ .bidi = bidi, .transfer = transfer });
 }
 
-// network.BaseParameters, the fields every network event has.
+// Sent when the response is delivered. Lightpanda has the whole body by
+// then (unless the response is streamed), but the spec's sizes are only
+// known at responseCompleted, so they are reported there.
+fn onHttpResponseHeaderDone(ptr: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    return sendResponseEvent(bidi, "network.responseStarted", msg.transfer, .current, .started);
+}
+
+fn onHttpRequestDone(ptr: *anyopaque, msg: *const Notification.RequestDone) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    return sendResponseEvent(bidi, "network.responseCompleted", msg.transfer, .current, .completed);
+}
+
+fn sendResponseEvent(bidi: *BiDi, comptime method: []const u8, transfer: *Transfer, hop: Hop, phase: ResponseData.Phase) !void {
+    if (!bidi.subscribed(method)) {
+        return;
+    }
+    return bidi.sendEvent(method, BaseParameters{
+        .bidi = bidi,
+        .transfer = transfer,
+        .hop = hop,
+        .response = .{ .transfer = transfer, .phase = phase },
+    });
+}
+
+// Which hop of the transfer an event is about.
+const Hop = enum {
+    // The request the transfer is on now.
+    current,
+    // The redirect the transfer just followed. req.url is already the
+    // redirect target and _redirect_count is already incremented, but the
+    // 3xx response is still on the transfer.
+    redirect,
+};
+
+// network.BaseParameters, the fields every network event has, plus the
+// `response` of the response events.
 const BaseParameters = struct {
     bidi: *const BiDi,
     transfer: *Transfer,
-
-    fn init(bidi: *const BiDi, transfer: *Transfer) BaseParameters {
-        return .{ .bidi = bidi, .transfer = transfer };
-    }
+    hop: Hop = .current,
+    response: ?ResponseData = null,
 
     pub fn jsonStringify(self: *const BaseParameters, jws: anytype) !void {
         const bidi = self.bidi;
@@ -92,10 +138,24 @@ const BaseParameters = struct {
         }
 
         try jws.objectField("redirectCount");
-        try jws.write(transfer._redirect_count);
+        try jws.write(switch (self.hop) {
+            .current => transfer._redirect_count,
+            .redirect => transfer._redirect_count - 1,
+        });
 
         try jws.objectField("request");
-        try jws.write(RequestData{ .transfer = transfer });
+        try jws.write(RequestData{
+            .transfer = transfer,
+            .url = switch (self.hop) {
+                .current => null,
+                .redirect => responseUrl(transfer),
+            },
+        });
+
+        if (self.response) |*response| {
+            try jws.objectField("response");
+            try jws.write(response);
+        }
 
         try jws.objectField("timestamp");
         try jws.write(lp.datetime.milliTimestamp(.real));
@@ -109,6 +169,8 @@ const BaseParameters = struct {
 // network.RequestData
 const RequestData = struct {
     transfer: *Transfer,
+    // The url of a redirect hop: req.url is already the redirect target.
+    url: ?[]const u8 = null,
 
     pub fn jsonStringify(self: *const RequestData, jws: anytype) !void {
         self._jsonStringify(jws) catch return error.WriteFailed;
@@ -128,7 +190,7 @@ const RequestData = struct {
         try jws.print("\"{d}\"", .{transfer.id});
 
         try jws.objectField("url");
-        try jws.write(req.url);
+        try jws.write(self.url orelse req.url);
 
         try jws.objectField("method");
         try jws.write(@tagName(req.method));
@@ -193,6 +255,108 @@ const Header = struct {
         try jws.endObject();
     }
 };
+
+// network.ResponseData
+const ResponseData = struct {
+    transfer: *Transfer,
+    phase: Phase,
+
+    const Phase = enum { started, completed };
+
+    pub fn jsonStringify(self: *const ResponseData, jws: anytype) !void {
+        self._jsonStringify(jws) catch return error.WriteFailed;
+    }
+
+    fn _jsonStringify(self: *const ResponseData, jws: anytype) !void {
+        const transfer = self.transfer;
+        const url = responseUrl(transfer);
+
+        var headers_size: usize = 0;
+        for (transfer.responseHeaders()) |hdr| {
+            headers_size += Header.size(hdr.name, hdr.value);
+        }
+
+        try jws.beginObject();
+        try jws.objectField("url");
+        try jws.write(url);
+
+        try jws.objectField("protocol");
+        try writeProtocol(jws, transfer, url);
+
+        try jws.objectField("status");
+        try jws.write(transfer.responseStatus() orelse 0);
+
+        try jws.objectField("statusText");
+        try jws.write(transfer.statusText() orelse "");
+
+        try jws.objectField("fromCache");
+        try jws.write(transfer._from_cache);
+
+        try jws.objectField("headers");
+        try jws.beginArray();
+        for (transfer.responseHeaders()) |hdr| {
+            try jws.write(Header{ .name = hdr.name, .value = hdr.value });
+        }
+        try jws.endArray();
+
+        try jws.objectField("mimeType");
+        try jws.write(try mimeEssence(transfer.arena.allocator(), transfer.contentType() orelse ""));
+
+        try jws.objectField("headersSize");
+        try jws.write(headers_size);
+
+        // The sizes are known once the body is read: at responseStarted,
+        // only the headers count.
+        switch (self.phase) {
+            .started => {
+                try jws.objectField("bytesReceived");
+                try jws.write(headers_size);
+                try jws.objectField("bodySize");
+                try jws.write(null);
+                try jws.objectField("content");
+                try jws.write(.{ .size = 0 });
+            },
+            .completed => {
+                const timing = &transfer._timing;
+                try jws.objectField("bytesReceived");
+                try jws.write(transfer._encoded_data_length);
+                // A cached response wasn't transmitted: its encoded size is
+                // its decoded size, as in the resource timing entry.
+                try jws.objectField("bodySize");
+                try jws.write(if (transfer._from_cache) timing.decoded_body_size else timing.encoded_body_size);
+                try jws.objectField("content");
+                try jws.write(.{ .size = timing.decoded_body_size });
+            },
+        }
+        try jws.endObject();
+    }
+};
+
+// The url the response came from. After a redirect, req.url is already the
+// redirect target, but the response head still has the url of its hop.
+fn responseUrl(transfer: *Transfer) []const u8 {
+    if (transfer.res.header) |header| {
+        return std.mem.span(header.url);
+    }
+    return transfer.req.url;
+}
+
+// The spec's "get the protocol": the ALPN protocol, else the url's scheme.
+fn writeProtocol(jws: anytype, transfer: *const Transfer, url: []const u8) !void {
+    const protocol = transfer._timing.protocol;
+    if (protocol.len > 0) {
+        return jws.write(protocol);
+    }
+    const i = std.mem.findScalar(u8, url, ':') orelse return jws.write("");
+    return jws.write(url[0..i]);
+}
+
+// The MIME type's essence: "type/subtype" in lowercase, without parameters.
+fn mimeEssence(arena: std.mem.Allocator, content_type: []const u8) ![]const u8 {
+    const end = std.mem.findScalar(u8, content_type, ';') orelse content_type.len;
+    const essence = std.mem.trim(u8, content_type[0..end], " \t");
+    return std.ascii.allocLowerString(arena, essence);
+}
 
 // network.BytesValue: a string when the bytes are UTF-8, base64 otherwise.
 fn writeBytesValue(jws: anytype, bytes: []const u8) !void {
@@ -339,6 +503,112 @@ test "bidi.network: beforeRequestSent cookies and body" {
     try testing.expect(request.get("headersSize").?.integer > 0);
 }
 
+test "bidi.network: responseStarted and responseCompleted" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = .{"network"} } });
+    try navigate(&ctx, context_id, "bidi/network.html");
+    const navigation = &ctx.bidi().browsing_context.?.navigation_id;
+    const url = testing.test_server ++ "bidi/network.html";
+
+    try ctx.expectSentEvent("network.responseStarted", .{
+        .context = context_id,
+        .isBlocked = false,
+        .navigation = navigation,
+        .redirectCount = 0,
+        .request = .{ .url = url, .method = "GET" },
+        .response = .{
+            .url = url,
+            .protocol = "http/1.1",
+            .status = 200,
+            .fromCache = false,
+            .mimeType = "text/html",
+            .content = .{ .size = 0 },
+        },
+    });
+    try ctx.expectSentEvent("network.responseCompleted", .{
+        .context = context_id,
+        .navigation = navigation,
+        .request = .{ .url = url },
+        .response = .{ .url = url, .status = 200 },
+    });
+
+    const started = (try findEvent(&ctx, "network.responseStarted", "bidi/network.html")).object;
+    try testing.expect(started.get("response").?.object.get("bodySize").? == .null);
+
+    const completed = (try findEvent(&ctx, "network.responseCompleted", "bidi/network.html")).object;
+    const response = completed.get("response").?.object;
+    try testing.expect(response.get("bodySize").?.integer > 0);
+    try testing.expect(response.get("bytesReceived").?.integer > response.get("bodySize").?.integer);
+    try testing.expect(response.get("headersSize").?.integer > 0);
+    try testing.expect(response.get("content").?.object.get("size").?.integer > 0);
+    try testing.expect(response.get("headers").?.array.items.len > 0);
+
+    // The three events of one request share its id, in order.
+    const events = try networkEvents(&ctx, "bidi/network.html");
+    try testing.expectEqual(3, events.len);
+    try std.testing.expectEqualStrings("network.beforeRequestSent", events[0].method);
+    try std.testing.expectEqualStrings("network.responseStarted", events[1].method);
+    try std.testing.expectEqualStrings("network.responseCompleted", events[2].method);
+    for (events[1..]) |e| {
+        try std.testing.expectEqualStrings(events[0].request_id, e.request_id);
+    }
+
+    // The script's response is not tied to the navigation.
+    const script = (try findEvent(&ctx, "network.responseCompleted", "bidi/network.js")).object;
+    try testing.expect(script.get("navigation").? == .null);
+}
+
+test "bidi.network: redirect" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = .{"network"} } });
+    const from = "http://127.0.0.1:9582/redirect-no-fragment";
+    const to = "http://127.0.0.1:9582/redirect-target";
+    try navigateUrl(&ctx, context_id, from);
+
+    // The 3xx hop: its request and its response, with redirectCount 0.
+    try ctx.expectSentEvent("network.responseCompleted", .{
+        .context = context_id,
+        .redirectCount = 0,
+        .request = .{ .url = from },
+        .response = .{ .url = from, .status = 302 },
+    });
+    // The next hop: redirectCount 1.
+    try ctx.expectSentEvent("network.beforeRequestSent", .{
+        .context = context_id,
+        .redirectCount = 1,
+        .request = .{ .url = to },
+    });
+    try ctx.expectSentEvent("network.responseCompleted", .{
+        .context = context_id,
+        .redirectCount = 1,
+        .request = .{ .url = to },
+        .response = .{ .url = to, .status = 200, .mimeType = "text/html" },
+    });
+
+    // One request id for both hops, events in order.
+    const events = try networkEvents(&ctx, "");
+    const expected = [_]struct { []const u8, []const u8 }{
+        .{ "network.beforeRequestSent", from },
+        .{ "network.responseStarted", from },
+        .{ "network.responseCompleted", from },
+        .{ "network.beforeRequestSent", to },
+        .{ "network.responseStarted", to },
+        .{ "network.responseCompleted", to },
+    };
+    try testing.expectEqual(expected.len, events.len);
+    for (expected, events) |exp, e| {
+        try std.testing.expectEqualStrings(exp[0], e.method);
+        try std.testing.expectEqualStrings(exp[1], e.url);
+        try std.testing.expectEqualStrings(events[0].request_id, e.request_id);
+    }
+}
+
 test "bidi.network: no event without a subscription" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -356,17 +626,44 @@ test "bidi.network: unknown command" {
     try ctx.expectSentError("unknown command", "network.nope", .{ .id = 1 });
 }
 
-fn navigate(ctx: *testing.TestContext, context_id: []const u8, url: []const u8) !void {
+// Navigates to a fixture under testing.test_server.
+fn navigate(ctx: *testing.TestContext, context_id: []const u8, path: []const u8) !void {
+    return navigateUrl(ctx, context_id, try testing.arena.print(testing.test_server ++ "{s}", .{path}));
+}
+
+fn navigateUrl(ctx: *testing.TestContext, context_id: []const u8, url: []const u8) !void {
     try ctx.processMessage(.{
         .id = 100,
         .method = "browsingContext.navigate",
-        .params = .{
-            .context = context_id,
-            .url = try testing.arena.print(testing.test_server ++ "{s}", .{url}),
-            .wait = "none",
-        },
+        .params = .{ .context = context_id, .url = url, .wait = "none" },
     });
     try ctx.wait();
+}
+
+const NetworkEvent = struct {
+    method: []const u8,
+    url: []const u8,
+    request_id: []const u8,
+};
+
+// The network events whose request url ends with `suffix`, in the order they
+// were sent.
+fn networkEvents(ctx: *testing.TestContext, suffix: []const u8) ![]const NetworkEvent {
+    try ctx.read();
+    var events: std.ArrayList(NetworkEvent) = .empty;
+    for (ctx.received.items) |msg| {
+        const m = msg.object.get("method") orelse continue;
+        if (!std.mem.startsWith(u8, m.string, "network.")) continue;
+        const request = msg.object.get("params").?.object.get("request").?.object;
+        const url = request.get("url").?.string;
+        if (!std.mem.endsWith(u8, url, suffix)) continue;
+        try events.append(testing.arena, .{
+            .method = m.string,
+            .url = url,
+            .request_id = request.get("request").?.string,
+        });
+    }
+    return events.items;
 }
 
 // The params of the first `method` event whose request url ends with `suffix`.
