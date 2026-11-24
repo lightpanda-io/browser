@@ -175,9 +175,9 @@ has: HasKeys = .{},
 // What a focus move reaches from the elements whose :focus match flips (the
 // old and new active elements), and from those whose :focus-within match does
 // (their ancestors, up to the first one holding both). Null: nothing reads it.
-// A rule declares a negative z-index: most pages have none, and hitFacts
-// then skips the geometry memo for boxes without an inline style.
-negative_z_rules: bool = false,
+// A rule declares a z-index other than auto. Without one, zIndex skips the
+// geometry memo for boxes without an inline style.
+z_index_rules: bool = false,
 
 focus_reach: ?ClassReach = null,
 focus_within_reach: ?ClassReach = null,
@@ -759,8 +759,10 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     try self.collectAttributeNames(selector, false);
     self.siblings.addNext(nextReach(selector));
     try self.collectClassReach(selector, .subtree, true, matched.rightmost(), BoxReach.of(props).widest(.of(important)));
-    if (props.geometry.z_negative == true or important.geometry.z_negative == true) {
-        self.negative_z_rules = true;
+    for ([_]?ZIndex{ props.geometry.z_index, important.geometry.z_index }) |z| {
+        if ((z orelse .auto) != .auto) {
+            self.z_index_rules = true;
+        }
     }
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
@@ -1331,7 +1333,7 @@ const BoxReach = enum(u8) {
                     if (std.mem.eql(u8, group, "touch_action")) {
                         break :moves .none;
                     }
-                    for ([_][]const u8{ "visibility_hidden", "opacity_zero", "pointer_events_none", "overscroll_x_contains", "overscroll_y_contains", "z_negative" }) |neutral| {
+                    for ([_][]const u8{ "visibility_hidden", "opacity_zero", "pointer_events_none", "overscroll_x_contains", "overscroll_y_contains", "z_index" }) |neutral| {
                         if (std.mem.eql(u8, field, neutral)) {
                             break :moves .none;
                         }
@@ -2736,7 +2738,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.focus_reach = null;
     self.focus_within_reach = null;
     self.class_reach = .empty;
-    self.negative_z_rules = false;
+    self.z_index_rules = false;
     self.class_subjects = .empty;
     self.class_attribute = null;
     self.class_attribute_selectors = .empty;
@@ -2900,22 +2902,13 @@ pub const HitFacts = struct {
     // A wrapping grid: its in-flow children sit in its columns (gridOf)
     grid: bool = false,
     position: Position = .static,
-    layer: PaintLayer = .flow,
     line: Line = .line,
 
-    /// Where a box paints, which its subtree follows. Ordered so that a
-    /// box's is the highest of its own and its parent's.
-    pub const PaintLayer = enum(u2) {
-        flow,
-        // A positioned box: above the flow
-        positioned,
-        // One with a negative z-index: below the flow
-        below,
-
-        pub fn under(self: PaintLayer, parent: PaintLayer) PaintLayer {
-            return @fromBackingInt(@max(@backingInt(self), @backingInt(parent)));
-        }
-    };
+    /// Paints above the flow, it and its subtree. display: contents has no
+    /// box, so its position does nothing.
+    pub fn positioned(self: HitFacts) bool {
+        return self.position != .static and self.contents == false;
+    }
 
     pub const Line = enum {
         block, // isBlockLevel
@@ -2932,13 +2925,6 @@ pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
     // On the root element it computes to block instead
     const contents = visibility.box == .contents and if (el.asNode().parentNode()) |parent| parent._type != .document else true;
     const in_flow = flow.position.outOfFlow() == false and flow.floated == false;
-    // display: contents has no box, so its position does nothing
-    const layer: HitFacts.PaintLayer = if (flow.position == .static or contents)
-        .flow
-    else if ((self.negative_z_rules or el._flags.has_inline_style) and self.geometryProps(el).z_negative)
-        .below
-    else
-        .positioned;
     return .{
         .display_none = visibility.display == .none,
         .hittable = !visibility.visibility_hidden and !visibility.pointer_events_none and contents == false,
@@ -2946,7 +2932,6 @@ pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
         .row = visibility.display == .flex and visibility.flex_column == false,
         .grid = visibility.display == .grid and self.childFlow(el) == .grid,
         .position = flow.position,
-        .layer = layer,
         .line = switch (visibility.box) {
             .block_level, .table, .table_row, .table_row_group => if (in_flow) .block else .line,
             .table_cell => if (in_flow) .cell else .line,
@@ -2954,6 +2939,99 @@ pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
         },
     };
 }
+
+/// `el`'s z-index, which only a positioned box has: callers check
+/// (HitFacts.positioned). Document.hitTest reads it only for a hit, and the
+/// boxes above one.
+pub fn zIndex(self: *StyleManager, el: *Element) ZIndex {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .auto;
+    if (self.z_index_rules == false and el._flags.has_inline_style == false) {
+        return .auto;
+    }
+    return self.geometry.ownProp(self.arena.allocator(), el, "z_index", self.frame);
+}
+
+/// What a box passes on to its subtree of where it paints (CSS 2.1 Appendix
+/// E). A positioned box with a z-index makes a stacking context: everything
+/// in its subtree paints inside it, ordered there, and the whole of it sits
+/// at its z-index among its siblings in the enclosing one.
+pub const Stacking = struct {
+    // The contexts the subtree is in, outermost first (the root's isn't listed)
+    contexts: []const PaintOrder.Context = &.{},
+    // A box in the innermost context since it started is positioned: the
+    // subtree paints above the flow
+    above_flow: bool = false,
+    // The box makes the innermost context
+    root: bool = false,
+
+    /// `el`'s, from its parent's. Reads the z-index of a positioned box,
+    /// and allocates for one with a z-index.
+    pub fn of(allocator: Allocator, above: Stacking, el: *Element, facts: HitFacts, style_manager: *StyleManager) !Stacking {
+        if (facts.positioned() == false) {
+            return .{ .contexts = above.contexts, .above_flow = above.above_flow };
+        }
+        const z = style_manager.zIndex(el);
+        if (z == .auto) {
+            return .{ .contexts = above.contexts, .above_flow = true };
+        }
+        const contexts = try allocator.alloc(PaintOrder.Context, above.contexts.len + 1);
+        @memcpy(contexts[0..above.contexts.len], above.contexts);
+        // z-index: 0 shares auto's level, the flow sits between it and -1
+        contexts[above.contexts.len] = .{ .box = el, .level = 2 * @as(i64, @backingInt(z)) };
+        return .{ .contexts = contexts, .root = true };
+    }
+
+    /// Where the box itself paints
+    pub fn order(self: Stacking) PaintOrder {
+        // A context's own box paints at its bottom, under all it holds
+        const level: i64 = if (self.root) std.math.minInt(i64) else if (self.above_flow) 0 else -1;
+        return .{ .contexts = self.contexts, .level = level };
+    }
+};
+
+/// Where a box paints, as the level it has in each stacking context it's in,
+/// from the root's in: see Stacking.
+pub const PaintOrder = struct {
+    contexts: []const Context,
+    // In the innermost
+    level: i64,
+
+    pub const Context = struct {
+        box: ?*Element, // null: the box's own level
+        level: i64,
+    };
+
+    /// Paints over `other`, the earlier of the two in tree order
+    pub fn covers(self: PaintOrder, other: PaintOrder) bool {
+        var i: usize = 0;
+        while (true) : (i += 1) {
+            const mine = self.at(i);
+            const theirs = other.at(i);
+            if (mine.level != theirs.level) {
+                return mine.level > theirs.level;
+            }
+            // Inside the same context, the order in it decides. Otherwise
+            // the two are on one level, and the later in tree order paints on top
+            if (mine.box == null or mine.box != theirs.box) {
+                return true;
+            }
+        }
+    }
+
+    fn at(self: PaintOrder, i: usize) Context {
+        return if (i < self.contexts.len) self.contexts[i] else .{ .box = null, .level = self.level };
+    }
+};
+
+pub const ZIndex = enum(i32) {
+    auto = std.math.minInt(i32),
+    _,
+
+    fn of(z: i64) ZIndex {
+        return @fromBackingInt(@intCast(std.math.clamp(z, std.math.minInt(i32) + 1, std.math.maxInt(i32))));
+    }
+};
 
 /// Computed text-transform, which inherits: the nearest of `el` and its
 /// ancestors with its own value, else none.
@@ -6255,7 +6333,7 @@ const Geometry = struct {
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
-        z_negative: ?bool = null,
+        z_index: ?ZIndex = null,
         border_box: ?bool = null,
         width: ?Length = null,
         height: ?Length = null,
@@ -6365,8 +6443,8 @@ const Geometry = struct {
                     self.max_height = Length.parse(value);
                 },
                 .@"z-index" => {
-                    if (zIndexNegative(value)) |negative| {
-                        self.z_negative = negative;
+                    if (parseZIndex(value)) |z| {
+                        self.z_index = z;
                     }
                 },
                 .padding => {
@@ -6520,13 +6598,27 @@ const Geometry = struct {
         }
 
         // Null for an invalid value, which drops the declaration.
-        fn zIndexNegative(value: []const u8) ?bool {
+        // Null for an invalid value, which drops the declaration, and for
+        // inherit, which this memo of own values can't follow
+        fn parseZIndex(value: []const u8) ?ZIndex {
             const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
-            if (std.ascii.eqlIgnoreCase(trimmed, "auto") or std.ascii.eqlIgnoreCase(trimmed, "initial")) {
-                return false;
+            // Not inherited, so unset is initial; no UA rule sets it to revert to
+            for ([_][]const u8{ "auto", "initial", "unset", "revert", "revert-layer" }) |keyword| {
+                if (std.ascii.eqlIgnoreCase(trimmed, keyword)) {
+                    return .auto;
+                }
             }
-            const z = std.fmt.parseInt(i64, trimmed, 10) catch return null;
-            return z < 0;
+            // A CSS <integer>: parseInt also takes 1_000
+            const negative = std.mem.startsWith(u8, trimmed, "-");
+            const digits = if (negative or std.mem.startsWith(u8, trimmed, "+")) trimmed[1..] else trimmed;
+            if (digits.len == 0 or std.mem.indexOfNone(u8, digits, "0123456789") != null) {
+                return null;
+            }
+            const z = std.fmt.parseInt(i64, trimmed, 10) catch {
+                // Past i64: clamped like any value past i32
+                return .of(if (negative) std.math.minInt(i64) else std.math.maxInt(i64));
+            };
+            return .of(z);
         }
 
         // `contain` keeps the scroll in the box, `none` also kills the bounce we
@@ -6584,7 +6676,7 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u585) {
+    const Computed = packed struct(u616) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -6592,7 +6684,7 @@ const Geometry = struct {
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
-        z_negative: bool = false,
+        z_index: ZIndex = .auto,
         // box-sizing: width and height are the border box's
         border_box: bool = false,
         width: Length = .{},
@@ -6629,6 +6721,7 @@ const Geometry = struct {
         // neither needs a u64, which would pad the record
         units: [(length_count + 1) / 2]u8,
         flags: Flags,
+        z_index: ZIndex,
 
         const names = @typeInfo(Computed).@"struct".field_names;
         const types = @typeInfo(Computed).@"struct".field_types;
@@ -6637,11 +6730,11 @@ const Geometry = struct {
 
         comptime {
             std.debug.assert(@bitSizeOf(Length.Unit) == 4);
-            std.debug.assert(names.len - length_count <= @bitSizeOf(Flags));
+            std.debug.assert(names.len - length_count - 1 <= @bitSizeOf(Flags));
         }
 
         fn pack(computed: Computed) Stored {
-            var stored: Stored = .{ .values = undefined, .units = @splat(0), .flags = 0 };
+            var stored: Stored = .{ .values = undefined, .units = @splat(0), .flags = 0, .z_index = computed.z_index };
             comptime var length = 0;
             comptime var flag = 0;
             inline for (names, types) |name, T| {
@@ -6650,7 +6743,7 @@ const Geometry = struct {
                     stored.values[length] = value.value;
                     stored.units[length / 2] |= @as(u8, @backingInt(value.unit)) << (length % 2 * 4);
                     length += 1;
-                } else {
+                } else if (T != ZIndex) {
                     stored.flags |= @as(Flags, @intFromBool(value)) << flag;
                     flag += 1;
                 }
@@ -6659,7 +6752,7 @@ const Geometry = struct {
         }
 
         fn unpack(self: Stored) Computed {
-            var computed: Computed = .{};
+            var computed: Computed = .{ .z_index = self.z_index };
             comptime var length = 0;
             comptime var flag = 0;
             inline for (names, types) |name, T| {
@@ -6667,7 +6760,7 @@ const Geometry = struct {
                     const unit: std.meta.Tag(Length.Unit) = @truncate(self.units[length / 2] >> (length % 2 * 4));
                     @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(unit) };
                     length += 1;
-                } else {
+                } else if (T != ZIndex) {
                     @field(computed, name) = (self.flags >> flag) & 1 == 1;
                     flag += 1;
                 }
@@ -9120,9 +9213,177 @@ test "StyleManager: hit bands: a z-index write keeps the layout memo and the ban
     try div.setAttribute(comptime .wrap("class"), comptime .wrap("under"), frame);
     try testing.expectEqual(p, (try doc.hitTest(10, 20, frame)).?);
 
-    // It does nothing on a box that isn't positioned
+    // It does nothing on a box that isn't positioned: in the flow, the div
+    // comes after the body
     try style.setProperty("position", "static", null, frame);
-    try testing.expectEqual(.flow, sm.hitFacts(div).layer);
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+}
+
+test "StyleManager: hit: z-index orders positioned boxes, context by context" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("div { position: absolute; width: 0; height: 0 } button { position: absolute; left: 0; top: 0; width: 100px; height: 100px }", frame);
+    _ = try html.insertBefore(style_el.asNode(), body, frame);
+    // #4029: overlapping buttons, each in a zero-size positioned div
+    try Frame.parse.htmlAsChildren(frame, body, "<div><button id=cover></button></div><div><button id=under></button></div>");
+    const cover_div = body.firstChild().?.as(Element);
+    const under_div = body.lastChild().?.as(Element);
+    const cover = cover_div.asNode().firstChild().?.as(Element);
+    const under = under_div.asNode().firstChild().?.as(Element);
+    const cover_style = (try cover.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    const under_style = (try under.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    const parent_style = (try under_div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+
+    // auto: tree order
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+    // Equal: tree order too
+    try cover_style.setProperty("z-index", "2", null, frame);
+    try under_style.setProperty("z-index", "2", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+    // Higher wins, even earlier in the tree
+    try under_style.setProperty("z-index", "1", null, frame);
+    try testing.expectEqual(cover, (try doc.hitTest(50, 20, frame)).?);
+    try testing.expectEqual(cover, (try doc.hitTestVertical(20, frame)).?);
+    // Unless it can't be hit
+    try cover_style.setProperty("pointer-events", "none", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+    _ = try cover_style.removeProperty("pointer-events", frame);
+
+    // A z-index inside another's context only orders that subtree: the
+    // parent's 0 is under the cover's 1
+    try cover_style.setProperty("z-index", "1", null, frame);
+    try under_style.setProperty("z-index", "999", null, frame);
+    try parent_style.setProperty("z-index", "0", null, frame);
+    try testing.expectEqual(cover, (try doc.hitTest(50, 20, frame)).?);
+    // Two contexts on one level: tree order, whatever they hold
+    try parent_style.setProperty("z-index", "1", null, frame);
+    const cover_parent_style = (try cover_div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try cover_parent_style.setProperty("z-index", "1", null, frame);
+    try cover_style.setProperty("z-index", "99", null, frame);
+    try under_style.setProperty("z-index", "-5", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+    _ = try cover_parent_style.removeProperty("z-index", frame);
+    try cover_style.setProperty("z-index", "1", null, frame);
+    try under_style.setProperty("z-index", "999", null, frame);
+    // auto makes no context
+    try parent_style.setProperty("z-index", "auto", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+
+    // 0 shares auto's level, so tree order. Neither paints below the flow,
+    // a negative one does
+    try cover_style.setProperty("z-index", "auto", null, frame);
+    try under_style.setProperty("z-index", "0", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+    try under_style.setProperty("z-index", "-1", null, frame);
+    try testing.expectEqual(cover, (try doc.hitTest(50, 20, frame)).?);
+    try cover_style.setProperty("z-index", "-2", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+
+    // Values past i32 clamp, and then tie
+    try cover_style.setProperty("z-index", "99999999999", null, frame);
+    try under_style.setProperty("z-index", "2147483647", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+    try cover_style.setProperty("z-index", "+99999999999999999999999", null, frame);
+    try testing.expectEqual(under, (try doc.hitTest(50, 20, frame)).?);
+}
+
+test "StyleManager: hit: z-index orders boxes inside a stacking context" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\#modal { position: absolute; left: 0; top: 0; width: 200px; height: 200px; z-index: 1000 }
+        \\#modal div { width: 100px; height: 100px }
+        \\.abs { position: absolute; left: 0; top: 0 }
+        \\#page { width: 300px; height: 300px }
+    , frame);
+    _ = try html.insertBefore(style_el.asNode(), body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div id=modal><div id=b class=abs></div><div id=c class=abs></div><div id=footer></div></div><div id=page></div>");
+    const modal = body.firstChild().?.as(Element);
+    const b = modal.asNode().firstChild().?.as(Element);
+    const c = b.asNode().nextSibling().?.as(Element);
+    const footer = modal.asNode().lastChild().?.as(Element);
+    const b_style = (try b.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    const c_style = (try c.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    const modal_style = (try modal.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+
+    // The modal, over the later page, holds them all
+    try testing.expectEqual(c, (try doc.hitTest(50, 20, frame)).?);
+    try testing.expectEqual(modal, (try doc.hitTest(150, 150, frame)).?);
+
+    // In it, the higher z-index wins, even earlier in the tree
+    try b_style.setProperty("z-index", "15", null, frame);
+    try c_style.setProperty("z-index", "10", null, frame);
+    try testing.expectEqual(b, (try doc.hitTest(50, 20, frame)).?);
+    try c_style.setProperty("z-index", "20", null, frame);
+    try testing.expectEqual(c, (try doc.hitTest(50, 20, frame)).?);
+
+    // A positioned box paints over the in-flow one after it (the absolute
+    // ones take no room, so the footer is under them)
+    _ = try b_style.removeProperty("z-index", frame);
+    _ = try c_style.removeProperty("z-index", frame);
+    try testing.expectEqual(c, (try doc.hitTest(50, 20, frame)).?);
+    // Below it with a negative z-index, but still over the modal's own box
+    // and the page under the modal
+    try b_style.setProperty("z-index", "-1", null, frame);
+    try c_style.setProperty("z-index", "-1", null, frame);
+    try testing.expectEqual(footer, (try doc.hitTest(50, 20, frame)).?);
+    try (try footer.getOrCreateStyle(frame)).asCSSStyleDeclaration().setProperty("display", "none", null, frame);
+    try testing.expectEqual(c, (try doc.hitTest(50, 20, frame)).?);
+
+    // Without a z-index, the modal makes no context: the negative ones go
+    // below the flow, under the page and the modal, which paints above it
+    try modal_style.setProperty("z-index", "auto", null, frame);
+    try testing.expectEqual(modal, (try doc.hitTest(50, 20, frame)).?);
+}
+
+test "StyleManager: hit: z-index from a rule" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("p { position: absolute; top: 0; width: 100px; height: 100px } .top { z-index: 5 }", frame);
+    _ = try html.insertBefore(style_el.asNode(), body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<p class=top></p><p></p>");
+    const top = body.firstChild().?.as(Element);
+    const later = body.lastChild().?.as(Element);
+
+    try testing.expectEqual(top, (try doc.hitTest(50, 20, frame)).?);
+    try testing.expectEqual(true, frame._style_manager.z_index_rules);
+    try top.setAttribute(comptime .wrap("class"), comptime .wrap(""), frame);
+    try testing.expectEqual(later, (try doc.hitTest(50, 20, frame)).?);
+    try later.setAttribute(comptime .wrap("class"), comptime .wrap("top"), frame);
+    try testing.expectEqual(later, (try doc.hitTest(50, 20, frame)).?);
+
+    // An inline value that isn't an integer is dropped: the rule's 5 stays
+    try top.setAttribute(comptime .wrap("class"), comptime .wrap("top"), frame);
+    try later.setAttribute(comptime .wrap("class"), comptime .wrap(""), frame);
+    const style = (try top.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    for ([_][]const u8{ "1_0", "+", "1.5", "0x1", "-" }) |invalid| {
+        try style.setProperty("z-index", invalid, null, frame);
+        try testing.expectEqual(top, (try doc.hitTest(50, 20, frame)).?);
+    }
+    // unset is auto
+    try style.setProperty("z-index", "unset", null, frame);
+    try testing.expectEqual(later, (try doc.hitTest(50, 20, frame)).?);
 }
 
 test "StyleManager: hit bands: a class no rule moves a box with keeps the layout memo and the bands" {
@@ -9947,7 +10208,7 @@ test "StyleManager: records: a group allocates the chunks it reaches" {
 }
 
 test "StyleManager: records: geometry packs its lengths' units with the flags" {
-    try testing.expectEqual(80, @sizeOf(Records(Geometry.Stored).Entry));
+    try testing.expectEqual(84, @sizeOf(Records(Geometry.Stored).Entry));
 
     // Each field apart from its neighbours
     const names = Geometry.Stored.names;
@@ -9956,6 +10217,8 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
         var computed: Geometry.Computed = .{};
         if (T == Length) {
             @field(computed, name) = .{ .value = @floatFromInt(n + 1), .unit = .percent };
+        } else if (T == ZIndex) {
+            @field(computed, name) = .of(-@as(i64, n));
         } else {
             @field(computed, name) = true;
         }
@@ -9968,6 +10231,8 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
     inline for (names, types, 0..) |name, T, n| {
         if (T == Length) {
             @field(computed, name) = .{ .value = -@as(f32, @floatFromInt(n)) / 3, .unit = unit_values[n % unit_values.len] };
+        } else if (T == ZIndex) {
+            @field(computed, name) = .of(n);
         } else {
             @field(computed, name) = n % 2 == 0;
         }
@@ -10370,10 +10635,12 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
         \\div:focus-within > .blk { height: 22px }
         ,
         // Every sibling, :empty, flex rows and boxes sized by their content.
-        // Positioned boxes paint below the flow.
+        // Positioned boxes paint below the flow, or in contexts above it,
+        // nested in one another.
         \\.blk { height: 10px } .tall { height: 30px } .box { height: 100px }
         \\.hid { display: none } .ib { display: inline-block }
         \\.abs { position: absolute; top: 3px; z-index: -1 } .wide { width: 200px }
+        \\.on.abs { z-index: 3 } .wide.abs { z-index: 2 }
         \\.tall ~ .blk { height: 9px } div:nth-child(2n) { height: 14px }
         \\.on:empty { height: 40px } :empty + .blk { height: 21px }
         \\.row { display: flex } .on > span { display: block; height: 4px }
@@ -10523,28 +10790,34 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
 
             // The walk places a box from what it read on the way down; each
             // box asked on its own must land in the same place
-            const Placed = struct { el: *Element, layer: HitFacts.PaintLayer, top: f64, left: f64, bottom: f64, right: f64 };
+            const Placed = struct { el: *Element, order: PaintOrder, top: f64, left: f64, bottom: f64, right: f64 };
             var placed: std.ArrayList(Placed) = .empty;
             var tw = TreeWalker.Full.init(html, .{});
             while (tw.next()) |n| {
                 const el = n.is(Element) orelse continue;
                 var shown = true;
-                var layer: HitFacts.PaintLayer = .flow;
+                var chain: std.ArrayList(*Element) = .empty;
                 var up: ?*Element = el;
                 while (up) |e| : (up = e.asNode().parentElement()) {
                     if (sm.hasDisplayNone(e)) {
                         shown = false;
                     }
-                    layer = layer.under(sm.hitFacts(e).layer);
+                    try chain.append(arena, e);
                 }
                 if (shown == false or sm.isHitTestable(el) == false) {
                     continue;
+                }
+                var stacking: Stacking = .{};
+                var i = chain.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    stacking = try .of(arena, stacking, chain.items[i], sm.hitFacts(chain.items[i]), sm);
                 }
                 const top = layout.boxTop(el, frame);
                 const left = el.horizontalPosition(frame);
                 try placed.append(arena, .{
                     .el = el,
-                    .layer = layer,
+                    .order = stacking.order(),
                     .top = top,
                     .left = left,
                     .bottom = top + layout.boxHeight(el, frame),
@@ -10554,19 +10827,17 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
             for (0..24) |_| {
                 const x: f64 = @floatFromInt(random.uintLessThan(u16, 320));
                 const y: f64 = @floatFromInt(random.uintLessThan(u16, 400));
-                var expected_flow: ?*Element = null;
-                var expected_positioned: ?*Element = null;
-                var expected_below: ?*Element = null;
+                // The box that paints over the others, the later on a tie
+                var expected: ?*Element = null;
+                var expected_order: PaintOrder = undefined;
                 for (placed.items) |p| {
                     if (y >= p.top and y <= p.bottom and x >= p.left and x <= p.right) {
-                        switch (p.layer) {
-                            .below => expected_below = p.el,
-                            .positioned => expected_positioned = p.el,
-                            .flow => expected_flow = p.el,
+                        if (expected == null or p.order.covers(expected_order)) {
+                            expected = p.el;
+                            expected_order = p.order;
                         }
                     }
                 }
-                const expected = expected_positioned orelse expected_flow orelse expected_below;
                 const hit = try doc.hitTest(x, y, frame);
                 if (hit != expected) {
                     std.debug.print("sheet {d} step {d} point {d},{d}: hit {?*} expected {?*}\n", .{ seed, step, x, y, hit, expected });

@@ -55,6 +55,7 @@ pub const HTMLDocument = @import("HTMLDocument.zig");
 
 const log = lp.log;
 const String = lp.String;
+const Allocator = std.mem.Allocator;
 
 const Document = @This();
 
@@ -1011,19 +1012,20 @@ pub fn hitTestVertical(self: *Document, y: f64, frame: *Frame) !?*Element {
 fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
     // DFS in flat-tree order (shadow content inside its host, slotted nodes
     // inside their slot, as layout.zig lays them out); topmost = last visited
-    // element whose rect contains (x, y).
+    // element whose rect contains (x, y) that paints over the others.
     //
     // Positioned boxes and their subtrees paint above the normal flow, in
     // tree order (CSS 2.1 Appendix E, z-index: auto). So a hit there wins
-    // over one in the flow, even one that comes later in the tree. Those
-    // with a negative z-index paint below the flow instead, so they lose to
-    // it. Other z-index values aren't ordered: they count as auto.
+    // over one in the flow, even one that comes later in the tree. One with
+    // a z-index makes a stacking context, ordered by it among its siblings
+    // and above or below the flow: see StyleManager.Stacking.
     //
     // A display:none or inert subtree isn't walked: nothing in it opts out.
     // Neither is one whose band the point is outside of (see
     // StyleManager.HitBands), once a walk has recorded them: `recording`
     // is that walk, which skips nothing but display:none.
-    var topmost: std.EnumArray(StyleManager.HitFacts.PaintLayer, ?*Element) = .initFill(null);
+    var hit: ?*Element = null;
+    var hit_order: StyleManager.PaintOrder = undefined;
 
     const root = self.asNode();
     const owner = root.ownerFrame(frame) orelse return null;
@@ -1050,7 +1052,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // stack of their own: one is done once an entry of a shallower one pops.
     const Entry = struct { node: *Node, level: u32 };
     var levels: std.ArrayList(HitLevel) = .empty;
-    try levels.append(frame.local_arena, .{ .element = null, .facts = .{}, .row = false, .top = 0, .left = 0, .up = 0 });
+    try levels.append(frame.local_arena, .{ .element = null, .facts = .{}, .row = false, .top = 0, .left = 0, .up = 0, .stacking = &.{} });
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .level = 0 });
 
@@ -1082,7 +1084,6 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             // The bands don't know about inert, an attribute nothing else
             // here tracks: recording walks its subtree, for the boxes only.
             const inert = above.inert or element.hasInertAttribute();
-            const layer = facts.layer.under(above.layer);
             if (inert and recording == false) {
                 continue;
             }
@@ -1093,17 +1094,25 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             // opt back in, so the subtree is still walked. So is a subtree
             // that starts below y: a positioned box in it can sit higher.
             var left: ?f64 = null;
+            var stacking: ?*const StyleManager.Stacking = null;
             if (inert == false and facts.hittable and y >= top and y <= top + (recorded_height orelse layout.boxHeight(element, owner))) {
-                if (ignore_x) {
-                    topmost.set(layer, element);
-                } else {
+                var inside = true;
+                if (ignore_x == false) {
                     // only bother calculating the horiziontal position for
                     // elements contained by the vertical band
                     const l = HitLevel.leftOf(levels.items, element, facts, level, owner, frame);
-                    if (x >= l and x <= l + element.boxAxis(frame, .width)) {
-                        topmost.set(layer, element);
-                    }
+                    inside = x >= l and x <= l + element.boxAxis(frame, .width);
                     left = l;
+                }
+                if (inside) {
+                    // Read for a hit only: most boxes the walk visits aren't
+                    const own = try HitLevel.stackingOf(frame.local_arena, levels.items, level, element, facts, style_manager);
+                    const order = own.order();
+                    if (hit == null or order.covers(hit_order)) {
+                        hit = element;
+                        hit_order = order;
+                    }
+                    stacking = own;
                 }
             }
             if (node.flatFirstChild(frame) == null) {
@@ -1122,7 +1131,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
                 .up = level,
                 .band = band,
                 .inert = inert,
-                .layer = layer,
+                .stacking = stacking,
             });
             level = @intCast(levels.items.len - 1);
         }
@@ -1140,7 +1149,6 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         HitLevel.close(&levels, 1, recording, style_manager);
         style_manager.hitBandsRecorded();
     }
-    const hit = topmost.get(.positioned) orelse topmost.get(.flow) orelse topmost.get(.below);
     style_manager.setLastHit(point, hit);
     return hit;
 }
@@ -1165,7 +1173,10 @@ const HitLevel = struct {
     // When recording: element's box and those of its subtree walked so far
     band: StyleManager.HitBand = .none,
     inert: bool = false, // element or an ancestor
-    layer: StyleManager.HitFacts.PaintLayer = .flow, // see hitTestImpl
+    // element's, see stackingOf. Null: not read yet. A pointer, shared with
+    // the parent's when equal: most levels never read it, and a level is
+    // copied for each element with children the walk visits.
+    stacking: ?*const StyleManager.Stacking = null,
 
     // Drops the levels from `keep` up: their subtrees are walked. When
     // recording, each one's band is final, and part of its parent's.
@@ -1179,6 +1190,36 @@ const HitLevel = struct {
             style_manager.setHitBand(done.element.?, done.band);
             levels.items[done.up].band.add(done.band);
         }
+    }
+
+    // `element`'s Stacking, `index` its parent's level. Fills in those of
+    // the levels above it, so each box's z-index is read once per walk, and
+    // only above a hit.
+    fn stackingOf(allocator: Allocator, levels: []HitLevel, index: u32, element: *Element, facts: StyleManager.HitFacts, style_manager: *StyleManager) !*const StyleManager.Stacking {
+        // The open levels are the chain from the document (whose stacking
+        // is set) down to `index`
+        var i = index;
+        while (levels[i].stacking == null) {
+            i -= 1;
+        }
+        while (i < index) {
+            i += 1;
+            if (comptime lp.IS_DEBUG) {
+                std.debug.assert(levels[i].up == i - 1);
+            }
+            levels[i].stacking = try stackingUnder(allocator, levels[i - 1].stacking.?, levels[i].element.?, levels[i].facts, style_manager);
+        }
+        return stackingUnder(allocator, levels[index].stacking.?, element, facts, style_manager);
+    }
+
+    fn stackingUnder(allocator: Allocator, above: *const StyleManager.Stacking, element: *Element, facts: StyleManager.HitFacts, style_manager: *StyleManager) !*const StyleManager.Stacking {
+        const own: StyleManager.Stacking = try .of(allocator, above.*, element, facts, style_manager);
+        if (std.meta.eql(own, above.*)) {
+            return above;
+        }
+        const stacking = try allocator.create(StyleManager.Stacking);
+        stacking.* = own;
+        return stacking;
     }
 
     // `element`'s left in document coordinates, as Element.horizontalPosition
