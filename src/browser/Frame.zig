@@ -1993,12 +1993,20 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, body: []const u8) !
 
         switch (mime.content_type) {
             .text_html => {
-                // Normalize and store the charset using encoding_rs canonical names
-                const charset_str = mime.charsetString();
-                const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
-                if (info.isValid()) {
-                    const name = info.name();
-                    self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
+                if (Mime.bomCharset(body)) |name| {
+                    // BOM overrides the Content-Type charset and <meta>
+                    self.charset = name;
+                } else {
+                    // Normalize and store the charset using encoding_rs canonical names
+                    const charset_str = mime.charsetString();
+                    const info = h5e.encoding_for_label(charset_str.ptr, charset_str.len);
+                    if (info.isValid()) {
+                        const name = info.name();
+                        self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
+                    }
+                    if (mime.is_default_charset and html_prescan_found_charset == false) {
+                        self.charset = self.undeclaredCharset(body);
+                    }
                 }
                 self._parse_state = .{ .html = .{ .xml = false } };
             },
@@ -2059,6 +2067,26 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, body: []const u8) !
         .err => unreachable,
         .raw_done => unreachable,
     }
+}
+
+// Charset for an HTML body with no BOM, no Content-Type charset and no <meta>
+fn undeclaredCharset(self: *const Frame, body: []const u8) []const u8 {
+    if (self.parent) |parent| {
+        // Child inherits its parent value.
+        const utf16 = std.mem.startsWith(u8, parent.charset, "UTF-16");
+        if (utf16 == false and sameOrigin(self, parent)) {
+            // But we need to be a bit careful with UTF16, as that might have
+            // come from the parent's BOM, which would be their specific bytes.
+            return parent.charset;
+        }
+    }
+    // Otherwise the spec leaves the fallback to the browser (Chrome runs a
+    // detector that never picks UTF-8). We keep it as UTF8 unless it clearly
+    // isn't (too many invalid multibyte sequences). In that case, we
+    // fallback to windows-1252. Why? It shares the ascii range, and it +
+    // ISO-8859-1 are the most common legacy encodings (windows-1252 is a
+    // superset of ISO-8859-1). Want something fancier? encoding_rs crate.
+    return if (Mime.isLegacyEncoded(body)) "windows-1252" else "UTF-8";
 }
 
 fn frameDone(self: *Frame, body: []const u8) !void {

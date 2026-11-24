@@ -240,6 +240,62 @@ pub fn parseLenient(input: []const u8) !Mime {
     return parse(input[comma + 1 ..]) catch parse(input);
 }
 
+pub fn bomCharset(body: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, body, &.{ 0xEF, 0xBB, 0xBF })) {
+        return "UTF-8";
+    }
+    if (std.mem.startsWith(u8, body, &.{ 0xFE, 0xFF })) {
+        return "UTF-16BE";
+    }
+    if (std.mem.startsWith(u8, body, &.{ 0xFF, 0xFE })) {
+        return "UTF-16LE";
+    }
+    return null;
+}
+
+/// If a page declares no charset, what should we do? We'll scan it, and if
+/// the number of invalid multibyte sequences more than 10x the number of valid
+/// multibyte sequences, we'll report it as "legacy" and let the caller decide
+/// what to do with that information.
+pub fn isLegacyEncoded(body: []const u8) bool {
+    const chunk_len = comptime std.simd.suggestVectorLength(u8) orelse 16;
+    const Chunk = @Vector(chunk_len, u8);
+
+    var valid: usize = 0;
+    var invalid: usize = 0;
+    var i: usize = 0;
+    while (i < body.len) {
+        if (i + chunk_len <= body.len) {
+            const chunk: Chunk = body[i..][0..chunk_len].*;
+            if (@reduce(.Or, chunk) < 0x80) {
+                i += chunk_len;
+                continue;
+            }
+        }
+        if (body[i] < 0x80) {
+            i += 1;
+            continue;
+        }
+        const len = std.unicode.utf8ByteSequenceLength(body[i]) catch {
+            invalid += 1;
+            i += 1;
+            continue;
+        };
+        if (i + len > body.len) {
+            invalid += 1;
+            break;
+        }
+        _ = std.unicode.utf8Decode(body[i..][0..len]) catch {
+            invalid += 1;
+            i += 1;
+            continue;
+        };
+        valid += 1;
+        i += len;
+    }
+    return invalid > valid * 10;
+}
+
 /// Prescan the first 1024 bytes of an HTML document for a charset declaration.
 /// Looks for `<meta charset="X">` and `<meta http-equiv="Content-Type" content="...;charset=X">`.
 /// Returns the charset value or null if none found.
@@ -1272,6 +1328,38 @@ test "Mime: serialize" {
     try expectSerialize(arena, "x", "");
     try expectSerialize(arena, "/x", "");
     try expectSerialize(arena, "x/", "");
+}
+
+test "Mime: bomCharset" {
+    try testing.expectEqual(null, Mime.bomCharset(""));
+    try testing.expectEqual(null, Mime.bomCharset("<html>"));
+    try testing.expectEqual(null, Mime.bomCharset("\xef\xbb"));
+    try testing.expectEqual("UTF-8", Mime.bomCharset("\xef\xbb\xbf<html>").?);
+    try testing.expectEqual("UTF-16BE", Mime.bomCharset("\xfe\xff\x00<").?);
+    try testing.expectEqual("UTF-16LE", Mime.bomCharset("\xff\xfe<\x00").?);
+}
+
+test "Mime: isLegacyEncoded" {
+    try testing.expectEqual(false, Mime.isLegacyEncoded(""));
+    try testing.expectEqual(false, Mime.isLegacyEncoded("<p>plain ascii</p>"));
+    try testing.expectEqual(false, Mime.isLegacyEncoded("<p>caf\xc3\xa9 na\xc3\xafve</p>"));
+    // Latin-1 / windows-1252 bytes
+    try testing.expectEqual(true, Mime.isLegacyEncoded("<title>Caf\xe9</title><p>na\xefve r\xe9sum\xe9</p>"));
+    // windows-1252 smart quotes
+    try testing.expectEqual(true, Mime.isLegacyEncoded("\x93quoted\x94"));
+    // a UTF-8 page with one stray byte stays UTF-8
+    try testing.expectEqual(false, Mime.isLegacyEncoded("caf\xc3\xa9 r\xc3\xa9sum\xc3\xa9 stray \xe9"));
+    // truncated sequence at the end
+    try testing.expectEqual(true, Mime.isLegacyEncoded("abc\xe9"));
+    // Chinese UTF-8 with a few stray (GBK) bytes stays UTF-8
+    try testing.expectEqual(false, Mime.isLegacyEncoded("\xe4\xb8\xad\xe6\x96\x87 \xd6\xd0 \xe4\xb8\xad"));
+    // near-even split stays UTF-8
+    try testing.expectEqual(false, Mime.isLegacyEncoded("\xe4\xb8\xad\xe6\x96\x87 \xe9\xe9\xe9"));
+    // windows-1252 with an accidental valid pair ("É" + NBSP = C9 A0)
+    try testing.expectEqual(true, Mime.isLegacyEncoded("\xc9\xa0 caf\xe9 caf\xe9 caf\xe9 caf\xe9 caf\xe9 caf\xe9 caf\xe9 caf\xe9 caf\xe9 caf\xe9 caf\xe9"));
+    // long ASCII runs on both sides of the non-ASCII bytes (vector path)
+    try testing.expectEqual(true, Mime.isLegacyEncoded("<html><head><title>a long enough ascii prefix to fill a vector chunk</title></head><p>caf\xe9</p>" ++ "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+    try testing.expectEqual(false, Mime.isLegacyEncoded("<html><head><title>a long enough ascii prefix to fill a vector chunk</title></head><p>caf\xc3\xa9</p>" ++ "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
 }
 
 test "Mime: prescanCharset" {
