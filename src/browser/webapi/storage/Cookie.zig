@@ -984,6 +984,36 @@ pub const Jar = struct {
         origin_url: SiteForCookies,
     };
     pub fn forRequest(self: *Jar, target_url: [:0]const u8, writer: anytype, opts: LookupOpts) !void {
+        const Writer = struct {
+            writer: @TypeOf(writer),
+            prefix: ?[]const u8,
+            first: bool = true,
+
+            fn write(w: *@This(), cookie: *const Cookie) !void {
+                if (w.first) {
+                    if (w.prefix) |prefix| {
+                        try w.writer.writeAll(prefix);
+                    }
+                    w.first = false;
+                } else {
+                    try w.writer.writeAll("; ");
+                }
+                try writeCookie(cookie, w.writer);
+            }
+        };
+        var w: Writer = .{ .writer = writer, .prefix = opts.prefix };
+        return self.forEachForRequest(target_url, opts, &w, Writer.write);
+    }
+
+    // Calls `f` with each cookie a request to `target_url` sends, in the
+    // order they go in the Cookie header. `opts.prefix` is ignored.
+    pub fn forEachForRequest(
+        self: *Jar,
+        target_url: [:0]const u8,
+        opts: LookupOpts,
+        ctx: anytype,
+        comptime f: fn (@TypeOf(ctx), *const Cookie) anyerror!void,
+    ) !void {
         const target = PreparedUri.init(target_url);
         const same_site = areSameSite(opts.origin_url, target.host);
         const now = opts.request_time orelse lp.datetime.timestamp(.real);
@@ -993,7 +1023,6 @@ pub const Jar = struct {
             self.removeExpiredAt(g, now);
         }
 
-        var first = true;
         for (self.siteCookies(target.host)) |*cookie| {
             const applies = cookie.appliesTo(&target, .{
                 .same_site = same_site,
@@ -1005,17 +1034,7 @@ pub const Jar = struct {
                 continue;
             }
             cookie.last_access_time = now;
-
-            // we have a match!
-            if (first) {
-                if (opts.prefix) |prefix| {
-                    try writer.writeAll(prefix);
-                }
-                first = false;
-            } else {
-                try writer.writeAll("; ");
-            }
-            try writeCookie(cookie, writer);
+            try f(ctx, cookie);
         }
     }
 

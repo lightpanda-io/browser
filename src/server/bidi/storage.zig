@@ -115,7 +115,7 @@ pub const HttpCookie = struct {
 };
 
 // A network.Cookie.
-const BiDiCookie = struct {
+pub const BiDiCookie = struct {
     cookie: *const Cookie,
 
     pub fn jsonStringify(self: BiDiCookie, jws: anytype) !void {

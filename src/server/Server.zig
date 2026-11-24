@@ -1798,8 +1798,8 @@ test "server: bidi errors" {
     try c.bidiCommand("{\"id\":5,\"method\":\"session.over9000\"}");
     try assertBidiMessage(&c, .{ .type = "error", .id = 5, .@"error" = "unknown command", .message = "session.over9000" });
 
-    try c.bidiCommand("{\"id\":6,\"method\":\"network.addIntercept\"}");
-    try assertBidiMessage(&c, .{ .type = "error", .id = 6, .@"error" = "unknown command", .message = "network.addIntercept" });
+    try c.bidiCommand("{\"id\":6,\"method\":\"bluetooth.simulateAdapter\"}");
+    try assertBidiMessage(&c, .{ .type = "error", .id = 6, .@"error" = "unknown command", .message = "bluetooth.simulateAdapter" });
 
     try c.bidiCommand("{\"id\":7,\"method\":\"nodothere\"}");
     try assertBidiMessage(&c, .{ .type = "error", .id = 7, .@"error" = "unknown command", .message = "nodothere" });
