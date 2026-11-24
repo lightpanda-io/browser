@@ -147,6 +147,9 @@ pub fn build(b: *Build) !void {
     linkIsocline(b, lightpanda_module);
     linkSqlite(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile != null);
     linkPcre2(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile != null);
+    if (deps.target.result.abi.isMusl()) {
+        linkMimalloc(b, lightpanda_module, deps, orderfile != null);
+    }
 
     // Check compilation
     const check = b.step("check", "Check if lightpanda compiles");
@@ -574,6 +577,30 @@ fn linkPcre2(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.Sa
     const translator = translateC(b, mod, lib.getEmittedIncludeTree().path(b, "pcre2.h"));
     translator.defineCMacro("PCRE2_CODE_UNIT_WIDTH", "8");
     mod.addImport("pcre2", translator.mod);
+}
+
+/// Replaces the libc malloc on musl targets. Zig's libc malloc wraps
+/// std.heap.SmpAllocator, which never unmaps its small-allocation slabs, so
+/// memory freed after a connection stays resident. mimalloc's strong malloc
+/// symbols override Zig's weak ones.
+fn linkMimalloc(b: *Build, mod: *Build.Module, deps: Deps, section: bool) void {
+    const dep = b.dependency("mimalloc", .{});
+
+    const lib_mod = cLibModule(b, deps.target, deps.optimize, false);
+    lib_mod.addIncludePath(dep.path("include"));
+    lib_mod.addCSourceFile(.{
+        .file = dep.path("src/static.c"),
+        .flags = &.{ "-fno-builtin-malloc", "-ftls-model=initial-exec" },
+    });
+    lib_mod.addCMacro("MI_MALLOC_OVERRIDE", "1");
+    lib_mod.addCMacro("MI_LIBC_MUSL", "1");
+    lib_mod.addCMacro("MI_BUILD_RELEASE", "1");
+    // With THP allowed, mimalloc only purges 2MB ranges, so most freed
+    // memory stays resident. MIMALLOC_ALLOW_THP=1 still overrides it.
+    lib_mod.addCMacro("MI_DEFAULT_ALLOW_THP", "0");
+
+    const lib = sectionize(b.addLibrary(.{ .name = "mimalloc", .root_module = lib_mod }), section);
+    mod.linkLibrary(lib);
 }
 
 fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: bool) void {

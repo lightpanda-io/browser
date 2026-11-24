@@ -62,6 +62,11 @@
             .url = "git+https://github.com/lightpanda-io/arocc?ref=translate-c-2.0.0#d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b",
             .hash = "aro-0.0.0-JSD1QtuBNwCASyBtNF3pqTl_W3oAJQGEVyFAtrBSE_Pa",
         },
+        .mimalloc = .{
+            // v3.6.1
+            .url = "https://github.com/microsoft/mimalloc/archive/56dc5eb80145f9a3ba7ca23d47c6a248b9d8586c.tar.gz",
+            .hash = "N-V-__8AAJOFYQBE7uHkD0oSErMR1VLZCwa488H-Gf49jF5G",
+        },
     },
     .paths = .{""},
 }
