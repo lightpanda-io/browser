@@ -496,7 +496,7 @@ test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
             // message, like a real client, so the sleeps mean something.
             w.writeAll(goto_call ++ "\n") catch {};
             w.flush() catch {};
-            lp.io.sleep(.fromMilliseconds(500), .awake) catch {};
+            lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
             w.writeAll(wait_call ++ "\n") catch {};
             w.flush() catch {};
 
@@ -505,7 +505,7 @@ test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
             // second, unrelated cancellation lands before the dispatcher
             // consumes the first — both must be recorded, so the abort
             // isn't lost (a single cancellation slot strands the wait).
-            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
             w.writeAll(cancel_call ++ "\n") catch {};
             w.writeAll(unrelated_cancel ++ "\n") catch {};
             w.writeAll(evaluate_call ++ "\n") catch {};
@@ -516,10 +516,10 @@ test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
             // is_error result reading "promise: cancelled") instead of
             // propagating error.Cancelled. Per the spec it still gets no
             // reply.
-            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
             w.writeAll(promise_call ++ "\n") catch {};
             w.flush() catch {};
-            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
             w.writeAll(cancel_promise ++ "\n") catch {};
             w.writeAll(evaluate_2_call ++ "\n") catch {};
             w.flush() catch {};
@@ -534,7 +534,7 @@ test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
     try router.processRequests(server, &stdin.interface);
     const elapsed_ms = lp.datetime.milliTimestamp(.boot) - started;
 
-    // The wait call was abandoned after ~800ms; a server that ignores the
+    // The wait call was abandoned after ~150ms; a server that ignores the
     // cancellation holds the session for the wait's full 30s timeout.
     try testing.expect(elapsed_ms < 20000);
 
