@@ -359,6 +359,10 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         input,
         storage,
         emulation,
+        // An implementation may define extension modules. These must have a
+        // module name that contains a single colon ":" character.
+        // https://www.w3.org/TR/webdriver-bidi/#protocol-modules
+        @"lp:browsingContext",
     }, method[0..i]) orelse return unknownCommand(&cmd, method);
 
     // Only the session module is reachable without a session (it's what
@@ -376,6 +380,7 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         .input => @import("input.zig").processMessage(&cmd, action),
         .storage => @import("storage.zig").processMessage(&cmd, action),
         .emulation => @import("emulation.zig").processMessage(&cmd, action),
+        .@"lp:browsingContext" => @import("lp.zig").processMessage(&cmd, action),
     };
     result catch |err| {
         if (err == error.UnknownCommand and cmd.answered == false) {
