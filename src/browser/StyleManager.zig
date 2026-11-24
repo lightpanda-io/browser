@@ -2590,8 +2590,9 @@ fn heightWritten(self: *StyleManager, el: *Element) void {
 /// Nothing substitutes var() (yet).
 const property_reach = blk: {
     // layout reads everything, except what we explicitly ignore (safer option)
-    // A vertical inset only moves a positioned box, and that's applied on
-    // every read (layout.boxTop), never cached. z-index only orders a hit.
+    // A vertical inset moves a positioned box, or sizes one with both, and
+    // both are applied on every read (layout.boxTop, layout.insetHeight),
+    // never cached. z-index only orders a hit.
     const layout_ignores = [_]properties.Id{ .@"z-index", .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y", .top, .bottom, .@"inset-block", .@"inset-block-start", .@"inset-block-end" };
 
     // font-size isn't cascaded by any group, but text wraps at it
@@ -3689,6 +3690,32 @@ pub const BoxLength = union(enum) {
 };
 
 pub const Side = enum { top, right, bottom, left };
+
+/// The top and bottom insets an auto height spans between (CSS 2 §10.6.4):
+/// those of an absolutely positioned or fixed box with both. Null for any
+/// other box. Unlike with the width, a form control stretches too; a table
+/// and a replaced box keep their own height.
+pub fn heightInsets(self: *StyleManager, el: *Element) ?[2]BoxLength {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    if (self.flowProps(el).position.outOfFlow() == false) {
+        return null;
+    }
+    const top, const bottom = self.insets(el, .top, .bottom);
+    if (top == null or bottom == null) {
+        return null;
+    }
+    if (self.visibilityProps(el).box == .table) {
+        return null;
+    }
+    switch (el.getTag()) {
+        .input, .select, .textarea, .button => {},
+        else => |tag| if (tag.isReplacedOrControl()) {
+            return null;
+        },
+    }
+    return .{ top.?, bottom.? };
+}
 
 /// A positioned box's insets on one axis's two sides (top and bottom, or
 /// left and right). Null for auto, and for values that need layout.
@@ -9184,6 +9211,29 @@ test "StyleManager: a viewport change drops the layout" {
     try testing.expectEqual(100, layout.boxTop(p, frame));
     try testing.expectEqual(110, doc.extent().height);
     try testing.expectEqual(p, (try doc.hitTestVertical(105, frame)).?);
+}
+
+test "StyleManager: a box sized by its insets follows the viewport" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const browser = frame.page.session.browser;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style='position: fixed; top: 10px; bottom: 20px'></div>");
+    const overlay = body.firstChild().?.as(Element);
+
+    browser.setViewportOverride(.{ .width = 400, .height = 800, .scale = 1 });
+    defer browser.setViewportOverride(null);
+    try testing.expectEqual(770, layout.boxHeight(overlay, frame));
+    try testing.expectEqual(770, layout.boxHeight(overlay, frame));
+
+    browser.setViewportOverride(.{ .width = 400, .height = 200, .scale = 1 });
+    try testing.expectEqual(170, layout.boxHeight(overlay, frame));
 }
 
 test "StyleManager: the root's width follows the viewport" {

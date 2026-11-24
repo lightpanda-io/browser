@@ -1126,11 +1126,27 @@ pub fn boxHeight(self: *Element, owner: *Frame) f64 {
         style_manager.setCacheLayout(self, .box_height, height);
         return height;
     }
+    if (insetHeight(self, edges, owner)) |height| {
+        // Not cached: it follows its containing block's height, which no
+        // write to that block reaches
+        return height;
+    }
     const content = cached.content orelse measureContentHeight(self, owner);
     // The fallback stands in for an empty box, padding included
     const height = clampHeight(self, @max(own.value, content + edges.padding), edges, owner);
     style_manager.setCacheHeights(self, content, height);
     return height;
+}
+
+// The height of a box that spans between its vertical insets (see
+// StyleManager.heightInsets): what they leave of its containing block.
+// Vertical margins aren't taken out, as Anchor doesn't place by them either.
+fn insetHeight(self: *Element, edges: Edges, owner: *Frame) ?f64 {
+    const style_manager = &owner._style_manager;
+    const top, const bottom = style_manager.heightInsets(self) orelse return null;
+    const base = style_manager.containingBlock(self);
+    const spanned = containingSize(base, .vertical, owner) - resolveInset(top, base, .vertical, owner) - resolveInset(bottom, base, .vertical, owner);
+    return clampHeight(self, @max(spanned, edges.padding), edges, owner);
 }
 
 // Like the height, the limits are of the box `box-sizing` names
