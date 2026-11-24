@@ -214,14 +214,7 @@ fn cascadedValue(self: *const CSSStyleDeclaration, id: properties.Id, frame: *Fr
         const owner = element.ownerFrame(frame) orelse break :computed;
         const style_manager = &owner._style_manager;
         switch (id) {
-            .display => {
-                if (style_manager.hasDisplayNone(element)) {
-                    return "none";
-                }
-                if (style_manager.hasDisplayContents(element)) {
-                    return "contents";
-                }
-            },
+            .display => return computedDisplay(style_manager, element, owner),
             .visibility => if (style_manager.hasVisibilityHiddenInherited(element)) {
                 return "hidden";
             },
@@ -666,6 +659,11 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, id: properties.Id, value: []const
         const x = try self.setPropertyImpl(shorthand.x, values.x, important, frame);
         const y = try self.setPropertyImpl(shorthand.y, values.y, important, frame);
         return x or y;
+    }
+
+    if (id == .display and color.usesSubstitution(value) == false and StyleManager.DisplayKeyword.isValid(value) == false) {
+        // An invalid value leaves the declaration as it was
+        return false;
     }
 
     // Normalize the value for canonical serialization
@@ -1448,6 +1446,28 @@ fn initialValue(id: properties.Id) []const u8 {
     };
 }
 
+// The cascade's `display`, resolved: `display` doesn't inherit, so only an
+// explicit `inherit` reads the parent's.
+fn computedDisplay(style_manager: *StyleManager, element: *Element, frame: *Frame) []const u8 {
+    var current = element;
+    while (true) {
+        // Also the UA's hidden elements, and an ancestor's none an inherit reaches
+        if (style_manager.hasDisplayNone(current)) {
+            return "none";
+        }
+        if (style_manager.hasDisplayContents(current)) {
+            return "contents";
+        }
+        switch (style_manager.displayKeyword(current)) {
+            .ua => return getDefaultDisplay(current),
+            .inherit => current = current.asNode().flatTreeParentElement(frame) orelse return initialValue(.display),
+            // Only the root gets here with contents: it computes to block there
+            .contents => return "block",
+            else => |keyword| return keyword.computed().?,
+        }
+    }
+}
+
 /// The UA stylesheet's value for `element`, when it isn't the initial value.
 fn uaDefaultValue(element: *const Element, id: properties.Id) ?[]const u8 {
     return switch (id) {
@@ -1554,6 +1574,10 @@ test "WebApi: CSSStyleDeclaration computed transform" {
 
 test "WebApi: CSSStyleDeclaration computed content" {
     try testing.htmlRunner("css/computed_content.html", .{});
+}
+
+test "WebApi: CSSStyleDeclaration computed display" {
+    try testing.htmlRunner("css/computed_display.html", .{});
 }
 
 test "WebApi: CSSStyleDeclaration computed inheritance" {
