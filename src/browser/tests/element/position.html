@@ -588,6 +588,158 @@
 }
 </script>
 
+<script id="positionedBoxStretchesBetweenVerticalOffsets">
+{
+  // The height's twin of positionedBoxStretchesBetweenOffsets: with an auto
+  // height and both vertical insets, a positioned box spans its containing
+  // block less the insets (#4263: a `position: fixed; inset: 0` overlay
+  // over a form)
+  const outer = document.createElement('div');
+  outer.style.cssText = 'position: relative';
+  const tall = document.createElement('div');
+  tall.style.height = '200px';
+  const box = document.createElement('div');
+  const child = document.createElement('div');
+  child.style.height = '40px';
+  box.appendChild(child);
+  outer.append(tall, box);
+  document.body.appendChild(outer);
+
+  const height = (css) => { box.style.cssText = css; return box.offsetHeight; };
+  testing.expectEqual(200, height('position: absolute; inset: 0'));
+  testing.expectEqual(200, height('position: absolute; top: 0; bottom: 0'));
+  testing.expectEqual(170, height('position: absolute; top: 10px; bottom: 20px'));
+  testing.expectEqual(160, height('position: absolute; top: 10%; bottom: 10%'));
+  testing.expectEqual(200, height('position: absolute; inset-block: 0'));
+  // The padding is inside the stretched box, whatever box-sizing says
+  testing.expectEqual(200, height('position: absolute; inset: 0; padding: 10px'));
+  testing.expectEqual(200, height('position: absolute; inset: 0; padding: 10px; box-sizing: border-box'));
+  testing.expectEqual(50, height('position: absolute; inset: 0; height: 50px'));
+  testing.expectEqual(100, height('position: absolute; inset: 0; max-height: 100px'));
+  testing.expectEqual(500, height('position: absolute; inset: 0; min-height: 500px'));
+
+  // An auto side sizes to the content
+  testing.expectEqual(40, height('position: absolute; top: 0'));
+  testing.expectEqual(40, height('position: absolute; inset: 0; bottom: auto'));
+  // Offsets don't apply in flow
+  testing.expectEqual(40, height('top: 10px; bottom: 10px'));
+  testing.expectEqual(40, height('position: relative; top: 10px; bottom: 10px'));
+
+  // It follows its containing block as that grows
+  box.style.cssText = 'position: absolute; inset: 0';
+  testing.expectEqual(200, box.getBoundingClientRect().height);
+  tall.style.height = '300px';
+  testing.expectEqual(300, box.getBoundingClientRect().height);
+  const more = document.createElement('div');
+  more.style.height = '50px';
+  outer.appendChild(more);
+  testing.expectEqual(350, box.getBoundingClientRect().height);
+  more.remove();
+  testing.expectEqual(300, box.getBoundingClientRect().height);
+
+  // An inset or a class written after a read sizes it again
+  box.style.top = '100px';
+  testing.expectEqual(200, box.offsetHeight);
+  box.style.top = '0';
+  testing.expectEqual(300, box.offsetHeight);
+  const sheet = document.createElement('style');
+  sheet.textContent = '.pbsbvo-low { bottom: 50px !important }';
+  document.head.appendChild(sheet);
+  testing.expectEqual(300, box.offsetHeight);
+  box.classList.add('pbsbvo-low');
+  testing.expectEqual(250, box.offsetHeight);
+  box.classList.remove('pbsbvo-low');
+  testing.expectEqual(300, box.offsetHeight);
+
+  // The containing block grows through a class on a sibling of the box
+  sheet.textContent += '.pbsbvo-taller { height: 400px !important }';
+  tall.classList.add('pbsbvo-taller');
+  testing.expectEqual(400, box.offsetHeight);
+  tall.classList.remove('pbsbvo-taller');
+  testing.expectEqual(300, box.offsetHeight);
+
+  // A replaced box and a table keep their own height; a form control, like
+  // any other box, stretches
+  const kept = (html) => {
+    box.insertAdjacentHTML('afterend', html);
+    const el = box.nextElementSibling;
+    el.style.cssText += '; position: absolute; top: 0; bottom: 0; margin: 0';
+    const h = el.getBoundingClientRect().height;
+    el.remove();
+    return h;
+  };
+  testing.expectEqual(false, kept('<img>') === 300);
+  testing.expectEqual(false, kept('<progress></progress>') === 300);
+  testing.expectEqual(false, kept('<table><tr><td>x</td></tr></table>') === 300);
+  testing.expectEqual(false, kept('<div style="display: table">x</div>') === 300);
+  testing.expectEqual(300, kept('<button>b</button>'));
+  testing.expectEqual(300, kept('<textarea></textarea>'));
+  testing.expectEqual(300, kept('<div style="display: flex">x</div>'));
+  sheet.remove();
+
+  // A containing block with a declared height: what grows inside it doesn't
+  // move the box, a new declared height does
+  const fixedHeight = document.createElement('div');
+  fixedHeight.className = 'pbsbvo-cb';
+  fixedHeight.innerHTML = '<div><div style="height: 10px"></div></div><div style="position: absolute; inset: 0"></div>';
+  const fixedSheet = document.createElement('style');
+  fixedSheet.textContent = '.pbsbvo-cb { position: relative; height: 200px } .pbsbvo-cb.big { height: 250px }';
+  document.head.appendChild(fixedSheet);
+  document.body.appendChild(fixedHeight);
+  const pinned = fixedHeight.lastElementChild;
+  testing.expectEqual(200, pinned.offsetHeight);
+  fixedHeight.firstElementChild.firstElementChild.style.height = '500px';
+  testing.expectEqual(200, pinned.offsetHeight);
+  fixedHeight.classList.add('big');
+  testing.expectEqual(250, pinned.offsetHeight);
+  fixedHeight.remove();
+  fixedSheet.remove();
+
+  // A stretched box is the containing block of one inside it
+  child.style.cssText = 'position: absolute; top: 10px; bottom: 10px';
+  testing.expectEqual(280, child.offsetHeight);
+  child.style.cssText = 'height: 40px';
+
+  // A fixed box, or one with no positioned ancestor, sizes off the viewport
+  testing.expectEqual(window.innerHeight, height('position: fixed; inset: 0'));
+  testing.expectEqual(window.innerHeight - 30, height('position: fixed; top: 10px; bottom: 20px'));
+  outer.style.position = 'static';
+  testing.expectEqual(window.innerHeight, height('position: absolute; inset: 0'));
+  outer.remove();
+}
+</script>
+
+<script id="fixedInsetOverlayCoversWhatsBelow">
+{
+  // #4263: a busy overlay over a form. A control below the overlay's own
+  // text is covered too, as is one after the page scrolled.
+  const form = document.createElement('div');
+  form.innerHTML = '<div style="height: 120px"></div><button id="fio-submit">Submit</button><div style="height: 3000px"></div>';
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position: fixed; inset: 0; z-index: 99999; background: white';
+  overlay.textContent = 'Please wait';
+  document.body.append(form, overlay);
+
+  const submit = document.getElementById('fio-submit');
+  const center = () => {
+    const r = submit.getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  };
+  testing.expectEqual(overlay, document.elementFromPoint(...center()));
+  testing.expectEqual(overlay, document.elementFromPoint(window.innerWidth - 5, window.innerHeight - 5));
+
+  window.scrollTo(0, 100);
+  testing.expectEqual(0, overlay.getBoundingClientRect().top);
+  testing.expectEqual(window.innerHeight, overlay.getBoundingClientRect().height);
+  testing.expectEqual(overlay, document.elementFromPoint(...center()));
+  window.scrollTo(0, 0);
+
+  overlay.remove();
+  testing.expectEqual(submit, document.elementFromPoint(...center()));
+  form.remove();
+}
+</script>
+
 <script id="positionedBoxStretchesBetweenOffsets">
 {
   // An absolutely positioned box with an auto width, pinned on both sides,
