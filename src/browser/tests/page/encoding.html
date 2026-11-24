@@ -95,37 +95,69 @@
   }
 </script>
 
-<script id="no_charset_fallback" type=module>
+<script id="no_charset_same_origin_inherits" type=module>
   {
     const state = await testing.async();
 
-    // GBK bytes with NO charset declaration anywhere. They aren't valid
-    // UTF-8, so the page falls back to windows-1252: wrong for GBK, but no
-    // bytes are lost to U+FFFD.
-    const iframe = document.createElement('iframe');
-    document.body.appendChild(iframe);
-    iframe.src = 'encoding/no_charset.html';
-    iframe.onload = () => { state.resolve(); }
+    // A same-origin child that declares nothing inherits the parent's
+    // UTF-8, with no detection: invalid bytes become U+FFFD.
+    const files = ['no_charset.html', 'latin1_no_charset.html', 'utf8_stray_byte.html'];
+    const docs = {};
+    for (const f of files) {
+      const iframe = document.createElement('iframe');
+      iframe.onload = () => {
+        docs[f] = iframe.contentDocument;
+        if (Object.keys(docs).length === files.length) state.resolve();
+      };
+      iframe.src = 'encoding/' + f;
+      document.body.appendChild(iframe);
+    }
 
     await state.done(() => {
-      testing.expectEqual('\u00D6\u00D0\u00CE\u00C4', iframe.contentDocument.getElementById('test').textContent);
-      testing.expectEqual('windows-1252', iframe.contentDocument.characterSet);
+      for (const f of files) {
+        testing.expectEqual('UTF-8', docs[f].characterSet);
+      }
+      testing.expectEqual('\uFFFD\uFFFD\uFFFD\uFFFD', docs['no_charset.html'].getElementById('test').textContent);
+      testing.expectEqual('Caf\uFFFD', docs['latin1_no_charset.html'].title);
+      testing.expectEqual('café résumé \uFFFD', docs['utf8_stray_byte.html'].getElementById('test').textContent);
     });
   }
 </script>
 
-<script id="no_charset_latin1" type=module>
+<script id="no_charset_cross_origin_fallback" type=module>
   {
     const state = await testing.async();
-    const iframe = document.createElement('iframe');
-    document.body.appendChild(iframe);
-    iframe.src = 'encoding/latin1_no_charset.html';
-    iframe.onload = () => { state.resolve(); }
+
+    // A cross-origin child doesn't inherit, so the browser's own fallback
+    // applies. The fixtures post what they decoded.
+    const cross = 'http://localhost:9582';
+    const files = ['no_charset.html', 'latin1_no_charset.html', 'utf8_stray_byte.html'];
+    const got = {};
+    window.addEventListener('message', (e) => {
+      if (e.origin !== cross) return;
+      got[e.data.file] = e.data;
+      if (Object.keys(got).length === files.length) state.resolve();
+    });
+    for (const f of files) {
+      const iframe = document.createElement('iframe');
+      iframe.src = cross + '/src/browser/tests/page/encoding/' + f;
+      document.body.appendChild(iframe);
+    }
 
     await state.done(() => {
-      testing.expectEqual('Caf\u00E9', iframe.contentDocument.title);
-      testing.expectEqual('na\u00EFve r\u00E9sum\u00E9', iframe.contentDocument.getElementById('test').textContent);
-      testing.expectEqual('windows-1252', iframe.contentDocument.characterSet);
+      const latin1 = got['latin1_no_charset.html'];
+      testing.expectEqual('windows-1252', latin1.cs);
+      testing.expectEqual('Café', latin1.title);
+      testing.expectEqual('naïve résumé', latin1.text);
+
+      testing.diverges('Chrome detects GBK; we fall back to windows-1252', () => {
+        testing.expectEqual('windows-1252', got['no_charset.html'].cs);
+        testing.expectEqual('\u00D6\u00D0\u00CE\u00C4', got['no_charset.html'].text);
+      });
+      testing.diverges('Chrome never detects UTF-8 (it picks ISO-8859-4 here); we keep mostly-valid UTF-8', () => {
+        testing.expectEqual('UTF-8', got['utf8_stray_byte.html'].cs);
+        testing.expectEqual('café résumé \uFFFD', got['utf8_stray_byte.html'].text);
+      });
     });
   }
 </script>
@@ -164,24 +196,6 @@
       testing.expectEqual('UTF-8', doc.characterSet);
       // the BOM itself isn't content
       testing.expectEqual('test', doc.body.firstChild.id);
-    });
-  }
-</script>
-
-<script id="no_charset_utf8_stray_byte" type=module>
-  {
-    const state = await testing.async();
-
-    // Mostly UTF-8 with one invalid byte: stays UTF-8, only the stray
-    // byte becomes U+FFFD.
-    const iframe = document.createElement('iframe');
-    document.body.appendChild(iframe);
-    iframe.src = 'encoding/utf8_stray_byte.html';
-    iframe.onload = () => { state.resolve(); }
-
-    await state.done(() => {
-      testing.expectEqual('caf\u00E9 r\u00E9sum\u00E9 \uFFFD', iframe.contentDocument.getElementById('test').textContent);
-      testing.expectEqual('UTF-8', iframe.contentDocument.characterSet);
     });
   }
 </script>

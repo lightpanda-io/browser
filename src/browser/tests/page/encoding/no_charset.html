@@ -1,4 +1,5 @@
 <html>
 <head></head>
-<body><div id="test">中文</div></body>
+<body><div id="test">中文</div><script>parent.postMessage({file: location.pathname.split("/").pop(), cs: document.characterSet, title: document.title, text: document.getElementById("test").textContent}, "*")</script>
+</body>
 </html>

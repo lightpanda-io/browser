@@ -1,4 +1,5 @@
 <html>
 <head></head>
-<body><div id="test">café résumé �</div></body>
+<body><div id="test">café résumé �</div><script>parent.postMessage({file: location.pathname.split("/").pop(), cs: document.characterSet, title: document.title, text: document.getElementById("test").textContent}, "*")</script>
+</body>
 </html>
