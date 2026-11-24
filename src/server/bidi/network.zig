@@ -51,6 +51,16 @@ fn onHttpRequestStart(ptr: *anyopaque, msg: *const Notification.RequestStart) !v
     // A redirect keeps the same transfer. The response of the previous hop
     // (the 3xx) is still on it, and is never delivered: report it here,
     // before the request of the next hop.
+    //
+    // TODO: the 3xx events report the wrong request. By now
+    // applyRedirectTarget has already changed the request for the next hop:
+    // the method can be GET, the body null, some headers are removed, and
+    // the cookies are the ones for the new url. Only the url is fixed (see
+    // Hop.redirect). Send these two events from the redirect `.follow` branch
+    // of HttpClient.processOneMessage instead, after materializeResponse and
+    // before followRedirect, while the request still describes the 3xx hop.
+    // Make sure CDP doesn't get those events for a 3xx: it reports the
+    // redirect in Network.requestWillBeSent's redirectResponse.
     if (msg.redirect_response) {
         try sendResponseEvent(bidi, "network.responseStarted", transfer, .redirect, .started);
         try sendResponseEvent(bidi, "network.responseCompleted", transfer, .redirect, .completed);
