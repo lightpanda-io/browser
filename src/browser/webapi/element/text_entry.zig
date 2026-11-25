@@ -31,7 +31,9 @@ const InputEvent = @import("../event/InputEvent.zig");
 pub fn TextEntry(comptime T: type) type {
     return struct {
         fn editingValue(self: *const T, frame: *Frame) ![]const u8 {
-            if (T == @import("html/TextArea.zig")) return self.getValue(frame.call_arena);
+            if (!@hasField(T, "_input_type")) {
+                return self.getValue(frame.call_arena);
+            }
             return self.getValue();
         }
 
