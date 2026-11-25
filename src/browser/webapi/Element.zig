@@ -2397,6 +2397,7 @@ fn writeScroll(self: *Element, write: ScrollWrite, frame: *Frame) !bool {
     }
     gop.value_ptr.x = x;
     gop.value_ptr.y = y;
+    Frame.observers.intersectionScrolled(owner);
     try self.scheduleScrollEvents(gop.value_ptr, owner);
     return true;
 }

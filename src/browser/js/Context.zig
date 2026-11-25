@@ -1409,17 +1409,6 @@ pub fn queueMutationDelivery(self: *Context) !void {
     }.run);
 }
 
-pub fn queueIntersectionChecks(self: *Context) !void {
-    self.enqueueMicrotask(struct {
-        fn run(ctx: *Context) void {
-            switch (ctx.global) {
-                .frame => |frame| Frame.observers.performScheduledIntersectionChecks(frame),
-                .worker => unreachable,
-            }
-        }
-    }.run);
-}
-
 pub fn queueIntersectionDelivery(self: *Context) !void {
     self.enqueueMicrotask(struct {
         fn run(ctx: *Context) void {

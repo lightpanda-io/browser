@@ -56,8 +56,13 @@ pub const Mutation = struct {
 pub const Intersection = struct {
     // List of active IntersectionObservers
     observers: std.ArrayList(*IntersectionObserver) = .empty,
-    check_scheduled: bool = false,
+    check_dirty: bool = false,
     delivery_scheduled: bool = false,
+    slow_check_scheduled: bool = false,
+    prompt_check_scheduled: bool = false,
+
+    check_streak: u8 = 0,
+    last_check_ms: u64 = 0,
 
     // Deliveries closer together than INTERSECTION_QUIET_MS form one burst.
     // Frame.init re-initializes the whole struct, so a navigation starts fresh.
@@ -165,15 +170,68 @@ pub fn scheduleIntersectionDelivery(frame: *Frame) !void {
     try frame.js.queueIntersectionDelivery();
 }
 
+// IOs are computed once per rendering opportunity, i.e. the same 5ms frequency.
+pub const INTERSECTION_CHECK_MS = 5;
+
+// IO is expensive. We hook into the attribution system and on a stream of
+// non-holding triggers, we only check every 100ms.
+pub const INTERSECTION_SLOW_CHECK_MS = 100;
+const INTERSECTION_STREAK = 3;
+const INTERSECTION_STREAK_GAP_MS = 2 * INTERSECTION_SLOW_CHECK_MS;
+
+/// Something that can move a target changed: the DOM, an observe(), a scroll,
+/// the viewport.
 pub fn scheduleIntersectionChecks(frame: *Frame) void {
-    if (frame._intersection.check_scheduled) {
+    const state = &frame._intersection;
+    if (state.observers.items.len == 0) {
         return;
     }
-    frame._intersection.check_scheduled = true;
-    frame.js.queueIntersectionChecks() catch |err| {
-        frame._intersection.check_scheduled = false;
+    state.check_dirty = true;
+    if (state.prompt_check_scheduled) {
+        return;
+    }
+
+    const now = lp.datetime.milliTimestamp(.boot);
+    const streaking = state.check_streak >= INTERSECTION_STREAK and now - state.last_check_ms <= INTERSECTION_STREAK_GAP_MS;
+    if (!streaking or js.Attribution.isTracked(frame.js.attribution.current())) {
+        frame.js.scheduler.add(frame, runPromptIntersectionCheck, INTERSECTION_CHECK_MS, .{
+            .name = "IntersectionObserver.checks",
+            .kind = .observer,
+        }) catch |err| {
+            log.err(.frame, "scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+            return;
+        };
+        state.prompt_check_scheduled = true;
+        return;
+    }
+
+    if (state.slow_check_scheduled) {
+        return;
+    }
+    frame.js.scheduler.add(frame, runSlowIntersectionCheck, INTERSECTION_SLOW_CHECK_MS, .{
+        .name = "IntersectionObserver.slowChecks",
+        .kind = .observer,
+        .blocks_done = false,
+    }) catch |err| {
         log.err(.frame, "scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+        return;
     };
+    state.slow_check_scheduled = true;
+}
+
+/// The frame's viewport moved (a scroll) or changed size.
+pub fn intersectionViewportMoved(frame: *Frame) void {
+    frame._intersection.last_delivery_ms = 0;
+    scheduleIntersectionChecks(frame);
+}
+
+/// A scroll in frame also moves every frame nested in it, and their observers
+/// are registered on them.
+pub fn intersectionScrolled(frame: *Frame) void {
+    intersectionViewportMoved(frame);
+    for (frame.child_frames.items) |child| {
+        intersectionScrolled(child);
+    }
 }
 
 pub fn scheduleResizeDelivery(frame: *Frame) void {
@@ -311,20 +369,54 @@ pub fn deliverResizes(frame: *Frame) void {
     }
 }
 
-pub fn performScheduledIntersectionChecks(frame: *Frame) void {
-    if (!frame._intersection.check_scheduled) {
+fn runPromptIntersectionCheck(ctx: *anyopaque) !?u32 {
+    const frame: *Frame = @ptrCast(@alignCast(ctx));
+    frame._intersection.prompt_check_scheduled = false;
+    performIntersectionChecks(frame);
+    return null;
+}
+
+fn runSlowIntersectionCheck(ctx: *anyopaque) !?u32 {
+    const frame: *Frame = @ptrCast(@alignCast(ctx));
+    frame._intersection.slow_check_scheduled = false;
+    performIntersectionChecks(frame);
+    return null;
+}
+
+fn performIntersectionChecks(frame: *Frame) void {
+    const state = &frame._intersection;
+    if (!state.check_dirty) {
         return;
     }
-    frame._intersection.check_scheduled = false;
+    state.check_dirty = false;
+
+    const now = lp.datetime.milliTimestamp(.boot);
+    state.check_streak = if (now - state.last_check_ms <= INTERSECTION_STREAK_GAP_MS) state.check_streak +| 1 else 1;
+    state.last_check_ms = now;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
     checkIntersections(frame) catch |err| {
         log.err(.frame, "frame.schedIntersectChecks", .{ .err = err, .type = frame._type, .url = frame.url });
     };
+    // delivery is queued as a microtask
+    ls.local.runMicrotasks();
 }
 
-// We report every attached element as fully visible, so a page that observes a
-// fresh sentinel from inside its own callback never settles: the replacement
-// intersects the moment it is attached. Observed on a storefront paginating
-// itself past page 18 at ~30 deliveries/s until the watchdog killed the page.
+// A page that observes a fresh sentinel from inside its own callback never
+// settles if the sentinel intersects the moment it is attached: content that
+// should push it out of view doesn't (our layout made it too short), or the
+// sentinel sits where content never reaches. Observed on a storefront
+// paginating itself past page 18 at ~30 deliveries/s until the watchdog killed
+// the page, back when every target was reported as intersecting.
+//
+// Only deliveries that report a target intersecting on its first check count
+// towards a burst: that is the runaway's signature. Targets entering and
+// leaving as the page scrolls or a carousel turns are ordinary, and a scroll or
+// viewport change also starts a new burst, since something outside the page's
+// observers paces those.
 //
 // A delivery count cannot separate this from a busy but healthy page: airbnb
 // legitimately needs up to ~50 deliveries per load, and the runaway had already
@@ -335,10 +427,10 @@ pub fn performScheduledIntersectionChecks(frame: *Frame) void {
 // Gaps inside a healthy burst stayed under 800ms; the runaway paused once for
 // 1.1s on a network stall.
 //
-// A chain that re-observes synchronously never leaves the microtask checkpoint,
-// so the clock alone would let it spin for the full limit. The per-burst count
-// exists for that case only; at 20x the busiest healthy page it is not a tuning
-// knob.
+// Each check is its own task, so even a chain that re-observes from inside its
+// callback advances one delivery per INTERSECTION_CHECK_MS: the per-burst count
+// stops it within about 5s, before the clock would. At 20x the busiest healthy
+// page it is not a tuning knob.
 pub const INTERSECTION_RUNAWAY_MS = 10_000;
 pub const INTERSECTION_QUIET_MS = 2_000;
 pub const INTERSECTION_BURST_LIMIT = 1024;
@@ -366,19 +458,24 @@ pub fn deliverIntersections(frame: *Frame) void {
     }
     frame._intersection.delivery_scheduled = false;
 
-    const now = lp.datetime.milliTimestamp(.boot);
-    if (now - frame._intersection.last_delivery_ms > INTERSECTION_QUIET_MS) {
-        frame._intersection.burst_start_ms = now;
-        frame._intersection.burst_deliveries = 0;
-        frame._intersection.runaway = false;
-    }
-    frame._intersection.last_delivery_ms = now;
-    frame._intersection.burst_deliveries += 1;
+    const counts = for (frame._intersection.observers.items) |observer| {
+        if (observer.reportsNewTargetIntersecting()) break true;
+    } else false;
+    if (counts) {
+        const now = lp.datetime.milliTimestamp(.boot);
+        if (now - frame._intersection.last_delivery_ms > INTERSECTION_QUIET_MS) {
+            frame._intersection.burst_start_ms = now;
+            frame._intersection.burst_deliveries = 0;
+            frame._intersection.runaway = false;
+        }
+        frame._intersection.last_delivery_ms = now;
+        frame._intersection.burst_deliveries += 1;
 
-    const too_long = now - frame._intersection.burst_start_ms > INTERSECTION_RUNAWAY_MS;
-    if (too_long or frame._intersection.burst_deliveries > INTERSECTION_BURST_LIMIT) {
-        disconnectRunawayIntersectionObservers(frame);
-        return;
+        const too_long = now - frame._intersection.burst_start_ms > INTERSECTION_RUNAWAY_MS;
+        if (too_long or frame._intersection.burst_deliveries > INTERSECTION_BURST_LIMIT) {
+            disconnectRunawayIntersectionObservers(frame);
+            return;
+        }
     }
 
     // snapshot and acquireRef because a the callback for observer A could

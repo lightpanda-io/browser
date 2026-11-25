@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<style>
+  body { margin: 0; }
+  .gone { display: none; }
+  .box { position: absolute; left: 0; width: 100px; height: 100px; }
+</style>
+<div id=spacer style="height: 5000px"></div>
+
+<script>
+  // The blocks below scroll and measure the one window: run them one at a time.
+  let queue = Promise.resolve();
+  function serial(fn) {
+    const run = queue.then(fn);
+    queue = run.catch(() => {});
+    return run;
+  }
+
+  // Every entry delivered for target, in order: its ratio (to two places)
+  // when intersecting, false when not.
+  function watch(target, options) {
+    const seen = [];
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        seen.push(entry.isIntersecting ? Math.round(entry.intersectionRatio * 100) / 100 : false);
+      }
+    }, options);
+    observer.observe(target);
+    return { seen, observer };
+  }
+
+  function box(top) {
+    const el = document.createElement('div');
+    el.className = 'box';
+    el.style.top = top + 'px';
+    return document.body.appendChild(el);
+  }
+</script>
+
+<script id=below_the_fold type=module>
+  // A target below the viewport isn't intersecting until it's scrolled into
+  // view, and stops when it's scrolled back out.
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const target = box(2000);
+    const { seen, observer } = watch(target);
+
+    await testing.nextFrame();
+    const initial = seen.slice();
+    window.scrollTo(0, 1950);
+    await testing.nextFrame();
+    const scrolled = seen.slice();
+    window.scrollTo(0, 0);
+    await testing.nextFrame();
+    observer.disconnect();
+    target.remove();
+    return { initial, scrolled, seen };
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([false], result.initial);
+    testing.expectEqual([false, 1], result.scrolled);
+    testing.expectEqual([false, 1, false], result.seen);
+  });
+</script>
+
+<script id=partial_thresholds type=module>
+  // Half of the target is above the bottom of the viewport.
+  const state = await testing.async();
+  const seen = await serial(async () => {
+    const target = box(window.innerHeight - 50);
+    const { seen, observer } = watch(target, { threshold: [0, 0.5, 1] });
+
+    await testing.nextFrame();
+    // fully visible: crosses the last threshold
+    target.style.top = '100px';
+    await testing.nextFrame();
+    // moving within the same threshold band reports nothing
+    target.style.top = '200px';
+    await testing.nextFrame();
+    observer.disconnect();
+    target.remove();
+    return seen;
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([0.5, 1], seen);
+  });
+</script>
+
+<script id=root_margin type=module>
+  // A positive rootMargin grows the viewport (over half of the box below
+  // it), a negative one shrinks it.
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const below = box(window.innerHeight + 50);
+    const grown = watch(below, { rootMargin: '100px' });
+    const plain = watch(below);
+    const top = box(0);
+    const shrunk = watch(top, { rootMargin: '-200px 0px 0px 0px' });
+
+    await testing.nextFrame();
+    for (const w of [grown, plain, shrunk]) w.observer.disconnect();
+    below.remove();
+    top.remove();
+    return { grown: grown.seen, plain: plain.seen, shrunk: shrunk.seen };
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([0.5], result.grown);
+    testing.expectEqual([false], result.plain);
+    testing.expectEqual([false], result.shrunk);
+  });
+</script>
+
+<script id=explicit_root type=module>
+  // Intersections are against the root's box, and a target outside the root
+  // never intersects it.
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const root = document.body.appendChild(document.createElement('div'));
+    root.style.cssText = 'position: absolute; top: 0; left: 0; width: 200px; height: 200px';
+    const inside = root.appendChild(document.createElement('div'));
+    inside.style.cssText = 'position: absolute; top: 150px; left: 0; width: 100px; height: 100px';
+    const outside = box(0);
+
+    const a = watch(inside, { root });
+    const b = watch(outside, { root });
+
+    await testing.nextFrame();
+    a.observer.disconnect();
+    b.observer.disconnect();
+    root.remove();
+    outside.remove();
+    return { inside: a.seen, outside: b.seen };
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([0.5], result.inside);
+    testing.expectEqual([false], result.outside);
+  });
+</script>
+
+<script id=display_none type=module>
+  // A display:none subtree isn't rendered, so its targets don't intersect
+  // until they're shown. visibility:hidden still has a box, so it does.
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const hiddenAttr = box(0);
+    hiddenAttr.hidden = true;
+    const hiddenParent = document.body.appendChild(document.createElement('div'));
+    hiddenParent.style.display = 'none';
+    const inHiddenParent = hiddenParent.appendChild(box(0));
+    const hiddenClass = box(0);
+    hiddenClass.classList.add('gone');
+    const invisible = box(0);
+    invisible.style.visibility = 'hidden';
+
+    const watched = {
+      hiddenAttr: watch(hiddenAttr),
+      inHiddenParent: watch(inHiddenParent),
+      hiddenClass: watch(hiddenClass),
+      invisible: watch(invisible),
+    };
+    const snapshot = () => Object.entries(watched).map(([name, w]) => `${name}: ${w.seen}`);
+
+    await testing.nextFrame();
+    const whileHidden = snapshot();
+
+    hiddenAttr.hidden = false;
+    hiddenParent.style.display = '';
+    hiddenClass.classList.remove('gone');
+    await testing.nextFrame();
+    for (const w of Object.values(watched)) w.observer.disconnect();
+    for (const el of [hiddenAttr, hiddenParent, hiddenClass, invisible]) el.remove();
+    return { whileHidden, shown: snapshot() };
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['hiddenAttr: false', 'inHiddenParent: false', 'hiddenClass: false', 'invisible: 1'], result.whileHidden);
+    testing.expectEqual(['hiddenAttr: false,1', 'inHiddenParent: false,1', 'hiddenClass: false,1', 'invisible: 1'], result.shown);
+  });
+</script>
+
+<script id=hidden_sentinel type=module>
+  // A pager that re-observes a hidden "load more" sentinel from its callback
+  // must not be told it intersects (YouTube Music fetched pages forever).
+  const state = await testing.async();
+  const loads = await serial(async () => {
+    const sentinel = box(0);
+    sentinel.hidden = true;
+    let loads = 0;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        loads += 1;
+        observer.unobserve(sentinel);
+        observer.observe(sentinel);
+      }
+    });
+    observer.observe(sentinel);
+
+    await testing.nextFrame();
+    await testing.nextFrame();
+    observer.disconnect();
+    sentinel.remove();
+    return loads;
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, loads);
+  });
+</script>
+
+<script id=scrolled_root type=module>
+  // Scrolling the root moves its content: targets enter and leave it.
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const root = document.body.appendChild(document.createElement('div'));
+    root.style.cssText = 'position: absolute; top: 0; left: 0; width: 150px; height: 100px; overflow-y: scroll';
+    const first = root.appendChild(document.createElement('div'));
+    const second = root.appendChild(document.createElement('div'));
+    for (const el of [first, second]) el.style.cssText = 'width: 100px; height: 100px';
+
+    const a = watch(first, { root });
+    const b = watch(second, { root, threshold: 1 });
+    await testing.nextFrame();
+    root.scrollTop = 100;
+    await testing.nextFrame();
+    a.observer.disconnect();
+    b.observer.disconnect();
+    root.remove();
+    return { first: a.seen, second: b.seen };
+  });
+
+  state.resolve();
+  await state.done(() => {
+    // first ends edge-adjacent to the root: still intersecting, and with the
+    // default threshold ratio 0 is in the same band as 1, so nothing new
+    testing.expectEqual([1], result.first);
+    // second starts edge-adjacent: below threshold 1, so not intersecting
+    testing.expectEqual([false, 1], result.second);
+  });
+</script>
+
+<script id=iframe_target type=module>
+  // A target in an iframe is clipped by the iframe's viewport, and its
+  // rootBounds is the top-level viewport (without its scrollbar).
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position: absolute; top: 0; left: 0; width: 300px; height: 300px; border: none';
+    iframe.srcdoc = "<style>body { margin: 0 }</style><div id=target style='position: absolute; top: 250px; width: 100px; height: 100px'></div>";
+    const loaded = new Promise((resolve) => iframe.onload = resolve);
+    document.body.appendChild(iframe);
+    await loaded;
+
+    let entry = null;
+    const observer = new IntersectionObserver((entries) => { entry = entries.at(-1); });
+    observer.observe(iframe.contentDocument.getElementById('target'));
+    await testing.nextFrame();
+    observer.disconnect();
+    iframe.remove();
+    return {
+      ratio: entry.intersectionRatio,
+      intersection: entry.intersectionRect.height,
+      rootWidth: entry.rootBounds.width,
+    };
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({ ratio: 0.5, intersection: 50, rootWidth: document.documentElement.clientWidth }, result);
+  });
+</script>
+
+<script id=iframe_parent_scroll type=module>
+  // An observer inside an iframe sees the top page's scroll: its implicit
+  // root is the top-level viewport.
+  const state = await testing.async();
+  const seen = await serial(async () => {
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position: absolute; top: 2000px; left: 0; width: 300px; height: 300px; border: none';
+    iframe.srcdoc = "<style>body { margin: 0 }</style><div id=target style='width: 100px; height: 100px'></div>";
+    const loaded = new Promise((resolve) => iframe.onload = resolve);
+    document.body.appendChild(iframe);
+    await loaded;
+
+    const win = iframe.contentWindow;
+    const seen = [];
+    const observer = new win.IntersectionObserver((entries) => {
+      for (const entry of entries) seen.push(entry.isIntersecting);
+    });
+    observer.observe(win.document.getElementById('target'));
+    await testing.nextFrame();
+    window.scrollTo(0, 1900);
+    await testing.nextFrame();
+    window.scrollTo(0, 0);
+    await testing.nextFrame();
+    observer.disconnect();
+    iframe.remove();
+    return seen;
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([false, true, false], seen);
+  });
+</script>

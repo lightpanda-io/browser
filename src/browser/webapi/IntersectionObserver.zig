@@ -42,13 +42,15 @@ const IntersectionObserver = @This();
 _rc: lp.RC = .{},
 _arena: *lp.Arena,
 _callback: js.Function.Global,
-_observing: std.ArrayList(*Element) = .empty,
+_observing: std.ArrayList(Observation) = .empty,
 _root: ?*Element = null,
 /// The `root` option as given (an Element or the Document), for the getter;
 /// `_root` is the element intersections are computed against.
 _root_node: ?*Node = null,
 /// rootMargin and scrollMargin, parsed and serialized back (four values).
 _root_margin: []const u8 = "0px 0px 0px 0px",
+/// rootMargin as applied: top, right, bottom, left.
+_root_margin_values: [4]Margin = @splat(.{ .value = 0, .percent = false }),
 _scroll_margin: []const u8 = "0px 0px 0px 0px",
 /// Sorted ascending, each in [0, 1].
 _threshold: []const f64 = &.{0.0},
@@ -56,14 +58,12 @@ _delay: i32 = 0,
 _track_visibility: bool = false,
 // these are RC'd (by us, and v8)
 _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .empty,
-// tracked targets that aren't reported as intersecting yet
-_tracked: std.AutoHashMapUnmanaged(*Element, Tracked) = .{},
 
-const Tracked = enum {
-    // observed, not checked yet
-    unchecked,
-    // got its initial isIntersecting:false entry
-    not_intersecting,
+// A target and what it was last reported as
+const Observation = struct {
+    target: *Element,
+    threshold_index: i32 = -1, // first check is always reported
+    is_intersecting: bool = false,
 };
 
 const ObserverInit = struct {
@@ -111,7 +111,8 @@ pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame)
         }
     };
 
-    const root_margin = try serializeMargin(arena.allocator(), try parseMargin(opts.rootMargin orelse "0px"));
+    const root_margin_values = try parseMargin(opts.rootMargin orelse "0px");
+    const root_margin = try serializeMargin(arena.allocator(), root_margin_values);
     const scroll_margin = try serializeMargin(arena.allocator(), try parseMargin(opts.scrollMargin orelse "0px"));
 
     // Each threshold is in [0, 1], sorted ascending; an empty list is [0].
@@ -137,6 +138,7 @@ pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame)
         ._root = root,
         ._root_node = opts.root,
         ._root_margin = root_margin,
+        ._root_margin_values = root_margin_values,
         ._scroll_margin = scroll_margin,
         ._threshold = threshold,
         ._delay = delay,
@@ -240,28 +242,24 @@ pub fn acquireRef(self: *IntersectionObserver) void {
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
-    // Check if already observing this target
-    for (self._observing.items) |elem| {
-        if (elem == target) {
+    for (self._observing.items) |observation| {
+        if (observation.target == target) {
             return;
         }
     }
 
-    try self._observing.append(self._arena.allocator(), target);
+    try self._observing.append(self._arena.allocator(), .{ .target = target });
     if (self._observing.items.len == 1) {
         try Frame.observers.registerIntersectionObserver(frame, self);
     }
-
-    try self._tracked.put(self._arena.allocator(), target, .unchecked);
     Frame.observers.scheduleIntersectionChecks(frame);
 }
 
 fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
     const original_length = self._observing.items.len;
-    for (self._observing.items, 0..) |elem, i| {
-        if (elem == target) {
+    for (self._observing.items, 0..) |observation, i| {
+        if (observation.target == target) {
             _ = self._observing.swapRemove(i);
-            _ = self._tracked.remove(target);
 
             // Remove any pending entries for this target.
             var j: usize = 0;
@@ -286,7 +284,6 @@ fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void 
 pub fn reset(self: *IntersectionObserver, page: *Page) void {
     releaseAll(self._pending_entries.items, page);
     self._pending_entries.clearRetainingCapacity();
-    self._tracked.clearRetainingCapacity();
     self._observing.clearRetainingCapacity();
 }
 
@@ -318,86 +315,198 @@ fn releaseAll(entries: []const *IntersectionObserverEntry, page: *Page) void {
     }
 }
 
-fn calculateIntersection(
-    self: *IntersectionObserver,
-    target: *Element,
-    frame: *Frame,
-) !IntersectionData {
-    const target_rect = target.boundingClientRectValues(frame);
-
-    // Use root element's rect or the faux-layout viewport.
-    const root_rect = if (self._root) |root|
-        root.boundingClientRectValues(frame)
-    else blk: {
-        const viewport = frame.page.getViewport();
-        break :blk DOMRect.Data{
-            .width = @floatFromInt(viewport.width),
-            .height = @floatFromInt(viewport.height),
-        };
-    };
-
-    // For a headless browser without real layout, we treat all elements as fully visible.
-    // This avoids fingerprinting issues (massive viewports) and matches the behavior
-    // scripts expect when querying element visibility.
-    return .{
-        .intersection_ratio = 1.0,
-        .intersection_rect = target_rect,
-        .bounding_client_rect = target_rect,
-        .root_bounds = root_rect,
-    };
-}
+const Rect = DOMRect.Data;
 
 const IntersectionData = struct {
+    is_intersecting: bool,
     intersection_ratio: f64,
-    intersection_rect: DOMRect.Data,
-    bounding_client_rect: DOMRect.Data,
-    root_bounds: DOMRect.Data,
+    intersection_rect: Rect,
+    bounding_client_rect: Rect,
+    root_bounds: Rect,
 };
 
-fn meetsThreshold(self: *IntersectionObserver, ratio: f64) bool {
-    for (self._threshold) |threshold| {
-        if (ratio >= threshold) {
-            return true;
-        }
+// What we report for a target that can't be measured against the root
+const not_computed: IntersectionData = .{
+    .is_intersecting = false,
+    .intersection_ratio = 0,
+    .intersection_rect = .{},
+    .bounding_client_rect = .{},
+    .root_bounds = .{},
+};
+
+// Rects are client rects (getBoundingClientRect), moved by the scroll offsets
+// of the scroll containers they're in.
+fn calculateIntersection(self: *const IntersectionObserver, target: *Element, frame: *Frame) IntersectionData {
+    // A display:none target has no box.
+    const owner = target.ownerFrame(frame) orelse return not_computed;
+    if (!target.asNode().isConnected() or !target.isVisible(frame)) {
+        return not_computed;
     }
-    return false;
+
+    // getBoundingClientRect doesn't apply the scroll offsets, Chrome's does
+    const target_rect = moved(target.boundingClientRectValuesForVisible(frame), scrolledBy(target, owner));
+    // What's left of the target as it's mapped towards the root (null once
+    // nothing is), and how far it moved from the target's own client space.
+    var visible: ?Rect = target_rect;
+    var offset: Point = .{};
+
+    const root_bounds: Rect = blk: {
+        if (self._root) |root| {
+            // The target must be inside the root, in the same document.
+            if (root == target or !root.asNode().contains(target.asNode())) {
+                return not_computed;
+            }
+            if (!root.isVisible(frame)) {
+                return not_computed;
+            }
+            const root_rect = moved(root.boundingClientRectValuesForVisible(frame), scrolledBy(root, owner));
+            break :blk self.applyRootMargin(root_rect);
+        }
+
+        // The implicit root is the top-level viewport: each frame's viewport
+        // clips the target on the way up, and its iframe places it in the
+        // parent's client space.
+        var current = owner;
+        while (current.parent) |parent| {
+            const iframe = (current.iframe orelse break).asElement();
+            if (visible) |rect| {
+                visible = intersect(rect, viewportRect(current));
+            }
+            if (!iframe.isVisible(parent)) {
+                visible = null;
+            }
+            const origin = iframe.clientOrigin(parent);
+            const scrolled = scrolledBy(iframe, parent);
+            const step: Point = .{ .x = origin.x - scrolled.x, .y = origin.y - scrolled.y };
+            if (visible) |rect| {
+                visible = moved(rect, .{ .x = -step.x, .y = -step.y });
+            }
+            offset = .{ .x = offset.x + step.x, .y = offset.y + step.y };
+            current = parent;
+        }
+        break :blk self.applyRootMargin(viewportRect(current));
+    };
+
+    const rect = intersect(visible orelse return notIntersecting(target_rect, root_bounds), root_bounds) orelse {
+        return notIntersecting(target_rect, root_bounds);
+    };
+    const target_area = target_rect.width * target_rect.height;
+    return .{
+        .is_intersecting = true,
+        // a zero-area target that touches the root is fully visible
+        .intersection_ratio = if (target_area > 0) (rect.width * rect.height) / target_area else 1,
+        // back in the target's client space
+        .intersection_rect = .{ .x = rect.x - offset.x, .y = rect.y - offset.y, .width = rect.width, .height = rect.height },
+        .bounding_client_rect = target_rect,
+        .root_bounds = root_bounds,
+    };
 }
 
-fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
-    const tracked = self._tracked.getEntry(target) orelse {
-        // If target isn't tracked then it was already reported. This is an
-        // important optimization which lets us skip the heavy work below.
-        // This function can be called a lot.
-        return;
+fn notIntersecting(target_rect: Rect, root_bounds: Rect) IntersectionData {
+    return .{
+        .is_intersecting = false,
+        .intersection_ratio = 0,
+        .intersection_rect = .{},
+        .bounding_client_rect = target_rect,
+        .root_bounds = root_bounds,
     };
+}
 
-    const node = target.asNode();
-    if (node.ownerFrame(frame) == null) {
-        // Frameless documents (DOMParser, createHTMLDocument) aren't rendered.
+const Point = struct { x: f64 = 0, y: f64 = 0 };
+
+fn moved(rect: Rect, by: Point) Rect {
+    return .{ .x = rect.x - by.x, .y = rect.y - by.y, .width = rect.width, .height = rect.height };
+}
+
+// Edge-adjacent rects intersect, with an empty intersection.
+fn intersect(a: Rect, b: Rect) ?Rect {
+    const left = @max(a.x, b.x);
+    const top = @max(a.y, b.y);
+    const right = @min(a.x + a.width, b.x + b.width);
+    const bottom = @min(a.y + a.height, b.y + b.height);
+    if (right < left or bottom < top) {
+        return null;
+    }
+    return .{ .x = left, .y = top, .width = right - left, .height = bottom - top };
+}
+
+fn viewportRect(frame: *Frame) Rect {
+    const window = frame.window;
+    return .{
+        .width = @floatFromInt(window.getInnerWidth(frame)),
+        .height = @floatFromInt(window.getInnerHeight(frame)),
+    };
+}
+
+// How far the scroll containers el is in have scrolled it.
+fn scrolledBy(el: *Element, owner: *Frame) Point {
+    const positions = &owner.page.element_scroll_positions;
+    if (positions.count() == 0) {
+        return .{};
+    }
+    var total: Point = .{};
+    var current = el.asNode().parentElement();
+    while (current) |ancestor| {
+        if (positions.get(ancestor)) |pos| {
+            total.x += @floatFromInt(pos.x);
+            total.y += @floatFromInt(pos.y);
+        }
+        current = ancestor.asNode().parentElement();
+    }
+    return total;
+}
+
+// rootMargin grows (or, negative, shrinks) the root's rect; percentages are
+// of the root's width for left and right, of its height for top and bottom.
+fn applyRootMargin(self: *const IntersectionObserver, rect: Rect) Rect {
+    const m = self._root_margin_values;
+    const top = resolveMargin(m[0], rect.height);
+    const right = resolveMargin(m[1], rect.width);
+    const bottom = resolveMargin(m[2], rect.height);
+    const left = resolveMargin(m[3], rect.width);
+    return .{
+        .x = rect.x - left,
+        .y = rect.y - top,
+        .width = @max(0, rect.width + left + right),
+        .height = @max(0, rect.height + top + bottom),
+    };
+}
+
+fn resolveMargin(margin: Margin, basis: f64) f64 {
+    const value: f64 = margin.value;
+    return if (margin.percent) value * basis / 100 else value;
+}
+
+// The index of the first threshold above the ratio, or the count when none
+// is. Not intersecting is 0, whatever the ratio, as Chrome has it.
+fn thresholdIndex(self: *const IntersectionObserver, data: IntersectionData) i32 {
+    if (!data.is_intersecting) {
+        return 0;
+    }
+    for (self._threshold, 0..) |threshold, i| {
+        if (threshold > data.intersection_ratio) {
+            return @intCast(i);
+        }
+    }
+    return @intCast(self._threshold.len);
+}
+
+fn checkIntersection(self: *IntersectionObserver, observation: *Observation, frame: *Frame) !void {
+    const target = observation.target;
+    if (target.ownerFrame(frame) == null) {
+        // A frameless document (DOMParser, createHTMLDocument) isn't rendered:
+        // nothing is reported until the target is adopted into one that is.
         return;
     }
-
-    const is_now_intersecting = node.isConnected() and self.meetsThreshold(1.0);
-    const data: IntersectionData = blk: {
-        if (is_now_intersecting) {
-            // Building the entry is the expensive part — getBoundingClientRect walks the
-            // document to fake a position (O(node count)) — so it only runs here.
-            break :blk try self.calculateIntersection(target, frame);
-        }
-        if (tracked.value_ptr.* == .not_intersecting) {
-            // Keep tracking so a later attach is reported.
-            return;
-        }
-
-        // The first check always reports as (a) not intersecting and (b) with
-        // empty rects. This is true whether or not it is attached.
-        break :blk .{
-            .intersection_ratio = 0,
-            .intersection_rect = .{},
-            .bounding_client_rect = .{},
-            .root_bounds = .{},
-        };
-    };
+    const data = self.calculateIntersection(target, frame);
+    const threshold_index = self.thresholdIndex(data);
+    // Below the first threshold isn't intersecting, even when the rects touch
+    // (w3c/IntersectionObserver#432); the ratio is still reported.
+    const is_intersecting = data.is_intersecting and threshold_index > 0;
+    if (threshold_index == observation.threshold_index and is_intersecting == observation.is_intersecting) {
+        return;
+    }
+    const first_check = observation.threshold_index == -1;
 
     const arena = try frame.getArena(.tiny, "IntersectionObserverEntry");
     errdefer arena.release();
@@ -408,18 +517,26 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         ._arena = arena,
         ._target = target,
         ._time = frame.window._performance.now(),
-        ._is_intersecting = is_now_intersecting,
+        ._is_intersecting = is_intersecting,
         ._root_bounds = try DOMRect.create(data.root_bounds, frame._factory),
         ._intersection_rect = try DOMRect.create(data.intersection_rect, frame._factory),
         ._bounding_client_rect = try DOMRect.create(data.bounding_client_rect, frame._factory),
         ._intersection_ratio = data.intersection_ratio,
+        ._new_target_intersecting = first_check and is_intersecting,
     };
     try self._pending_entries.append(self._arena.allocator(), entry);
-    if (is_now_intersecting) {
-        _ = self._tracked.removeByPtr(tracked.key_ptr);
-    } else {
-        tracked.value_ptr.* = .not_intersecting;
+    observation.threshold_index = threshold_index;
+    observation.is_intersecting = is_intersecting;
+}
+
+/// Whether a pending entry reports a target intersecting on its first check
+pub fn reportsNewTargetIntersecting(self: *const IntersectionObserver) bool {
+    for (self._pending_entries.items) |entry| {
+        if (entry._new_target_intersecting) {
+            return true;
+        }
     }
+    return false;
 }
 
 pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {
@@ -427,8 +544,8 @@ pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {
         return;
     }
 
-    for (self._observing.items) |target| {
-        try self.checkIntersection(target, frame);
+    for (self._observing.items) |*observation| {
+        try self.checkIntersection(observation, frame);
     }
 
     if (self._pending_entries.items.len > 0) {
@@ -465,6 +582,8 @@ pub const IntersectionObserverEntry = struct {
     _root_bounds: *DOMRect,
     _intersection_ratio: f64,
     _is_intersecting: bool,
+    // for the runaway guard (Frame.observers.deliverIntersections)
+    _new_target_intersecting: bool,
 
     pub fn deinit(self: *IntersectionObserverEntry, _: *Page) void {
         self._arena.release();
@@ -549,14 +668,11 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 
-// Infinite scroll: the callback observes a fresh sentinel, which we report as
-// intersecting the moment it is connected, so the page never settles on its own.
-// Old sentinels stay observed (_tracked keeps them from re-firing) so that the
-// observer stays registered on the frame for as long as it is alive. `deferred`
-// re-observes from a timer, one delivery per macrotask tick, the way a
-// fetch-driven pager behaves; otherwise the chain never leaves the microtask
-// checkpoint. New sentinels go first: an appended one would measure every
-// earlier sibling, making the chain quadratic.
+// Infinite scroll gone wrong: the callback observes a fresh sentinel at the top
+// of the page, inside the viewport, so it intersects at once and the page never
+// settles on its own. Old sentinels stay observed, keeping the observer
+// registered on the frame. `deferred` re-observes from a timer, the way a
+// fetch-driven pager behaves; otherwise from the callback itself.
 fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -577,15 +693,15 @@ fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
         \\})(
     ++ (if (deferred) "true" else "false") ++ ")", null);
 
-    frame.js.env.runMicrotasks();
-    try frame.js.env.runMacrotasks();
+    try tick(frame);
     try testing.expect(frame._intersection.last_delivery_ms != 0);
 }
 
-// Nested zero-delay timers are clamped to 4ms past a nesting depth of five, so
-// a yielding chain needs real time to pass between ticks.
+// Checks run INTERSECTION_CHECK_MS after the change, and nested zero-delay
+// timers are clamped to 4ms past a nesting depth of five, so a chain needs real
+// time to pass between ticks.
 fn tick(frame: *Frame) !void {
-    lp.io.sleep(.fromMilliseconds(5), .awake) catch {};
+    lp.io.sleep(.fromMilliseconds(Frame.observers.INTERSECTION_CHECK_MS), .awake) catch {};
     frame.js.env.runMicrotasks();
     try frame.js.env.runMacrotasks();
 }
@@ -597,13 +713,28 @@ fn tickUntilDisconnected(frame: *Frame) !void {
     }
 }
 
-test "WebApi: synchronous IntersectionObserver chain is disconnected" {
+test "WebApi: synchronous IntersectionObserver chain delivers once per check" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // The callback observes the next sentinel right away; it waits for the
+    // next rendering opportunity instead of spinning in this checkpoint.
+    try observeSentinelChain(frame, false);
+    try testing.expectEqual(1, frame._intersection.burst_deliveries);
+
+    try tick(frame);
+    try testing.expectEqual(2, frame._intersection.burst_deliveries);
+    try testing.expectEqual(true, Frame.observers.hasIntersectionObservers(frame));
+}
+
+test "WebApi: synchronous IntersectionObserver chain past the burst limit is disconnected" {
     testing.silenceLog(&.{.frame});
 
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
     try observeSentinelChain(frame, false);
+    frame._intersection.burst_deliveries = Frame.observers.INTERSECTION_BURST_LIMIT;
     try tickUntilDisconnected(frame);
 
     try testing.expectEqual(false, Frame.observers.hasIntersectionObservers(frame));
@@ -637,12 +768,88 @@ test "WebApi: IntersectionObserver delivery after a quiet gap starts a new burst
     frame._intersection.last_delivery_ms -|= Frame.observers.INTERSECTION_QUIET_MS + 1;
     const stale_start = frame._intersection.burst_start_ms;
 
+    // the timer observes the next sentinel, the check after it delivers
+    try tick(frame);
     try tick(frame);
 
     try testing.expectEqual(true, Frame.observers.hasIntersectionObservers(frame));
     try testing.expectEqual(false, frame._intersection.runaway);
     try testing.expectEqual(1, frame._intersection.burst_deliveries);
     try testing.expect(frame._intersection.burst_start_ms > stale_start);
+}
+
+test "WebApi: IntersectionObserver targets moving in and out don't count as a runaway" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // A carousel: the same observed slides keep entering and leaving the view.
+    _ = try ls.local.exec(
+        \\const root = document.documentElement ?? document.appendChild(document.createElement('html'));
+        \\const slide = root.appendChild(document.createElement('div'));
+        \\slide.style.cssText = 'position: absolute; left: 0; top: 0; width: 100px; height: 100px';
+        \\globalThis.entries = 0;
+        \\new IntersectionObserver((es) => { entries += es.length; }).observe(slide);
+        \\globalThis.turn = () => { slide.style.top = slide.style.top === '0px' ? '5000px' : '0px'; };
+    , null);
+    try tick(frame);
+    try testing.expectEqual(1, frame._intersection.burst_deliveries);
+
+    // A burst older than the limit, still going. Each turn comes from a
+    // script, so it's checked at the next frame.
+    frame._intersection.burst_start_ms -|= Frame.observers.INTERSECTION_RUNAWAY_MS + 1;
+    const attribution = frame.js.attribution;
+    for (0..4) |_| {
+        const scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+        _ = try ls.local.exec("turn()", null);
+        scope.exit();
+        try tick(frame);
+    }
+
+    try testing.expectEqual(true, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(false, frame._intersection.runaway);
+    try testing.expectEqual(5, try (try ls.local.exec("entries", null)).toU32());
+}
+
+test "WebApi: IntersectionObserver checks slow down only for a page that keeps changing" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec("new IntersectionObserver(() => {}).observe(document.createElement('div'))", null);
+    try tick(frame);
+
+    const state = &frame._intersection;
+    const now = lp.datetime.milliTimestamp(.boot);
+
+    // A one-off change from work that doesn't hold the page's settle (here,
+    // none at all) is checked at the next frame, before "done".
+    state.check_streak = 0;
+    Frame.observers.scheduleIntersectionChecks(frame);
+    try testing.expectEqual(true, state.prompt_check_scheduled);
+    try testing.expectEqual(true, frame.js.scheduler.blocksCompletion());
+    try tick(frame);
+
+    // Checks running back to back: the same change waits for the slow pace,
+    // without holding "done".
+    state.check_streak = 10;
+    state.last_check_ms = now;
+    Frame.observers.scheduleIntersectionChecks(frame);
+    try testing.expectEqual(false, state.prompt_check_scheduled);
+    try testing.expectEqual(true, state.slow_check_scheduled);
+    try testing.expectEqual(false, frame.js.scheduler.blocksCompletion());
+
+    // Work that holds the settle is checked at the next frame whatever.
+    const attribution = frame.js.attribution;
+    const scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+    Frame.observers.scheduleIntersectionChecks(frame);
+    scope.exit();
+    try testing.expectEqual(true, state.prompt_check_scheduled);
 }
 
 test "WebApi: IntersectionObserver" {
