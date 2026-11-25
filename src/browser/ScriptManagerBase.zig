@@ -803,6 +803,13 @@ pub const Script = struct {
 
         self.setContentType(transfer.contentType());
 
+        // https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+        // mutedErrors is true if response was CORS-cross-origin, i.e. fetched
+        // in no-cors mode and actually cross-origin. Based on the response
+        // (which redirects can't reset), not the request URL, matching how
+        // Fetch.zig decides a response is opaque.
+        self.muted = transfer.req.request_mode == .no_cors and transfer._cors_cross_origin;
+
         lp.assert(self.source.remote.items().len == 0, "ScriptManagerBase.Header buffer", .{ .len = self.source.remote.items().len });
 
         if (transfer.script_cache) |sc| {
