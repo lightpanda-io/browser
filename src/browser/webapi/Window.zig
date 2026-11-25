@@ -863,7 +863,7 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
-fn getInnerWidth(self: *const Window, frame: *Frame) u32 {
+pub fn getInnerWidth(self: *const Window, frame: *Frame) u32 {
     return self.iframeViewport(.width) orelse frame.page.getViewport().width;
 }
 
@@ -918,6 +918,7 @@ pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Fram
     self._scroll_pos.x = new_x;
     self._scroll_pos.y = new_y;
     self._scroll_pos.state = .scroll;
+    Frame.observers.intersectionScrolled(self._frame);
 
     // We dispatch scroll event asynchronously after 10ms. So we can throttle
     // them.

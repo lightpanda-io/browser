@@ -118,24 +118,22 @@
   });
 </script>
 
-<script id=delivered_in_microtask type=module>
+<script id=delivered_at_rendering_update type=module>
   // The spec delivers from the next rendering update, in a task.
   const state = await testing.async();
   const target = document.getElementById('target');
   let count = 0;
   const observer = new IntersectionObserver(() => { count += 1; });
   observer.observe(target);
-  // one microtask for the check, one for the delivery
   await Promise.resolve();
   await Promise.resolve();
-  testing.diverges('Lightpanda delivers in a microtask, not at the next rendering update', () => {
-    testing.expectEqual(1, count);
-  });
+  const in_microtasks = count;
   await testing.nextFrame();
   observer.disconnect();
 
   state.resolve();
   await state.done(() => {
+    testing.expectEqual(0, in_microtasks);
     testing.expectEqual(1, count);
   });
 </script>
