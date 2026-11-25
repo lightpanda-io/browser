@@ -1,0 +1,23 @@
+name: "CLA Lock"
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  lock:
+    # Lock only merged PRs, so nobody can edit or delete the CLA signature
+    # comments afterwards. A PR closed without a merge stays open to comments.
+    if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Lock the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/issues/$PR/lock"
