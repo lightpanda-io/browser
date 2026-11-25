@@ -845,12 +845,36 @@ fn getFrame(self: *Window, idx: usize, frame: *Frame) ?Access {
 }
 
 fn childFrame(self: *Window, idx: usize) ?*Window {
-    const target = self._frame.get() orelse return null;
-    const frames = target.child_frames.items;
+    const frames = self.orderedChildFrames();
     if (idx >= frames.len) {
         return null;
     }
+    return frames[idx].window;
+}
 
+// The first child frame, in tree order, whose name is `name`. The name is the
+// iframe's name attribute when the frame was created, or whatever the child
+// later set window.name to.
+pub fn getNamedFrame(self: *Window, name: []const u8, frame: *Frame) ?Access {
+    const child = self.namedChildFrame(name) orelse return null;
+    return Access.init(frame.window, child);
+}
+
+fn namedChildFrame(self: *Window, name: []const u8) ?*Window {
+    if (name.len == 0) {
+        return null;
+    }
+    for (self.orderedChildFrames()) |child| {
+        if (std.mem.eql(u8, child.window._name, name)) {
+            return child.window;
+        }
+    }
+    return null;
+}
+
+fn orderedChildFrames(self: *Window) []*Frame {
+    const target = self._frame.get() orelse return &.{};
+    const frames = target.child_frames.items;
     if (target.child_frames_sorted == false) {
         std.mem.sort(*Frame, frames, {}, struct {
             fn lessThan(_: void, a: *Frame, b: *Frame) bool {
@@ -864,7 +888,7 @@ fn childFrame(self: *Window, idx: usize) ?*Window {
         }.lessThan);
         target.child_frames_sorted = true;
     }
-    return frames[idx].window;
+    return frames;
 }
 
 fn getFramesLength(self: *const Window) u32 {
@@ -1431,15 +1455,20 @@ const CrossOriginWindow = struct {
         return .{ .window = window, .location = .{ .window = window } };
     }
 
-    fn getNamed(_: *CrossOriginWindow, name: []const u8) CrossOriginError!void {
-        return crossOriginNamed(name);
+    // A child browsing context is reachable by its name; any other name throws.
+    fn getNamed(self: *CrossOriginWindow, name: []const u8, frame: *Frame) CrossOriginError!Access {
+        const child = self.window.namedChildFrame(name) orelse return crossOriginNamed(name);
+        return Access.init(frame.window, child);
     }
 
     fn setNamed(_: *CrossOriginWindow, name: []const u8, _: js.Value) CrossOriginError!void {
         return crossOriginNamed(name);
     }
 
-    fn queryNamed(_: *CrossOriginWindow, name: []const u8) CrossOriginError!bool {
+    fn queryNamed(self: *CrossOriginWindow, name: []const u8) CrossOriginError!bool {
+        if (self.window.namedChildFrame(name) != null) {
+            return true;
+        }
         return crossOriginNamed(name);
     }
 

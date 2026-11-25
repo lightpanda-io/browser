@@ -2427,6 +2427,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     new_frame._http_owner.block_all = !loading;
     iframe._window = new_frame.window;
     errdefer iframe._window = null;
+    try new_frame.window.setName(iframe.asElement().getName() orelse "", self);
 
     // on first load, dispatch frame_created event
     self._session.notification.dispatch(.frame_child_frame_created, &.{
