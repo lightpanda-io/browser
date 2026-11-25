@@ -420,6 +420,11 @@ pub const ToolResult = struct {
         /// The REPL falls back to a chat model for the tools that have a
         /// prompt form; every other caller just reports it.
         missing_api_key,
+        /// The C API's structured mode turns these into a status.
+        navigation_failed,
+        /// Page script threw or its promise rejected.
+        script,
+        action_refused,
     };
 
     fn invalidParams(text: []const u8) ToolResult {
@@ -708,7 +713,7 @@ fn callInner(
     var result = dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
-                return .{ .text = text, .is_error = true };
+                return .{ .text = text, .is_error = true, .failure = .navigation_failed };
         }
         if (err == error.InvalidParams) {
             if (diagnoseArgTypes(arena, tool, normalized)) |msg|
@@ -1771,7 +1776,7 @@ fn runEval(
 
     const js_result = ls.local.compileAndRun(script, null) catch |err| {
         if (err == error.CompilationError) if (fallback) |fb| return runEval(arena, page, fb, null, pending_out, encoding);
-        return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true };
+        return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true, .failure = .script };
     };
 
     if (js_result.isPromise()) {
@@ -1787,7 +1792,7 @@ fn runEval(
 
     const text = evalResultText(arena, js_result, encoding) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
+        else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true, .failure = .script },
     };
     return .{ .text = text };
 }
@@ -1799,9 +1804,9 @@ fn settledResult(arena: std.mem.Allocator, promise: lp.js.Promise, try_catch: *l
     if (!rejected and settled.isUndefined()) return .{ .text = if (encoding == .json) "null" else "" };
     const text = (if (rejected) settled.toStringSliceWithAlloc(arena) else evalResultText(arena, settled, encoding)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .{ .text = try formatJsError(arena, try_catch, err), .is_error = true },
+        else => return .{ .text = try formatJsError(arena, try_catch, err), .is_error = true, .failure = .script },
     };
-    return .{ .text = text, .is_error = rejected };
+    return .{ .text = text, .is_error = rejected, .failure = if (rejected) .script else null };
 }
 
 /// Runs `page` until `promise` settles. Returns the error result when it
@@ -2170,6 +2175,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
             return .{
                 .text = "the page or the URL its form posts to is not https; refusing to fill a password into it",
                 .is_error = true,
+                .failure = .action_refused,
             };
         }
     }

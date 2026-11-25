@@ -48,6 +48,14 @@ const Status = enum(c_int) {
     internal = 8,
     // API misuse: double init, init after shutdown, null handle.
     misuse = 9,
+    // Page script threw or its promise rejected.
+    script = 10,
+    // The element or page refused the action (disabled, read-only, a
+    // cancelled edit, a password into a non-https form).
+    action_refused = 11,
+    // Structured sessions: the tool ran and reported a failure of another
+    // kind; its message is the result.
+    tool_failed = 12,
 };
 
 // Mirrored in include/lightpanda.h (lp_result), which documents the
@@ -104,6 +112,25 @@ const FetchOpts = extern struct {
     markdown_alternate: u64,
 
     const min_size = 136;
+};
+
+// Mirrored in include/lightpanda.h (lp_session_opts). Extensible: see
+// readOpts.
+const SessionOpts = extern struct {
+    structured: u64,
+
+    const min_size = 8;
+};
+
+// Mirrored in include/lightpanda.h (lp_page_state). An output struct, so
+// the caller's size bounds what is written: see writeOut.
+const PageState = extern struct {
+    url: Str,
+    title: Str,
+    http_status: u64,
+    navigated: u64,
+
+    const min_size = 48;
 };
 
 /// Reads an options struct the caller passed with its own `size`, the way
@@ -170,6 +197,9 @@ const SessionHandle = struct {
     cancel: ?Cancel,
     // Static @errorName of the last failing lp_call.
     last_error: []const u8,
+    structured: bool,
+    // Whether the last lp_call left a different document current.
+    navigated: bool,
 };
 
 // V8's platform is process-global and cannot be re-initialized after
@@ -378,15 +408,28 @@ fn fetchOpts(arena: std.mem.Allocator, opts_: ?*const FetchOpts, opts_size: usiz
     return fetch_opts;
 }
 
+/// The output counterpart of readOpts: a caller with a smaller struct gets
+/// the fields it knows, one with a bigger struct gets zeros past ours.
+fn writeOut(comptime T: type, value: T, out: *T, size: usize) void {
+    const dst: [*]u8 = @ptrCast(out);
+    const known = @min(size, @sizeOf(T));
+    @memcpy(dst[0..known], std.mem.asBytes(&value)[0..known]);
+    @memset(dst[known..size], 0);
+}
+
+fn checkOutSize(comptime T: type, size: usize) bool {
+    return size >= T.min_size and size % 8 == 0;
+}
+
 /// Create an isolated browsing session (its own V8 isolate, page, cookies
 /// and memory). Close with `lp_session_close`; any session still open at
 /// `lp_shutdown` is closed then.
-pub export fn lp_session_new(handle_: ?*BrowserHandle, out_: ?**SessionHandle) Status {
+pub export fn lp_session_new(handle_: ?*BrowserHandle, opts_: ?*const SessionOpts, opts_size: usize, out_: ?**SessionHandle) Status {
     const handle = handle_ orelse return .misuse;
     const out = out_ orelse return .misuse;
     if (app_state != .live) return .misuse;
 
-    out.* = createSession(handle) catch |err| {
+    out.* = createSession(handle, opts_, opts_size) catch |err| {
         handle.last_error = @errorName(err);
         return errStatus(err);
     };
@@ -399,7 +442,9 @@ pub export fn lp_session_new(handle_: ?*BrowserHandle, out_: ?**SessionHandle) S
 fn toolStatus(err: lp.tools.ToolError) Status {
     return switch (err) {
         error.FrameNotLoaded => .frame_not_loaded,
-        error.InvalidParams, error.InvalidSelector, error.InvalidNodeType, error.ScriptError, error.ActionRefused => .invalid_params,
+        error.InvalidParams, error.InvalidSelector, error.InvalidNodeType => .invalid_params,
+        error.ScriptError => .script,
+        error.ActionRefused => .action_refused,
         error.NodeNotFound => .node_not_found,
         error.NavigationFailed => .navigation_failed,
         error.Cancelled => .cancelled,
@@ -424,11 +469,20 @@ fn errStatus(err: anyerror) Status {
     return .internal;
 }
 
-fn createSession(handle: *BrowserHandle) !*SessionHandle {
+fn createSession(handle: *BrowserHandle, opts_: ?*const SessionOpts, opts_size: usize) !*SessionHandle {
+    const opts = try readOpts(SessionOpts, opts_, opts_size);
+    const structured = switch (opts.structured) {
+        0 => false,
+        1 => true,
+        else => return error.UnsupportedOption,
+    };
+
     const entry = try c_allocator.create(SessionHandle);
     errdefer c_allocator.destroy(entry);
 
     entry.owner = handle;
+    entry.structured = structured;
+    entry.navigated = false;
     entry.cancel = null;
     entry.last_error = "";
     entry.arena = .init(c_allocator);
@@ -490,12 +544,13 @@ pub export fn lp_call(
     const out = out_ orelse return .misuse;
     out.* = .empty;
     if (app_state != .live) return .misuse;
-    const tool = tool_ orelse return .invalid_params;
+    const tool = (tool_ orelse return .invalid_params)[0..tool_len];
 
     // At the start, not on the way out: the previous result must stay
     // valid until this call begins.
     _ = entry.arena.reset(.{ .retain_with_limit = result_retain_limit });
     entry.last_error = "";
+    entry.navigated = false;
     const arena = entry.arena.allocator();
 
     var args: ?std.json.Value = null;
@@ -506,21 +561,77 @@ pub export fn lp_call(
         };
     }
 
-    entry.ts.enterIsolate();
-    defer entry.ts.exitIsolate();
-
-    const result = lp.tools.call(arena, entry.ts.session, &entry.ts.registry, tool[0..tool_len], args, .{ .source = .script }) catch |err| {
-        entry.last_error = @errorName(err);
-        return toolStatus(err);
+    const result = blk: {
+        entry.ts.enterIsolate();
+        defer entry.ts.exitIsolate();
+        break :blk lp.tools.call(arena, entry.ts.session, &entry.ts.registry, tool, args, .{
+            .source = .script,
+            .structured = entry.structured,
+        }) catch |err| {
+            entry.last_error = @errorName(err);
+            const message = lp.tools.errorMessage(err);
+            out.* = .{ .text = message.ptr, .len = message.len, .is_error = true };
+            return toolStatus(err);
+        };
     };
-
+    entry.navigated = result.navigated;
     out.* = .{ .text = result.text.ptr, .len = result.text.len, .is_error = result.is_error };
-    // Argument errors come back in-band so a model can read them; a C caller
-    // gets the status too, with the message still in `out`.
-    if (result.failure == .invalid_params) {
-        entry.last_error = @errorName(error.InvalidParams);
-        return .invalid_params;
-    }
+    if (!result.is_error) return .ok;
+
+    const status = inBandStatus(result, entry.structured, std.meta.stringToEnum(lp.tools.Tool, tool) == null) orelse return .ok;
+    entry.last_error = switch (status) {
+        .invalid_params => "InvalidParams",
+        .navigation_failed => "NavigationFailed",
+        .script => "ScriptError",
+        .action_refused => "ActionRefused",
+        else => "ToolFailed",
+    };
+    return status;
+}
+
+/// The status for a failure the tool reported in the result rather than as
+/// an error: null leaves it in-band (`LP_OK` + `is_error`), which is what an
+/// LLM caller wants. Argument errors always get a status; structured
+/// sessions get one for every failure.
+fn inBandStatus(result: lp.tools.ToolResult, structured: bool, unknown_tool: bool) ?Status {
+    if (result.failure == .invalid_params) return .invalid_params;
+    if (!structured) return null;
+    if (unknown_tool) return .invalid_params;
+    const failure = result.failure orelse return .tool_failed;
+    return switch (failure) {
+        .invalid_params => .invalid_params,
+        .navigation_failed => .navigation_failed,
+        .script => .script,
+        .action_refused => .action_refused,
+        .missing_api_key => .tool_failed,
+    };
+}
+
+/// Where the session's page is now, and whether the last `lp_call` got it
+/// there. Strings live like an lp_result.
+pub export fn lp_session_page_state(entry_: ?*SessionHandle, out_: ?*PageState, out_size: usize) Status {
+    const entry = entry_ orelse return .misuse;
+    const out = out_ orelse return .misuse;
+    if (app_state != .live) return .misuse;
+    if (!checkOutSize(PageState, out_size)) return .invalid_params;
+
+    const frame = entry.ts.session.currentFrame() orelse return .frame_not_loaded;
+    const arena = entry.arena.allocator();
+    // Duped: the frame owns them, and a navigation frees them before the
+    // documented lifetime ends.
+    const url = arena.dupe(u8, frame.url) catch return .out_of_memory;
+    const title: ?[]const u8 = blk: {
+        entry.ts.enterIsolate();
+        defer entry.ts.exitIsolate();
+        const t = frame.getTitle() catch null orelse break :blk null;
+        break :blk arena.dupe(u8, t) catch return .out_of_memory;
+    };
+    writeOut(PageState, .{
+        .url = .{ .ptr = url.ptr, .len = url.len },
+        .title = if (title) |t| .{ .ptr = t.ptr, .len = t.len } else .{ .ptr = null, .len = 0 },
+        .http_status = frame._http_status orelse 0,
+        .navigated = @intFromBool(entry.navigated),
+    }, out, out_size);
     return .ok;
 }
 
@@ -641,6 +752,9 @@ test "c_api: mirrors the header ABI" {
     try testing.expectEqual(h.LP_ERR_OUT_OF_MEMORY, @backingInt(Status.out_of_memory));
     try testing.expectEqual(h.LP_ERR_INTERNAL, @backingInt(Status.internal));
     try testing.expectEqual(h.LP_ERR_MISUSE, @backingInt(Status.misuse));
+    try testing.expectEqual(h.LP_ERR_SCRIPT, @backingInt(Status.script));
+    try testing.expectEqual(h.LP_ERR_ACTION_REFUSED, @backingInt(Status.action_refused));
+    try testing.expectEqual(h.LP_ERR_TOOL_FAILED, @backingInt(Status.tool_failed));
 
     try testing.expectEqual(h.LP_FORMAT_HTML, @backingInt(Format.html));
     try testing.expectEqual(h.LP_FORMAT_MARKDOWN, @backingInt(Format.markdown));
@@ -665,6 +779,8 @@ test "c_api: mirrors the header ABI" {
     try expectSameLayout(h.lp_str, Str);
     try expectSameLayout(h.lp_options, InitOpts);
     try expectSameLayout(h.lp_fetch_opts, FetchOpts);
+    try expectSameLayout(h.lp_page_state, PageState);
+    try expectSameLayout(h.lp_session_opts, SessionOpts);
 
     // The exports are pub so this reflection sees them; a header prototype
     // must exist (compile error otherwise) and agree on arity and sizes.
@@ -727,7 +843,7 @@ fn expectSameLayout(comptime C: type, comptime Zig: type) !void {
 }
 
 test "c_api: options structs stay extensible" {
-    inline for (.{ InitOpts, FetchOpts }) |T| {
+    inline for (.{ InitOpts, FetchOpts, SessionOpts, PageState }) |T| {
         // An appended field landing in padding would leave sizeof unchanged,
         // and an older caller's garbage padding would read as that field.
         const info = @typeInfo(T).@"struct";
@@ -763,6 +879,24 @@ test "c_api: every lp.FetchOpts field is mirrored or excluded" {
         "pruned", // set internally by clutter removal
     };
     try expectFieldsCovered(lp.dump.Opts, dump_mirrored ++ dump_excluded);
+}
+
+/// Runs `tool`, checks the status, and for a failure that the message came
+/// back in the result with a matching error name.
+fn expectCall(session: *SessionHandle, tool: []const u8, args: ?[]const u8, status: Status, text: ?[]const u8) !void {
+    var result: Result = .empty;
+    const got = lp_call(session, tool.ptr, tool.len, if (args) |a| a.ptr else null, if (args) |a| a.len else 0, &result);
+    if (got != status) {
+        std.debug.print("{s} {s}: {t} ({s})\n", .{ tool, args orelse "", got, if (result.text) |t| t[0..result.len] else "" });
+        return error.TestUnexpectedResult;
+    }
+    if (text) |expected| try testing.expectEqualStrings(expected, result.text.?[0..result.len]);
+    if (status != .ok) {
+        try testing.expect(result.is_error);
+        try testing.expect(result.len > 0);
+        var len: usize = 0;
+        try testing.expect(lp_last_error(session, &len) != null and len > 0);
+    }
 }
 
 fn expectFieldsCovered(comptime T: type, comptime names: anytype) !void {
@@ -885,7 +1019,7 @@ test "c_api: null handles are rejected" {
     var result: Result = .empty;
     try testing.expectEqual(.misuse, lp_init(null, 0, null));
     try testing.expectEqual(.misuse, lp_call(null, "getUrl", "getUrl".len, null, 0, &result));
-    try testing.expectEqual(.misuse, lp_session_new(null, null));
+    try testing.expectEqual(.misuse, lp_session_new(null, null, 0, null));
     lp_session_close(null);
     try testing.expectEqual(null, result.text);
     try testing.expectEqual(null, lp_last_error(null, null));
@@ -907,7 +1041,7 @@ test "c_api: lifecycle" {
     try testing.expectEqual(.misuse, lp_init(null, 0, &second));
 
     var session: *SessionHandle = undefined;
-    try testing.expectEqual(.ok, lp_session_new(browser, &session));
+    try testing.expectEqual(.ok, lp_session_new(browser, null, 0, &session));
 
     var result: Result = .empty;
     // Unknown tool names come back in-band (is_error) so an LLM caller can
@@ -942,6 +1076,53 @@ test "c_api: lifecycle" {
     @memcpy(held[0..held_len], result.text.?[0..held_len]);
     try testing.expect(lp_session_pump(session) > 0);
     try testing.expect(std.mem.eql(u8, held[0..held_len], result.text.?[0..held_len]));
+
+    // Page state, after the getEnv calls above: nothing navigated yet.
+    var state: PageState = undefined;
+    try testing.expectEqual(.frame_not_loaded, lp_session_page_state(session, &state, @sizeOf(PageState)));
+
+    // A structured session: in-band failures become statuses, values JSON.
+    // This binary has no fixture server (its own V8 platform rules out
+    // testing.zig's setup), so the page is built in place.
+    var structured: *SessionHandle = undefined;
+    var unknown_opts: [2]u64 = .{ 1, 1 };
+    try testing.expectEqual(.invalid_params, lp_session_new(browser, @ptrCast(&unknown_opts), 16, &structured));
+    const session_opts: SessionOpts = .{ .structured = 1 };
+    try testing.expectEqual(.ok, lp_session_new(browser, &session_opts, @sizeOf(SessionOpts), &structured));
+    defer lp_session_close(structured);
+
+    try expectCall(structured, "goto", "{\"url\":\"about:blank\"}", .ok, null);
+    try testing.expectEqual(.ok, lp_session_page_state(structured, &state, @sizeOf(PageState)));
+    try testing.expectEqualStrings("about:blank", state.url.slice().?);
+    try testing.expectEqual(0, state.http_status);
+    try testing.expectEqual(1, state.navigated);
+
+    // Smaller than any published layout is a caller bug; a newer caller's
+    // extra fields come back zeroed.
+    var short: [5]u64 = @splat(0xaa);
+    try testing.expectEqual(.invalid_params, lp_session_page_state(structured, @ptrCast(&short), 40));
+    var long: [8]u64 = @splat(0xaa);
+    try testing.expectEqual(.ok, lp_session_page_state(structured, @ptrCast(&long), 64));
+    try testing.expectEqual(1, long[5]);
+    try testing.expectEqual(0, long[7]);
+
+    try expectCall(structured, "evaluate",
+        \\{"script":"document.body.innerHTML = '<button id=btn onclick=\"window.clicked = 1\">Go</button><input id=inp>'; '42'"}
+    , .ok, "\"42\"");
+    try expectCall(structured, "evaluate", "{\"script\":\"throw new Error('boom')\"}", .script, null);
+    try expectCall(structured, "click", "{\"selector\":\"#btn\"}", .ok, null);
+    try testing.expectEqual(.ok, lp_session_page_state(structured, &state, @sizeOf(PageState)));
+    try testing.expectEqual(0, state.navigated);
+    try expectCall(structured, "evaluate", "{\"script\":\"window.clicked\"}", .ok, "1");
+    try expectCall(structured, "click", "{\"selector\":\"#nope\"}", .node_not_found, null);
+    try expectCall(structured, "fill", "{\"selector\":\"#btn\",\"value\":\"x\"}", .invalid_params, null);
+    try expectCall(structured, "nosuchtool", null, .invalid_params, null);
+    // Not a failure kind of its own: the generic status, message in-band.
+    try expectCall(structured, "popups", "{\"follow\":99}", .tool_failed, null);
+
+    // The plain session keeps them in-band, for LLM callers.
+    try expectCall(session, "evaluate", "{\"url\":\"about:blank\",\"script\":\"throw new Error('boom')\"}", .ok, null);
+    try testing.expect(lp_call(session, "evaluate", "evaluate".len, "{\"script\":\"throw 1\"}", "{\"script\":\"throw 1\"}".len, &result) == .ok and result.is_error);
 
     // Twice: the second call reuses the lazily-created fetch browser; the
     // second url carries trailing garbage past its length.

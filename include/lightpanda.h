@@ -78,17 +78,27 @@ typedef enum lp_status {
     LP_ERR_OUT_OF_MEMORY = 7,
     LP_ERR_INTERNAL = 8,
     /* API misuse: double init, use after shutdown, NULL handle. */
-    LP_ERR_MISUSE = 9
+    LP_ERR_MISUSE = 9,
+    /* Page script threw or its promise rejected. */
+    LP_ERR_SCRIPT = 10,
+    /* The element or page refused the action: disabled or read-only, an
+     * edit the page cancelled, a password into a non-https form. */
+    LP_ERR_ACTION_REFUSED = 11,
+    /* Structured sessions only: the tool ran and reported a failure of no
+     * more specific kind. The message is the lp_result. */
+    LP_ERR_TOOL_FAILED = 12
+    /* Later versions may add codes: treat any unknown one as a failure. */
 } lp_status;
 
-/* Output of lp_fetch and lp_call. text points at len bytes — read-only,
- * not NUL-terminated — owned by the library: it stays valid until the next
- * lp_call on the same session (for lp_fetch: the next lp_fetch on the same
- * browser), or until that session/browser is torn down. Copy it out to keep
+/* Output of lp_fetch and lp_call. text points at len bytes —
+ * read-only, not NUL-terminated — owned by the library: it stays valid until
+ * the next call on the same session (for lp_fetch: the next lp_fetch on the
+ * same browser), or until that session/browser is torn down. Copy it out to keep
  * it longer — including before handing it to another thread. lp_session_pump
- * does not invalidate it. is_error signals an in-band page-level failure
- * (e.g. a JS throw inside evaluate/extract) whose message is in text; the
- * call itself still returns LP_OK. */
+ * does not invalidate it. is_error means the call failed and text is the
+ * message; for lp_call that holds whatever the status, including the LP_OK
+ * a plain session returns for a failure the page caused (see
+ * lp_session_opts). */
 typedef struct lp_result {
     const char *text;
     size_t len;
@@ -186,8 +196,23 @@ void lp_shutdown(lp_browser *browser);
 lp_status lp_fetch(lp_browser *browser, const char *url, size_t url_len,
                    const lp_fetch_opts *opts, size_t opts_size, lp_result *out);
 
-/* Create an isolated browsing session: its own page, cookies, JS heap. */
-lp_status lp_session_new(lp_browser *browser, lp_session **out);
+typedef struct lp_session_opts {
+    /* 0: results are written for a model to read, and a failure the page
+     *    caused (a JS throw, a navigation error, a refused click) is LP_OK
+     *    with is_error set and the message in the result, so an agent loop
+     *    can hand it back to the model.
+     * 1: for programs. Results are JSON where the tool can produce it
+     *    (evaluate's value, getCookies), and every failure is a status:
+     *    LP_ERR_NAVIGATION_FAILED, LP_ERR_SCRIPT, LP_ERR_ACTION_REFUSED,
+     *    LP_ERR_INVALID_PARAMS, or LP_ERR_TOOL_FAILED, with is_error set and
+     *    the message still in the result. */
+    uint64_t structured;
+} lp_session_opts;
+
+/* Create an isolated browsing session: its own page, cookies, JS heap.
+ * opts: see LP_OPTS; NULL with size 0 for defaults. */
+lp_status lp_session_new(lp_browser *browser, const lp_session_opts *opts, size_t opts_size,
+                         lp_session **out);
 
 /* Close a session. The pointer is invalid afterwards. Sessions still open
  * at lp_shutdown are closed then. */
@@ -204,6 +229,19 @@ void lp_session_close(lp_session *session);
 lp_status lp_call(lp_session *session, const char *tool, size_t tool_len,
                   const char *args_json, size_t args_json_len,
                   lp_result *out);
+
+/* Where the session's page is. An extensible output struct: pass its size;
+ * a library that knows fewer fields zeroes the rest. */
+typedef struct lp_page_state {
+    lp_str url;
+    lp_str title;                /* NULL ptr: none */
+    uint64_t http_status;        /* 0: no HTTP response (about:blank) */
+    uint64_t navigated;          /* the last lp_call left a different document */
+} lp_page_state;
+
+/* LP_ERR_FRAME_NOT_LOADED before the first navigation. Strings stay valid
+ * like an lp_result. */
+lp_status lp_session_page_state(lp_session *session, lp_page_state *out, size_t out_size);
 
 /* Pump background work (timers, in-flight fetches) once; returns how many
  * milliseconds the caller may sleep before pumping again. Only needed when
