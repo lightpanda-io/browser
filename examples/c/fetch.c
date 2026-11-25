@@ -16,17 +16,16 @@ int main(int argc, char **argv) {
     }
 
     lp_browser *browser = NULL;
-    lp_status status = lp_init(NULL, &browser);
+    lp_status status = lp_init(NULL, 0, &browser);
     if (status != LP_OK) {
         fprintf(stderr, "lp_init failed: %d\n", status);
         return 1;
     }
 
-    lp_fetch_opts opts = {0};
-    opts.format = LP_FORMAT_MARKDOWN;
-
     lp_result result = {0};
-    status = lp_fetch(browser, argv[1], strlen(argv[1]), &opts, &result);
+    status = lp_fetch(browser, argv[1], strlen(argv[1]),
+                      LP_OPTS(lp_fetch_opts, .format = LP_FORMAT_MARKDOWN, .strip = LP_STRIP_CLUTTER),
+                      &result);
     if (status != LP_OK) {
         fprintf(stderr, "lp_fetch failed: %d\n", status);
         lp_shutdown(browser);

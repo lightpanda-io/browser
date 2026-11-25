@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
     const char *url = argc > 1 ? argv[1] : "https://example.com";
 
     lp_browser *browser = NULL;
-    if (lp_init(NULL, &browser) != LP_OK) {
+    if (lp_init(NULL, 0, &browser) != LP_OK) {
         fprintf(stderr, "lp_init failed\n");
         return 1;
     }

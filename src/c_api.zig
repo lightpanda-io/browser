@@ -60,29 +60,67 @@ const Result = extern struct {
     const empty: Result = .{ .text = null, .len = 0, .is_error = false };
 };
 
-// Mirrored in include/lightpanda.h (lp_options), which documents the
-// sentinel values. Zero-initialized means defaults everywhere.
-const InitOpts = extern struct {
-    user_agent: ?[*]const u8,
-    user_agent_len: usize,
-    http_proxy: ?[*]const u8,
-    http_proxy_len: usize,
-    http_cache_dir: ?[*]const u8,
-    http_cache_dir_len: usize,
-    http_timeout_ms: u32,
-    watchdog_ms: i32,
+// Mirrored in include/lightpanda.h (lp_str).
+const Str = extern struct {
+    ptr: ?[*]const u8,
+    len: usize,
+
+    fn slice(self: Str) ?[]const u8 {
+        const ptr = self.ptr orelse return null;
+        return ptr[0..self.len];
+    }
 };
 
-// Mirrored in include/lightpanda.h (lp_fetch_opts). Formats and wait
-// conditions travel as plain ints so out-of-range values from C are
-// rejected instead of being illegal to load.
-const FetchOpts = extern struct {
-    format: c_int,
-    wait_ms: u32,
-    wait_until: c_int,
-    wait_selector: ?[*]const u8,
-    wait_selector_len: usize,
+// Mirrored in include/lightpanda.h (lp_options). Extensible: see readOpts.
+const InitOpts = extern struct {
+    user_agent: Str,
+    http_proxy: Str,
+    http_cache_dir: Str,
+    http_timeout_ms: u64,
+    watchdog_ms: i64,
+
+    // The size of the first published layout. Never changes: callers
+    // passing less are bugs, not older headers.
+    const min_size = 64;
 };
+
+// Mirrored in include/lightpanda.h (lp_fetch_opts). Extensible: see
+// readOpts. Enums travel as plain integers so out-of-range values from C
+// are rejected instead of being illegal to load.
+const FetchOpts = extern struct {
+    format: u64,
+    wait_until: u64,
+    wait_ms: u64,
+    wait_selector: Str,
+    wait_script: Str,
+    inject_scripts: ?[*]const Str,
+    inject_scripts_len: usize,
+    selector: Str,
+    strip: u64,
+    max_bytes: u64,
+    with_base: u64,
+    with_frames: u64,
+    fail_on_http_error: u64,
+    markdown_alternate: u64,
+
+    const min_size = 136;
+};
+
+/// Reads an options struct the caller passed with its own `size`, the way
+/// Linux's `copy_struct_from_user` does: fields past a smaller caller's
+/// struct read as zero (the default), and bytes past ours must be zero, so a
+/// newer caller's option is refused rather than ignored.
+fn readOpts(comptime T: type, ptr_: ?*const T, size: usize) error{ InvalidParams, UnsupportedOption }!T {
+    var opts = std.mem.zeroes(T);
+    const ptr = ptr_ orelse return if (size == 0) opts else error.InvalidParams;
+    if (size < T.min_size or size % 8 != 0) return error.InvalidParams;
+
+    const theirs: [*]const u8 = @ptrCast(ptr);
+    const known = @min(size, @sizeOf(T));
+    @memcpy(std.mem.asBytes(&opts)[0..known], theirs[0..known]);
+    if (std.mem.findNone(u8, theirs[known..size], &.{0}) != null) return error.UnsupportedOption;
+    return opts;
+}
 
 // Mirrored in include/lightpanda.h (lp_format).
 const Format = enum(c_int) {
@@ -100,6 +138,7 @@ const WaitUntil = enum(c_int) {
     networkalmostidle = 3,
     networkidle = 4,
     done = 5,
+    settled = 6,
 };
 
 const BrowserHandle = struct {
@@ -142,17 +181,18 @@ var app_state: AppState = .uninitialized;
 /// Initialize the library and return the process-wide browser handle.
 /// Callable exactly once per process; after `lp_shutdown` it fails with
 /// `misuse` forever (V8 cannot be re-initialized).
-pub export fn lp_init(opts_: ?*const InitOpts, out_: ?**BrowserHandle) Status {
+pub export fn lp_init(opts_: ?*const InitOpts, opts_size: usize, out_: ?**BrowserHandle) Status {
     const out = out_ orelse return .misuse;
     if (app_state != .uninitialized) return .misuse;
 
-    const handle = createBrowser(opts_) catch |err| return errStatus(err);
+    const opts = readOpts(InitOpts, opts_, opts_size) catch |err| return errStatus(err);
+    const handle = createBrowser(opts) catch |err| return errStatus(err);
     app_state = .live;
     out.* = handle;
     return .ok;
 }
 
-fn createBrowser(opts_: ?*const InitOpts) !*BrowserHandle {
+fn createBrowser(opts: InitOpts) !*BrowserHandle {
     const handle = try c_allocator.create(BrowserHandle);
     errdefer c_allocator.destroy(handle);
 
@@ -163,27 +203,24 @@ fn createBrowser(opts_: ?*const InitOpts) !*BrowserHandle {
     const arena = handle.config_arena.allocator();
 
     var mode: @FieldType(lp.Config.Mode, "embed") = .{};
-    if (opts_) |opts| {
-        if (opts.user_agent) |ua| {
-            const span = ua[0..opts.user_agent_len];
-            lp.Config.validateUserAgent(span) catch return error.InvalidParams;
-            mode.user_agent = try arena.dupe(u8, span);
-        }
-        if (opts.http_proxy) |proxy| {
-            mode.http_proxy = try arena.dupeSentinel(u8, proxy[0..opts.http_proxy_len], 0);
-        }
-        if (opts.http_cache_dir) |dir| {
-            mode.http_cache_dir = try arena.dupe(u8, dir[0..opts.http_cache_dir_len]);
-        }
-        if (opts.http_timeout_ms != 0) {
-            mode.http_timeout = std.math.cast(u31, opts.http_timeout_ms) orelse return error.InvalidParams;
-        }
-        // Config.watchdogMs treats 0 as "no watchdog" and null as the default.
-        if (opts.watchdog_ms < 0) {
-            mode.watchdog_ms = 0;
-        } else if (opts.watchdog_ms > 0) {
-            mode.watchdog_ms = @intCast(opts.watchdog_ms);
-        }
+    if (opts.user_agent.slice()) |ua| {
+        lp.Config.validateUserAgent(ua) catch return error.InvalidParams;
+        mode.user_agent = try arena.dupe(u8, ua);
+    }
+    if (opts.http_proxy.slice()) |proxy| {
+        mode.http_proxy = try arena.dupeSentinel(u8, proxy, 0);
+    }
+    if (opts.http_cache_dir.slice()) |dir| {
+        mode.http_cache_dir = try arena.dupe(u8, dir);
+    }
+    if (opts.http_timeout_ms != 0) {
+        mode.http_timeout = std.math.cast(u31, opts.http_timeout_ms) orelse return error.InvalidParams;
+    }
+    // Config.watchdogMs treats 0 as "no watchdog" and null as the default.
+    if (opts.watchdog_ms < 0) {
+        mode.watchdog_ms = 0;
+    } else if (opts.watchdog_ms > 0) {
+        mode.watchdog_ms = std.math.cast(u32, opts.watchdog_ms) orelse return error.InvalidParams;
     }
 
     handle.config = try lp.Config.init(c_allocator, "lightpanda", .{ .embed = mode });
@@ -233,6 +270,7 @@ pub export fn lp_fetch(
     url_: ?[*]const u8,
     url_len: usize,
     opts_: ?*const FetchOpts,
+    opts_size: usize,
     out_: ?*Result,
 ) Status {
     const handle = handle_ orelse return .misuse;
@@ -250,29 +288,10 @@ pub export fn lp_fetch(
     const arena = handle.fetch_arena.allocator();
     const url = arena.dupeSentinel(u8, url_ptr[0..url_len], 0) catch return .out_of_memory;
 
-    var fetch_opts: lp.FetchOpts = .{ .dump = .{}, .dump_mode = .html };
-    if (opts_) |opts| {
-        const format = std.enums.fromInt(Format, opts.format) orelse return .invalid_params;
-        fetch_opts.dump_mode = switch (format) {
-            .html => .html,
-            .markdown => .markdown,
-            .tree_json => .semantic_tree,
-            .tree_text => .semantic_tree_text,
-        };
-        if (opts.wait_ms != 0) fetch_opts.wait_ms = opts.wait_ms;
-        const wait_until = std.enums.fromInt(WaitUntil, opts.wait_until) orelse return .invalid_params;
-        fetch_opts.wait_until = switch (wait_until) {
-            .default => null,
-            .load => .load,
-            .domcontentloaded => .domcontentloaded,
-            .networkalmostidle => .networkalmostidle,
-            .networkidle => .networkidle,
-            .done => .done,
-        };
-        if (opts.wait_selector) |selector| {
-            fetch_opts.wait_selector = arena.dupeSentinel(u8, selector[0..opts.wait_selector_len], 0) catch return .out_of_memory;
-        }
-    }
+    var fetch_opts = fetchOpts(arena, opts_, opts_size) catch |err| {
+        handle.last_error = @errorName(err);
+        return errStatus(err);
+    };
 
     // Seeded so growth doubling doesn't strand superseded buffers in the
     // arena (it cannot free them); the seed itself is covered by the
@@ -305,6 +324,58 @@ pub export fn lp_fetch(
     const text = writer.written();
     out.* = .{ .text = text.ptr, .len = text.len, .is_error = false };
     return .ok;
+}
+
+/// Same rules as the `fetch` command's flag checks in main.zig.
+fn fetchOpts(arena: std.mem.Allocator, opts_: ?*const FetchOpts, opts_size: usize) !lp.FetchOpts {
+    const opts = try readOpts(FetchOpts, opts_, opts_size);
+
+    const format = std.enums.fromInt(Format, opts.format) orelse return error.UnsupportedOption;
+    const wait_until = std.enums.fromInt(WaitUntil, opts.wait_until) orelse return error.UnsupportedOption;
+    const strip = std.math.cast(@typeInfo(lp.dump.Opts.Strip).@"struct".backing_integer.?, opts.strip) orelse return error.UnsupportedOption;
+
+    var fetch_opts: lp.FetchOpts = .{
+        .dump_mode = switch (format) {
+            .html => .html,
+            .markdown => .markdown,
+            .tree_json => .semantic_tree,
+            .tree_text => .semantic_tree_text,
+        },
+        .wait_until = switch (wait_until) {
+            .default => null,
+            .load => .load,
+            .domcontentloaded => .domcontentloaded,
+            .networkalmostidle => .networkalmostidle,
+            .networkidle => .networkidle,
+            .done => .done,
+            .settled => .settled,
+        },
+        .dump = .{
+            .strip = @bitCast(strip),
+            .with_base = opts.with_base != 0,
+            .with_frames = opts.with_frames != 0,
+            .max_bytes = if (opts.max_bytes == 0) null else std.math.cast(u32, opts.max_bytes) orelse return error.InvalidParams,
+        },
+        .fail_on_http_error = opts.fail_on_http_error != 0,
+        .markdown_alternate = opts.markdown_alternate != 0,
+    };
+    if (opts.wait_ms != 0) {
+        fetch_opts.wait_ms = std.math.cast(u32, opts.wait_ms) orelse return error.InvalidParams;
+    }
+    if (opts.wait_selector.slice()) |selector| fetch_opts.wait_selector = try arena.dupeSentinel(u8, selector, 0);
+    if (opts.wait_script.slice()) |script| fetch_opts.wait_script = try arena.dupeSentinel(u8, script, 0);
+    if (opts.selector.slice()) |selector| fetch_opts.selector = try arena.dupeSentinel(u8, selector, 0);
+    if (opts.inject_scripts_len > 0) {
+        const scripts = opts.inject_scripts orelse return error.InvalidParams;
+        try fetch_opts.inject_script.ensureTotalCapacityPrecise(arena, opts.inject_scripts_len);
+        for (scripts[0..opts.inject_scripts_len]) |script| {
+            fetch_opts.inject_script.appendAssumeCapacity(try arena.dupe(u8, script.slice() orelse return error.InvalidParams));
+        }
+    }
+
+    if (fetch_opts.dump.max_bytes != null and format != .html and format != .markdown) return error.InvalidParams;
+    if (fetch_opts.markdown_alternate and (format != .markdown or fetch_opts.selector != null)) return error.InvalidParams;
+    return fetch_opts;
 }
 
 /// Create an isolated browsing session (its own V8 isolate, page, cookies
@@ -341,6 +412,11 @@ fn toolStatus(err: lp.tools.ToolError) Status {
 /// For the anyerror paths (init, fetch): tool errors keep their toolStatus
 /// mapping, anything else is internal.
 fn errStatus(err: anyerror) Status {
+    switch (err) {
+        error.UnsupportedOption => return .invalid_params,
+        error.HttpError => return .navigation_failed,
+        else => {},
+    }
     inline for (@typeInfo(lp.tools.ToolError).error_set.error_names.?) |name| {
         const tool_err = @field(lp.tools.ToolError, name);
         if (err == tool_err) return toolStatus(tool_err);
@@ -577,8 +653,16 @@ test "c_api: mirrors the header ABI" {
     try testing.expectEqual(h.LP_WAIT_NETWORKALMOSTIDLE, @backingInt(WaitUntil.networkalmostidle));
     try testing.expectEqual(h.LP_WAIT_NETWORKIDLE, @backingInt(WaitUntil.networkidle));
     try testing.expectEqual(h.LP_WAIT_DONE, @backingInt(WaitUntil.done));
+    try testing.expectEqual(h.LP_WAIT_SETTLED, @backingInt(WaitUntil.settled));
+
+    const strip_bits = .{ .{ h.LP_STRIP_JS, "js" }, .{ h.LP_STRIP_UI, "ui" }, .{ h.LP_STRIP_CSS, "css" }, .{ h.LP_STRIP_INVISIBLE, "invisible" }, .{ h.LP_STRIP_SHELL, "shell" }, .{ h.LP_STRIP_CLUTTER, "clutter" } };
+    inline for (strip_bits) |bit| {
+        try testing.expectEqual(bit[0], 1 << @bitOffsetOf(lp.dump.Opts.Strip, bit[1]));
+    }
+    try testing.expectEqual(@typeInfo(lp.dump.Opts.Strip).@"struct".field_names.len, strip_bits.len);
 
     try expectSameLayout(h.lp_result, Result);
+    try expectSameLayout(h.lp_str, Str);
     try expectSameLayout(h.lp_options, InitOpts);
     try expectSameLayout(h.lp_fetch_opts, FetchOpts);
 
@@ -594,6 +678,7 @@ test "c_api: mirrors the header ABI" {
     // counts catch a constant or function added to the header alone.
     try testing.expectEqual(@typeInfo(Format).@"enum".field_names.len, comptime countPrefixed(h, "LP_FORMAT_"));
     try testing.expectEqual(@typeInfo(WaitUntil).@"enum".field_names.len, comptime countPrefixed(h, "LP_WAIT_"));
+    try testing.expectEqual(strip_bits.len, comptime countPrefixed(h, "LP_STRIP_"));
     try testing.expectEqual(@typeInfo(Status).@"enum".field_names.len, comptime countPrefixed(h, "LP_ERR_") + 1); // + LP_OK
     try testing.expectEqual(comptime countFns(@This(), "lp_"), comptime countFns(h, "lp_"));
 }
@@ -641,6 +726,131 @@ fn expectSameLayout(comptime C: type, comptime Zig: type) !void {
     }
 }
 
+test "c_api: options structs stay extensible" {
+    inline for (.{ InitOpts, FetchOpts }) |T| {
+        // An appended field landing in padding would leave sizeof unchanged,
+        // and an older caller's garbage padding would read as that field.
+        const info = @typeInfo(T).@"struct";
+        comptime var fields_size: usize = 0;
+        inline for (info.field_types) |F| {
+            try testing.expectEqual(8, @alignOf(F));
+            fields_size += @sizeOf(F);
+        }
+        try testing.expectEqual(@sizeOf(T), fields_size);
+        try testing.expect(T.min_size <= @sizeOf(T));
+    }
+    try testing.expectEqual(@sizeOf(Str), 16);
+}
+
+test "c_api: every lp.FetchOpts field is mirrored or excluded" {
+    // Adding a field to lp.FetchOpts (or dump.Opts) fails here until it is
+    // either exposed in lp_fetch_opts or listed with a reason below.
+    const mirrored = .{
+        "wait_ms",            "wait_until",         "wait_script", "inject_script",
+        "wait_selector",      "dump",               "dump_mode",   "selector",
+        "fail_on_http_error", "markdown_alternate",
+    };
+    const excluded = .{
+        "png_mode", // no PNG format exposed
+        "writer", // the result buffer
+        "json", // the CLI's multi-url output envelope
+    };
+    try expectFieldsCovered(lp.FetchOpts, mirrored ++ excluded);
+
+    const dump_mirrored = .{ "with_base", "with_frames", "strip", "max_bytes" };
+    const dump_excluded = .{
+        "shadow", // the CLI doesn't expose it either
+        "pruned", // set internally by clutter removal
+    };
+    try expectFieldsCovered(lp.dump.Opts, dump_mirrored ++ dump_excluded);
+}
+
+fn expectFieldsCovered(comptime T: type, comptime names: anytype) !void {
+    const fields = @typeInfo(T).@"struct".field_names;
+    try testing.expectEqual(fields.len, names.len);
+    inline for (fields) |field| {
+        comptime var found = false;
+        inline for (names) |name| {
+            if (comptime std.mem.eql(u8, field, name)) found = true;
+        }
+        if (!found) {
+            std.debug.print("{s}.{s} is neither mirrored in lp_fetch_opts nor excluded\n", .{ @typeName(T), field });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "c_api: readOpts size handling" {
+    const zero = std.mem.zeroes(InitOpts);
+    try testing.expectEqual(zero, try readOpts(InitOpts, null, 0));
+    try testing.expectError(error.InvalidParams, readOpts(InitOpts, null, 8));
+
+    var opts = zero;
+    opts.http_timeout_ms = 1234;
+    try testing.expectEqual(1234, (try readOpts(InitOpts, &opts, @sizeOf(InitOpts))).http_timeout_ms);
+    // Too small to be any published layout, or not field-aligned.
+    try testing.expectError(error.InvalidParams, readOpts(InitOpts, &opts, 8));
+    try testing.expectError(error.InvalidParams, readOpts(InitOpts, &opts, @sizeOf(InitOpts) - 4));
+
+    // A newer caller: unknown trailing fields are fine while zero, refused
+    // once set.
+    const Newer = extern struct { known: InitOpts, extra: u64 };
+    var newer: Newer = .{ .known = opts, .extra = 0 };
+    const as_known: *const InitOpts = @ptrCast(&newer);
+    try testing.expectEqual(1234, (try readOpts(InitOpts, as_known, @sizeOf(Newer))).http_timeout_ms);
+    newer.extra = 1;
+    try testing.expectError(error.UnsupportedOption, readOpts(InitOpts, as_known, @sizeOf(Newer)));
+}
+
+test "c_api: fetch options map onto lp.FetchOpts" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const defaults = try fetchOpts(allocator, null, 0);
+    try testing.expectEqual(.html, defaults.dump_mode.?);
+    try testing.expectEqual(null, defaults.wait_until);
+    try testing.expectEqual(5000, defaults.wait_ms);
+
+    const scripts = [_]Str{.{ .ptr = "window.x = 1", .len = "window.x = 1".len }};
+    var opts = std.mem.zeroes(FetchOpts);
+    opts.format = @backingInt(Format.markdown);
+    opts.wait_until = @backingInt(WaitUntil.settled);
+    opts.wait_ms = 100;
+    opts.wait_selector = .{ .ptr = "#main", .len = "#main".len };
+    opts.inject_scripts = &scripts;
+    opts.inject_scripts_len = scripts.len;
+    opts.strip = 0b100001; // js | clutter
+    opts.max_bytes = 4096;
+    opts.markdown_alternate = 1;
+    const mapped = try fetchOpts(allocator, &opts, @sizeOf(FetchOpts));
+    try testing.expectEqual(.markdown, mapped.dump_mode.?);
+    try testing.expectEqual(.settled, mapped.wait_until.?);
+    try testing.expectEqual(100, mapped.wait_ms);
+    try testing.expectEqualStrings("#main", mapped.wait_selector.?);
+    try testing.expectEqualStrings("window.x = 1", mapped.inject_script.items[0]);
+    try testing.expectEqual(lp.dump.Opts.Strip{ .js = true, .clutter = true }, mapped.dump.strip);
+    try testing.expectEqual(4096, mapped.dump.max_bytes.?);
+    try testing.expect(mapped.markdown_alternate);
+
+    // Values this library doesn't know are refused, not clamped.
+    var bad = std.mem.zeroes(FetchOpts);
+    bad.format = 99;
+    try testing.expectError(error.UnsupportedOption, fetchOpts(allocator, &bad, @sizeOf(FetchOpts)));
+    bad = std.mem.zeroes(FetchOpts);
+    bad.strip = 1 << 6;
+    try testing.expectError(error.UnsupportedOption, fetchOpts(allocator, &bad, @sizeOf(FetchOpts)));
+
+    // The fetch command's combination rules.
+    bad = std.mem.zeroes(FetchOpts);
+    bad.markdown_alternate = 1;
+    try testing.expectError(error.InvalidParams, fetchOpts(allocator, &bad, @sizeOf(FetchOpts)));
+    bad = std.mem.zeroes(FetchOpts);
+    bad.format = @backingInt(Format.tree_json);
+    bad.max_bytes = 10;
+    try testing.expectError(error.InvalidParams, fetchOpts(allocator, &bad, @sizeOf(FetchOpts)));
+}
+
 test "c_api: defaults match the header's documented values" {
     var config = try lp.Config.init(testing.allocator, "lightpanda", .{ .embed = .{} });
     defer config.deinit(testing.allocator);
@@ -673,7 +883,7 @@ test "c_api: tools_json is valid JSON covering every tool" {
 
 test "c_api: null handles are rejected" {
     var result: Result = .empty;
-    try testing.expectEqual(.misuse, lp_init(null, null));
+    try testing.expectEqual(.misuse, lp_init(null, 0, null));
     try testing.expectEqual(.misuse, lp_call(null, "getUrl", "getUrl".len, null, 0, &result));
     try testing.expectEqual(.misuse, lp_session_new(null, null));
     lp_session_close(null);
@@ -687,22 +897,14 @@ test "c_api: lifecycle" {
 
     // Option validation happens before V8 is touched, so a rejected init
     // must leave the library initializable.
-    const bad_opts: InitOpts = .{
-        .user_agent = "bad\nagent",
-        .user_agent_len = "bad\nagent".len,
-        .http_proxy = null,
-        .http_proxy_len = 0,
-        .http_cache_dir = null,
-        .http_cache_dir_len = 0,
-        .http_timeout_ms = 0,
-        .watchdog_ms = 0,
-    };
-    try testing.expectEqual(.invalid_params, lp_init(&bad_opts, &browser));
+    var bad_opts = std.mem.zeroes(InitOpts);
+    bad_opts.user_agent = .{ .ptr = "bad\nagent", .len = "bad\nagent".len };
+    try testing.expectEqual(.invalid_params, lp_init(&bad_opts, @sizeOf(InitOpts), &browser));
 
-    try testing.expectEqual(.ok, lp_init(null, &browser));
+    try testing.expectEqual(.ok, lp_init(null, 0, &browser));
 
     var second: *BrowserHandle = undefined;
-    try testing.expectEqual(.misuse, lp_init(null, &second));
+    try testing.expectEqual(.misuse, lp_init(null, 0, &second));
 
     var session: *SessionHandle = undefined;
     try testing.expectEqual(.ok, lp_session_new(browser, &session));
@@ -743,16 +945,24 @@ test "c_api: lifecycle" {
 
     // Twice: the second call reuses the lazily-created fetch browser; the
     // second url carries trailing garbage past its length.
-    try testing.expectEqual(.ok, lp_fetch(browser, "about:blank", "about:blank".len, null, &result));
+    try testing.expectEqual(.ok, lp_fetch(browser, "about:blank", "about:blank".len, null, 0, &result));
     try testing.expect(result.text != null);
-    try testing.expectEqual(.ok, lp_fetch(browser, "about:blankGARBAGE", "about:blank".len, null, &result));
-    try testing.expect(result.len > 0);
+    var fetch_opts = std.mem.zeroes(FetchOpts);
+    fetch_opts.format = @backingInt(Format.markdown);
+    try testing.expectEqual(.ok, lp_fetch(browser, "about:blankGARBAGE", "about:blank".len, &fetch_opts, @sizeOf(FetchOpts), &result));
+
+    // An option this build doesn't know fails with its name left behind.
+    fetch_opts.format = 99;
+    try testing.expectEqual(.invalid_params, lp_fetch(browser, "about:blank", "about:blank".len, &fetch_opts, @sizeOf(FetchOpts), &result));
+    var name_len: usize = 0;
+    const name = lp_browser_last_error(browser, &name_len).?;
+    try testing.expectEqualStrings("UnsupportedOption", name[0..name_len]);
 
     lp_session_close(session);
     lp_shutdown(browser);
 
     // Terminal: V8 cannot be re-initialized after dispose.
-    try testing.expectEqual(.misuse, lp_init(null, &second));
+    try testing.expectEqual(.misuse, lp_init(null, 0, &second));
 
     // Stale handles are inert after shutdown — no deref, no crash.
     try testing.expectEqual(0, lp_session_pump(session));

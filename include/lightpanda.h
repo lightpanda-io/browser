@@ -95,17 +95,32 @@ typedef struct lp_result {
     bool is_error;
 } lp_result;
 
-/* Zero-initialize for defaults: no proxy, default user agent, no HTTP
- * cache, 15s HTTP timeout, 30s JS watchdog. */
+/* Options structs (lp_options, lp_fetch_opts) are extensible: they are
+ * passed with their size, new fields are only ever appended, and zero means
+ * "default" for every field. A program built against an older header passes
+ * a smaller struct and gets defaults for the fields it lacks; a program
+ * built against a newer header that sets a field this library doesn't know
+ * fails with LP_ERR_INVALID_PARAMS rather than having it silently ignored.
+ * Every field is 8 bytes wide, so the structs have no padding. LP_OPTS
+ * builds the pointer/size pair from designated initializers:
+ *   lp_fetch(b, url, len, LP_OPTS(lp_fetch_opts, .format = LP_FORMAT_MARKDOWN), &r);
+ * NULL with size 0 means all defaults. */
+#ifndef __cplusplus
+#define LP_OPTS(type, ...) (&(type){__VA_ARGS__}), sizeof(type)
+#endif
+
+/* A string that need not be NUL-terminated. */
+typedef struct lp_str {
+    const char *ptr;
+    size_t len;
+} lp_str;
+
 typedef struct lp_options {
-    const char *user_agent;      /* NULL: default ("Lightpanda/1.0") */
-    size_t user_agent_len;
-    const char *http_proxy;      /* NULL: none */
-    size_t http_proxy_len;
-    const char *http_cache_dir;  /* NULL: no persistent HTTP cache */
-    size_t http_cache_dir_len;
-    uint32_t http_timeout_ms;    /* 0: default (15000) */
-    int32_t watchdog_ms;         /* 0: default (30000), <0: disabled */
+    lp_str user_agent;           /* NULL ptr: default ("Lightpanda/1.0") */
+    lp_str http_proxy;           /* NULL ptr: none */
+    lp_str http_cache_dir;       /* NULL ptr: no persistent HTTP cache */
+    uint64_t http_timeout_ms;    /* 0: default (15000) */
+    int64_t watchdog_ms;         /* 0: default (30000), <0: disabled */
 } lp_options;
 
 typedef enum lp_format {
@@ -116,37 +131,60 @@ typedef enum lp_format {
 } lp_format;
 
 typedef enum lp_wait_until {
-    LP_WAIT_DEFAULT = 0, /* page fully settled ("done"), or the selector */
+    /* "load", unless a wait selector or script is given: then that is the
+     * whole wait. */
+    LP_WAIT_DEFAULT = 0,
     LP_WAIT_LOAD = 1,
     LP_WAIT_DOMCONTENTLOADED = 2,
     LP_WAIT_NETWORKALMOSTIDLE = 3,
     LP_WAIT_NETWORKIDLE = 4,
-    LP_WAIT_DONE = 5
+    LP_WAIT_DONE = 5,
+    /* Load work finished, ignoring intervals, long timeouts and polling. */
+    LP_WAIT_SETTLED = 6
 } lp_wait_until;
 
-/* Zero-initialize for defaults: HTML after the page settles, 5s budget. */
+/* Bits of lp_fetch_opts.strip: what to leave out of the dump. */
+typedef enum lp_strip {
+    LP_STRIP_JS = 1 << 0,
+    LP_STRIP_UI = 1 << 1,
+    LP_STRIP_CSS = 1 << 2,
+    LP_STRIP_INVISIBLE = 1 << 3,
+    LP_STRIP_SHELL = 1 << 4,
+    LP_STRIP_CLUTTER = 1 << 5
+} lp_strip;
+
+/* Mirrors `lightpanda fetch`; each field names its flag. */
 typedef struct lp_fetch_opts {
-    int format;                /* lp_format */
-    uint32_t wait_ms;          /* 0: default (5000) */
-    int wait_until;            /* lp_wait_until */
-    const char *wait_selector; /* NULL: none; else wait for this CSS selector */
-    size_t wait_selector_len;
+    uint64_t format;             /* --dump; lp_format, 0: HTML */
+    uint64_t wait_until;         /* --wait-until; lp_wait_until */
+    uint64_t wait_ms;            /* --wait-ms; 0: default (5000) */
+    lp_str wait_selector;        /* --wait-selector; NULL ptr: none */
+    lp_str wait_script;          /* --wait-script; JS expression, NULL ptr: none */
+    const lp_str *inject_scripts;/* --inject-script; run in every page */
+    size_t inject_scripts_len;
+    lp_str selector;             /* --dump-selector; dump the first match only */
+    uint64_t strip;              /* --strip-mode; lp_strip bits */
+    uint64_t max_bytes;          /* --dump-max-bytes; HTML/markdown, 0: no cap */
+    uint64_t with_base;          /* --with-base; 0: off */
+    uint64_t with_frames;        /* --with-frames; 0: off */
+    uint64_t fail_on_http_error; /* --fail-on-http-error; 0: off */
+    uint64_t markdown_alternate; /* --markdown-alternate; 0: off */
 } lp_fetch_opts;
 
-/* Initialize the library. opts may be NULL (all defaults). On LP_OK,
- * *out is the process-wide browser handle. */
-lp_status lp_init(const lp_options *opts, lp_browser **out);
+/* Initialize the library. On LP_OK, *out is the process-wide browser
+ * handle. */
+lp_status lp_init(const lp_options *opts, size_t opts_size, lp_browser **out);
 
 /* Tear down the handle, closing any remaining sessions. Terminal — see the
  * threading contract above. */
 void lp_shutdown(lp_browser *browser);
 
 /* Load url in a throwaway session, run its JavaScript, and return the page
- * serialized per opts (NULL: all defaults). "curl that runs JavaScript".
+ * serialized per opts. "curl that runs JavaScript".
  * Every call gets a fresh session (cookies, storage, pages); the underlying
  * browser is created on first use and reused, so looping lp_fetch is cheap. */
 lp_status lp_fetch(lp_browser *browser, const char *url, size_t url_len,
-                   const lp_fetch_opts *opts, lp_result *out);
+                   const lp_fetch_opts *opts, size_t opts_size, lp_result *out);
 
 /* Create an isolated browsing session: its own page, cookies, JS heap. */
 lp_status lp_session_new(lp_browser *browser, lp_session **out);
