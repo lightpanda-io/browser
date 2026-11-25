@@ -57,6 +57,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -196,17 +197,22 @@ void lp_shutdown(lp_browser *browser);
 lp_status lp_fetch(lp_browser *browser, const char *url, size_t url_len,
                    const lp_fetch_opts *opts, size_t opts_size, lp_result *out);
 
+typedef enum lp_session_mode {
+    /* Results are written for a model to read, and a failure the page
+     * caused (a JS throw, a navigation error, a refused click) is LP_OK with
+     * is_error set and the message in the result, so an agent loop can hand
+     * it back to the model. */
+    LP_SESSION_PLAIN = 0,
+    /* For programs. Results are JSON where the tool can produce it
+     * (evaluate's value, getCookies), and every failure is a status:
+     * LP_ERR_NAVIGATION_FAILED, LP_ERR_SCRIPT, LP_ERR_ACTION_REFUSED,
+     * LP_ERR_INVALID_PARAMS, or LP_ERR_TOOL_FAILED, with is_error set and the
+     * message still in the result. */
+    LP_SESSION_STRUCTURED = 1
+} lp_session_mode;
+
 typedef struct lp_session_opts {
-    /* 0: results are written for a model to read, and a failure the page
-     *    caused (a JS throw, a navigation error, a refused click) is LP_OK
-     *    with is_error set and the message in the result, so an agent loop
-     *    can hand it back to the model.
-     * 1: for programs. Results are JSON where the tool can produce it
-     *    (evaluate's value, getCookies), and every failure is a status:
-     *    LP_ERR_NAVIGATION_FAILED, LP_ERR_SCRIPT, LP_ERR_ACTION_REFUSED,
-     *    LP_ERR_INVALID_PARAMS, or LP_ERR_TOOL_FAILED, with is_error set and
-     *    the message still in the result. */
-    uint64_t structured;
+    uint64_t mode;               /* lp_session_mode, 0: plain */
 } lp_session_opts;
 
 /* Create an isolated browsing session: its own page, cookies, JS heap.
@@ -229,6 +235,43 @@ void lp_session_close(lp_session *session);
 lp_status lp_call(lp_session *session, const char *tool, size_t tool_len,
                   const char *args_json, size_t args_json_len,
                   lp_result *out);
+
+/* lp_call with the arguments as key/value pairs instead of JSON text, so
+ * strings need no escaping. Keys are the tool's argument names
+ * (lp_tools_json); a nested argument (markdown's "strip", callPageTool's
+ * "arguments") goes in as LP_ARG_JSON. lp_arg cannot grow, since it is an
+ * array element: new value types will be new kinds. */
+typedef enum lp_arg_kind {
+    LP_ARG_STRING = 1,
+    LP_ARG_INT = 2,
+    LP_ARG_BOOL = 3,             /* value.b: 0 or 1 */
+    LP_ARG_JSON = 4              /* value.s: a JSON value */
+} lp_arg_kind;
+
+typedef struct lp_arg {
+    lp_str key;
+    uint64_t kind;               /* lp_arg_kind */
+    union {
+        lp_str s;
+        int64_t i;
+        uint64_t b;
+    } value;
+} lp_arg;
+
+lp_status lp_call_args(lp_session *session, const char *tool, size_t tool_len,
+                       const lp_arg *args, size_t args_len, lp_result *out);
+
+/* Building lp_call_args arguments from NUL-terminated strings:
+ *   lp_call_args(s, "goto", strlen("goto"),
+ *                LP_ARGS(LP_S("url", url), LP_I("timeout", 5000)), &r);
+ * LP_ARGS expands to the array and its length. */
+#ifndef __cplusplus
+#define LP_S(k, v) ((lp_arg){{(k), strlen(k)}, LP_ARG_STRING, {.s = {(v), strlen(v)}}})
+#define LP_I(k, v) ((lp_arg){{(k), strlen(k)}, LP_ARG_INT, {.i = (v)}})
+#define LP_B(k, v) ((lp_arg){{(k), strlen(k)}, LP_ARG_BOOL, {.b = (v) ? 1 : 0}})
+#define LP_J(k, v) ((lp_arg){{(k), strlen(k)}, LP_ARG_JSON, {.s = {(v), strlen(v)}}})
+#define LP_ARGS(...) ((lp_arg[]){__VA_ARGS__}), (sizeof((lp_arg[]){__VA_ARGS__}) / sizeof(lp_arg))
+#endif
 
 /* Where the session's page is. An extensible output struct: pass its size;
  * a library that knows fewer fields zeroes the rest. */

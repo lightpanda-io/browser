@@ -117,9 +117,15 @@ const FetchOpts = extern struct {
 // Mirrored in include/lightpanda.h (lp_session_opts). Extensible: see
 // readOpts.
 const SessionOpts = extern struct {
-    structured: u64,
+    mode: u64,
 
     const min_size = 8;
+};
+
+// Mirrored in include/lightpanda.h (lp_session_mode).
+const SessionMode = enum(c_int) {
+    plain = 0,
+    structured = 1,
 };
 
 // Mirrored in include/lightpanda.h (lp_page_state). An output struct, so
@@ -471,11 +477,8 @@ fn errStatus(err: anyerror) Status {
 
 fn createSession(handle: *BrowserHandle, opts_: ?*const SessionOpts, opts_size: usize) !*SessionHandle {
     const opts = try readOpts(SessionOpts, opts_, opts_size);
-    const structured = switch (opts.structured) {
-        0 => false,
-        1 => true,
-        else => return error.UnsupportedOption,
-    };
+    const mode = std.enums.fromInt(SessionMode, opts.mode) orelse return error.UnsupportedOption;
+    const structured = mode == .structured;
 
     const entry = try c_allocator.create(SessionHandle);
     errdefer c_allocator.destroy(entry);
@@ -545,34 +548,122 @@ pub export fn lp_call(
     out.* = .empty;
     if (app_state != .live) return .misuse;
     const tool = (tool_ orelse return .invalid_params)[0..tool_len];
-
-    // At the start, not on the way out: the previous result must stay
-    // valid until this call begins.
-    _ = entry.arena.reset(.{ .retain_with_limit = result_retain_limit });
-    entry.last_error = "";
-    entry.navigated = false;
-    const arena = entry.arena.allocator();
+    const arena = beginCall(entry);
 
     var args: ?std.json.Value = null;
     if (args_json_) |args_json| {
         args = std.json.parseFromSliceLeaky(std.json.Value, arena, args_json[0..args_json_len], .{}) catch |err| {
-            entry.last_error = @errorName(err);
-            return .invalid_params;
+            return failCall(entry, out, .invalid_params, err, "args_json is not valid JSON");
         };
     }
+    return runCall(entry, tool, args, out);
+}
 
+// Mirrored in include/lightpanda.h (lp_arg). An array element, so unlike
+// the options structs it cannot grow: new value types are new kinds.
+const Arg = extern struct {
+    key: Str,
+    kind: u64,
+    value: extern union {
+        s: Str,
+        i: i64,
+        b: u64,
+    },
+};
+
+// Mirrored in include/lightpanda.h (lp_arg_kind). From 1, so a zeroed
+// entry is caught.
+const ArgKind = enum(c_int) {
+    string = 1,
+    int = 2,
+    bool = 3,
+    json = 4,
+};
+
+/// `lp_call` with the arguments as key/value pairs instead of JSON text, so
+/// a C caller never escapes a string.
+pub export fn lp_call_args(
+    entry_: ?*SessionHandle,
+    tool_: ?[*]const u8,
+    tool_len: usize,
+    args_: ?[*]const Arg,
+    args_len: usize,
+    out_: ?*Result,
+) Status {
+    const entry = entry_ orelse return .misuse;
+    const out = out_ orelse return .misuse;
+    out.* = .empty;
+    if (app_state != .live) return .misuse;
+    const tool = (tool_ orelse return .invalid_params)[0..tool_len];
+    const arena = beginCall(entry);
+
+    if (args_len == 0) return runCall(entry, tool, null, out);
+    const args = args_ orelse return failCall(entry, out, .invalid_params, error.InvalidParams, "args is NULL with a non-zero args_len");
+    const value = argsObject(arena, args[0..args_len]) catch |err| return failCall(entry, out, if (err == error.OutOfMemory) .out_of_memory else .invalid_params, err, switch (err) {
+        error.OutOfMemory => "out of memory",
+        error.UnsupportedOption => "lp_arg: a kind this library doesn't know",
+        error.NullString => "lp_arg: a NULL key or string value",
+        error.InvalidBool => "lp_arg: an LP_ARG_BOOL value other than 0 or 1",
+        error.InvalidJson => "lp_arg: an LP_ARG_JSON value that is not valid JSON",
+        error.DuplicateKey => "lp_arg: the same key twice",
+    });
+    return runCall(entry, tool, value, out);
+}
+
+/// The JSON object `lp_call` would have parsed. Strings are copied: the
+/// caller's only have to outlive the call, results may quote them.
+fn argsObject(arena: std.mem.Allocator, args: []const Arg) error{ OutOfMemory, UnsupportedOption, NullString, InvalidBool, InvalidJson, DuplicateKey }!std.json.Value {
+    var map: std.json.ObjectMap = .empty;
+    try map.ensureTotalCapacity(arena, args.len);
+    for (args) |arg| {
+        const key = try arena.dupe(u8, arg.key.slice() orelse return error.NullString);
+        const value: std.json.Value = switch (std.enums.fromInt(ArgKind, arg.kind) orelse return error.UnsupportedOption) {
+            .string => .{ .string = try arena.dupe(u8, arg.value.s.slice() orelse return error.NullString) },
+            .int => .{ .integer = arg.value.i },
+            .bool => .{ .bool = switch (arg.value.b) {
+                0 => false,
+                1 => true,
+                else => return error.InvalidBool,
+            } },
+            .json => std.json.parseFromSliceLeaky(std.json.Value, arena, arg.value.s.slice() orelse return error.NullString, .{
+                .allocate = .alloc_always,
+            }) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidJson,
+            },
+        };
+        const entry = map.getOrPutAssumeCapacity(key);
+        if (entry.found_existing) return error.DuplicateKey;
+        entry.value_ptr.* = value;
+    }
+    return .{ .object = map };
+}
+
+/// Every lp_call starts here. The reset is at the start, not on the way out:
+/// the previous result must stay valid until this call begins.
+fn beginCall(entry: *SessionHandle) std.mem.Allocator {
+    _ = entry.arena.reset(.{ .retain_with_limit = result_retain_limit });
+    entry.last_error = "";
+    entry.navigated = false;
+    return entry.arena.allocator();
+}
+
+/// A call refused before the tool ran, message in the result like any
+/// other failure.
+fn failCall(entry: *SessionHandle, out: *Result, status: Status, err: anyerror, message: []const u8) Status {
+    entry.last_error = @errorName(err);
+    out.* = .{ .text = message.ptr, .len = message.len, .is_error = true };
+    return status;
+}
+
+fn runCall(entry: *SessionHandle, tool: []const u8, args: ?std.json.Value, out: *Result) Status {
     const result = blk: {
         entry.ts.enterIsolate();
         defer entry.ts.exitIsolate();
-        break :blk lp.tools.call(arena, entry.ts.session, &entry.ts.registry, tool, args, .{
+        break :blk lp.tools.call(entry.arena.allocator(), entry.ts.session, &entry.ts.registry, tool, args, .{
             .source = .script,
             .structured = entry.structured,
-        }) catch |err| {
-            entry.last_error = @errorName(err);
-            const message = lp.tools.errorMessage(err);
-            out.* = .{ .text = message.ptr, .len = message.len, .is_error = true };
-            return toolStatus(err);
-        };
+        }) catch |err| return failCall(entry, out, toolStatus(err), err, lp.tools.errorMessage(err));
     };
     entry.navigated = result.navigated;
     out.* = .{ .text = result.text.ptr, .len = result.text.len, .is_error = result.is_error };
@@ -768,6 +859,8 @@ test "c_api: mirrors the header ABI" {
     try testing.expectEqual(h.LP_WAIT_NETWORKIDLE, @backingInt(WaitUntil.networkidle));
     try testing.expectEqual(h.LP_WAIT_DONE, @backingInt(WaitUntil.done));
     try testing.expectEqual(h.LP_WAIT_SETTLED, @backingInt(WaitUntil.settled));
+    try testing.expectEqual(h.LP_SESSION_PLAIN, @backingInt(SessionMode.plain));
+    try testing.expectEqual(h.LP_SESSION_STRUCTURED, @backingInt(SessionMode.structured));
 
     const strip_bits = .{ .{ h.LP_STRIP_JS, "js" }, .{ h.LP_STRIP_UI, "ui" }, .{ h.LP_STRIP_CSS, "css" }, .{ h.LP_STRIP_INVISIBLE, "invisible" }, .{ h.LP_STRIP_SHELL, "shell" }, .{ h.LP_STRIP_CLUTTER, "clutter" } };
     inline for (strip_bits) |bit| {
@@ -781,6 +874,7 @@ test "c_api: mirrors the header ABI" {
     try expectSameLayout(h.lp_fetch_opts, FetchOpts);
     try expectSameLayout(h.lp_page_state, PageState);
     try expectSameLayout(h.lp_session_opts, SessionOpts);
+    try expectSameLayout(h.lp_arg, Arg);
 
     // The exports are pub so this reflection sees them; a header prototype
     // must exist (compile error otherwise) and agree on arity and sizes.
@@ -795,6 +889,12 @@ test "c_api: mirrors the header ABI" {
     try testing.expectEqual(@typeInfo(Format).@"enum".field_names.len, comptime countPrefixed(h, "LP_FORMAT_"));
     try testing.expectEqual(@typeInfo(WaitUntil).@"enum".field_names.len, comptime countPrefixed(h, "LP_WAIT_"));
     try testing.expectEqual(strip_bits.len, comptime countPrefixed(h, "LP_STRIP_"));
+    try testing.expectEqual(@typeInfo(SessionMode).@"enum".field_names.len, comptime countPrefixed(h, "LP_SESSION_"));
+    try testing.expectEqual(@typeInfo(ArgKind).@"enum".field_names.len, comptime countPrefixed(h, "LP_ARG_"));
+    try testing.expectEqual(h.LP_ARG_STRING, @backingInt(ArgKind.string));
+    try testing.expectEqual(h.LP_ARG_INT, @backingInt(ArgKind.int));
+    try testing.expectEqual(h.LP_ARG_BOOL, @backingInt(ArgKind.bool));
+    try testing.expectEqual(h.LP_ARG_JSON, @backingInt(ArgKind.json));
     try testing.expectEqual(@typeInfo(Status).@"enum".field_names.len, comptime countPrefixed(h, "LP_ERR_") + 1); // + LP_OK
     try testing.expectEqual(comptime countFns(@This(), "lp_"), comptime countFns(h, "lp_"));
 }
@@ -879,6 +979,10 @@ test "c_api: every lp.FetchOpts field is mirrored or excluded" {
         "pruned", // set internally by clutter removal
     };
     try expectFieldsCovered(lp.dump.Opts, dump_mirrored ++ dump_excluded);
+}
+
+fn str(comptime s: []const u8) Str {
+    return .{ .ptr = s.ptr, .len = s.len };
 }
 
 /// Runs `tool`, checks the status, and for a failure that the message came
@@ -1085,9 +1189,11 @@ test "c_api: lifecycle" {
     // This binary has no fixture server (its own V8 platform rules out
     // testing.zig's setup), so the page is built in place.
     var structured: *SessionHandle = undefined;
-    var unknown_opts: [2]u64 = .{ 1, 1 };
+    var unknown_opts: [2]u64 = .{ @backingInt(SessionMode.structured), 1 };
     try testing.expectEqual(.invalid_params, lp_session_new(browser, @ptrCast(&unknown_opts), 16, &structured));
-    const session_opts: SessionOpts = .{ .structured = 1 };
+    const unknown_mode: SessionOpts = .{ .mode = 2 };
+    try testing.expectEqual(.invalid_params, lp_session_new(browser, &unknown_mode, @sizeOf(SessionOpts), &structured));
+    const session_opts: SessionOpts = .{ .mode = @backingInt(SessionMode.structured) };
     try testing.expectEqual(.ok, lp_session_new(browser, &session_opts, @sizeOf(SessionOpts), &structured));
     defer lp_session_close(structured);
 
@@ -1119,6 +1225,46 @@ test "c_api: lifecycle" {
     try expectCall(structured, "nosuchtool", null, .invalid_params, null);
     // Not a failure kind of its own: the generic status, message in-band.
     try expectCall(structured, "popups", "{\"follow\":99}", .tool_failed, null);
+
+    // Key/value arguments: a value with JSON's special characters arrives
+    // as is, no escaping.
+    const tricky = "say \"hi\" \\ there";
+    const fill_args = [_]Arg{
+        .{ .key = str("selector"), .kind = @backingInt(ArgKind.string), .value = .{ .s = str("#inp") } },
+        .{ .key = str("value"), .kind = @backingInt(ArgKind.string), .value = .{ .s = str(tricky) } },
+    };
+    try testing.expectEqual(.ok, lp_call_args(structured, "fill", "fill".len, &fill_args, fill_args.len, &result));
+    const read_value = "{\"script\":\"document.querySelector('#inp').value\"}";
+    try testing.expectEqual(.ok, lp_call(structured, "evaluate", "evaluate".len, read_value, read_value.len, &result));
+    const read_back = try std.json.parseFromSlice([]const u8, testing.allocator, result.text.?[0..result.len], .{});
+    defer read_back.deinit();
+    try testing.expectEqualStrings(tricky, read_back.value);
+    const strip = [_]Arg{
+        .{ .key = str("selector"), .kind = @backingInt(ArgKind.string), .value = .{ .s = str("body") } },
+        .{ .key = str("strip"), .kind = @backingInt(ArgKind.json), .value = .{ .s = str("{\"clutter\":true}") } },
+        .{ .key = str("maxBytes"), .kind = @backingInt(ArgKind.int), .value = .{ .i = 1000 } },
+    };
+    try testing.expectEqual(.ok, lp_call_args(structured, "markdown", "markdown".len, &strip, strip.len, &result));
+    try testing.expectEqual(.ok, lp_call_args(structured, "getUrl", "getUrl".len, null, 0, &result));
+    try testing.expectEqualStrings("about:blank", result.text.?[0..result.len]);
+
+    const bad_args = [_][]const Arg{
+        &.{.{ .key = str("selector"), .kind = 0, .value = .{ .i = 0 } }}, // zeroed kind
+        &.{.{ .key = str("selector"), .kind = 99, .value = .{ .i = 0 } }},
+        &.{.{ .key = .{ .ptr = null, .len = 0 }, .kind = @backingInt(ArgKind.int), .value = .{ .i = 0 } }},
+        &.{.{ .key = str("checked"), .kind = @backingInt(ArgKind.bool), .value = .{ .b = 2 } }},
+        &.{.{ .key = str("strip"), .kind = @backingInt(ArgKind.json), .value = .{ .s = str("{nope") } }},
+        &.{
+            .{ .key = str("selector"), .kind = @backingInt(ArgKind.string), .value = .{ .s = str("a") } },
+            .{ .key = str("selector"), .kind = @backingInt(ArgKind.string), .value = .{ .s = str("b") } },
+        },
+    };
+    for (bad_args) |args| {
+        try testing.expectEqual(.invalid_params, lp_call_args(structured, "click", "click".len, args.ptr, args.len, &result));
+        try testing.expect(result.is_error and result.len > 0);
+    }
+    try testing.expectEqual(.invalid_params, lp_call_args(structured, "click", "click".len, null, 1, &result));
+    try expectCall(structured, "goto", "{nope", .invalid_params, null);
 
     // The plain session keeps them in-band, for LLM callers.
     try expectCall(session, "evaluate", "{\"url\":\"about:blank\",\"script\":\"throw new Error('boom')\"}", .ok, null);

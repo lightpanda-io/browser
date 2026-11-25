@@ -12,10 +12,9 @@
 #include <stdio.h>
 #include <string.h>
 
-static lp_status call(lp_session *session, const char *tool, const char *args, lp_result *result) {
-    lp_status status = lp_call(session, tool, strlen(tool), args, args ? strlen(args) : 0, result);
+/* Every failure carries its message in the result. */
+static lp_status check(const char *tool, lp_status status, const lp_result *result) {
     if (status != LP_OK) {
-        /* Every failure carries its message in the result. */
         fprintf(stderr, "%s failed: %d: %.*s\n", tool, status, (int)result->len, result->text ? result->text : "");
     }
     return status;
@@ -31,16 +30,18 @@ int main(int argc, char **argv) {
     }
 
     lp_session *session = NULL;
-    if (lp_session_new(browser, LP_OPTS(lp_session_opts, .structured = 1), &session) != LP_OK) {
+    if (lp_session_new(browser, LP_OPTS(lp_session_opts, .mode = LP_SESSION_STRUCTURED), &session) != LP_OK) {
         fprintf(stderr, "lp_session_new failed\n");
         lp_shutdown(browser);
         return 1;
     }
 
+    /* Arguments as key/value pairs: url goes in as is, whatever it contains. */
     lp_result result = {0};
-    char args[1024];
-    snprintf(args, sizeof args, "{\"url\":\"%s\"}", url);
-    lp_status status = call(session, "goto", args, &result);
+    lp_status status = check("goto",
+                             lp_call_args(session, "goto", strlen("goto"),
+                                          LP_ARGS(LP_S("url", url), LP_I("timeout", 10000)), &result),
+                             &result);
     if (status != LP_OK) goto done;
 
     lp_page_state page = {0};
@@ -50,18 +51,19 @@ int main(int argc, char **argv) {
            (unsigned long long)page.http_status, (int)page.title.len, page.title.ptr ? page.title.ptr : "");
 
     /* evaluate's value comes back as JSON. */
-    status = call(session, "evaluate", "{\"script\":\"document.links.length\"}", &result);
+    status = check("evaluate",
+                   lp_call_args(session, "evaluate", strlen("evaluate"),
+                                LP_ARGS(LP_S("script", "document.links.length")), &result),
+                   &result);
     if (status != LP_OK) goto done;
     printf("--- evaluate ---\n%.*s links\n", (int)result.len, result.text);
 
     /* extract's "schema" argument is a string holding a JSON object literal
      * that maps output fields to CSS-selector specs (not a JSON Schema). */
-    status = call(session, "extract",
-                  "{\"schema\":"
-                  "\"{\\\"title\\\": \\\"title\\\","
-                  " \\\"links\\\": [{\\\"selector\\\": \\\"a\\\", \\\"attr\\\": \\\"href\\\"}]}\""
-                  "}",
-                  &result);
+    const char *schema = "{\"title\": \"title\", \"links\": [{\"selector\": \"a\", \"attr\": \"href\"}]}";
+    status = check("extract",
+                   lp_call_args(session, "extract", strlen("extract"), LP_ARGS(LP_S("schema", schema)), &result),
+                   &result);
     if (status != LP_OK) goto done;
     printf("--- extract ---\n%.*s\n", (int)result.len, result.text);
 
