@@ -692,6 +692,13 @@
     \\          Maximum V8 heap size in megabytes, per browser instance. Values
     \\          below ~16 are clamped by V8 and all behave the same.
     \\          Defaults to the V8 default (based on available memory).
+    \\  --v8-maglev-invocation-count <INT>
+    \\          Roughly equal to the number of calls after which V8 compiles a
+    \\          function with Maglev (its optimizing compiler). Chrome defaults
+    \\          to 400, but it expects free CPU cores and having tabs open for hours.
+    \\          For a short lived page, the cost of compiling generally adds more
+    \\          CPU cost than it saves.
+    \\          Defaults to 2000.
     \\  --watchdog-ms <INT>
     \\          Terminates JavaScript when the browser stalls — stays busy for
     \\          this long without returning to its network poll (e.g. a page
