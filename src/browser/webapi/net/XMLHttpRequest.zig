@@ -46,9 +46,6 @@ const XMLHttpRequest = @This();
 
 pub const Proto = XMLHttpRequestEventTarget;
 _rc: lp.RC = .{},
-/// The request is made by,
-/// and its events fire in,
-/// the realm it was created in.
 _exec: js.ExecutionHandle,
 _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,
@@ -232,8 +229,8 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !vo
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
-    // https://xhr.spec.whatwg.org/#the-open()-method step 1: the document of
-    // the request's global isn't fully active anymore.
+    // https://xhr.spec.whatwg.org/#the-open()-method step 1: if the document
+    // of the request's global isn't fully active, throw an InvalidStateError.
     const exec = self._exec.get() orelse return error.InvalidStateError;
     // Abort any in-progress request, _send_flag unset as this should not fire
     // any events.
