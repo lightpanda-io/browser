@@ -161,12 +161,12 @@ pub fn fragmentParsed(parent: *Node, frame: *Frame) void {
 }
 
 /// Text data can flip `:empty` but never a live collection, so only the style
-/// stamp moves. Not renderingChanged: the layout observers only react to
-/// connectivity, which a text edit can't change.
+/// stamp moves. Its box can grow or shrink, which only ResizeObserver reads.
 pub fn textChanged(cdata: *CData, old: String, frame: *Frame) void {
     _ = old;
     if (detachedHandled(cdata.asNode(), frame) == false) {
         styleChanged(frame);
+        observers.scheduleResizeChecks(frame);
     }
 }
 

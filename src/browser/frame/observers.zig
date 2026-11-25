@@ -221,44 +221,7 @@ pub fn performScheduledResizeChecks(frame: *Frame) void {
     // scheduling within a schedule, it's because this can be expensive and we
     // want to coalesce as many of these into a single call as possible.
     for (frame._resize.observers.items) |observer| {
-        if (observer.connectivityChanged()) {
-            scheduleResizeDelivery(frame);
-            return;
-        }
-    }
-}
-
-// Only these attributes can change an element's size or visibility in our
-// styling model (StyleManager.isHidden + Element.getElementAxis), and
-// only for the element itself and its descendants — so a delivery is only
-// scheduled when an observed element is in the changed element's subtree.
-fn resizeAttributeChanged(frame: *Frame, element: *Element, name: String) void {
-    if (frame._resize.observers.items.len == 0) {
-        return;
-    }
-    if (frame._resize.delivery_scheduled) {
-        return;
-    }
-
-    // This has proven to be on the hot path
-    switch (name.len) {
-        2 => if (!name.eqlWithSameLen(comptime .wrap("id"))) {
-            return;
-        },
-        4 => if (!name.eqlWithSameLen(comptime .wrap("type")) and !name.eqlWithSameLen(comptime .wrap("open"))) {
-            return;
-        },
-        5 => if (!name.eqlWithSameLen(comptime .wrap("style")) and !name.eqlWithSameLen(comptime .wrap("class")) and !name.eqlWithSameLen(comptime .wrap("width"))) {
-            return;
-        },
-        6 => if (!name.eqlWithSameLen(comptime .wrap("hidden")) and !name.eqlWithSameLen(comptime .wrap("height"))) {
-            return;
-        },
-        else => return,
-    }
-
-    for (frame._resize.observers.items) |observer| {
-        if (observer.observesWithin(element, frame)) {
+        if (observer.sizeChanged(frame)) {
             scheduleResizeDelivery(frame);
             return;
         }
@@ -508,10 +471,9 @@ pub fn deliverMutations(frame: *Frame) void {
     }
 }
 
-// Broadcast an attribute change to every registered MutationObserver and to
-// the resize bookkeeping. The caller (Frame.attributeChange / attributeRemove)
-// handles the non-observer side effects (build hooks, custom-element
-// callbacks, slot/popover updates).
+// Broadcast an attribute change to every registered MutationObserver. The
+// caller (Frame.attributeChange / attributeRemove) handles the non-observer
+// side effects (build hooks, custom-element callbacks, slot/popover updates).
 pub fn notifyAttributeChange(frame: *Frame, element: *Element, name: String, old_value: ?String) void {
     var it: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
     while (it) |node| : (it = node.next) {
@@ -520,7 +482,6 @@ pub fn notifyAttributeChange(frame: *Frame, element: *Element, name: String, old
             log.err(.frame, "attributeChange.notifyObserver", .{ .err = err, .type = frame._type, .url = frame.url });
         };
     }
-    resizeAttributeChanged(frame, element, name);
 }
 
 pub fn notifyCharacterDataChange(frame: *Frame, target: *Node, old_value: String) void {
