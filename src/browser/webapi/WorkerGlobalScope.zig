@@ -93,6 +93,8 @@ js: *JS.Context,
 // HTTP attribution
 _frame_id: u32,
 _loader_id: u32,
+// The creating frame's, captured at creation since the worker can outlive it.
+_document_frame_id: u32,
 
 // Event management for non-DOM targets in worker context
 _event_manager: EventManagerBase,
@@ -173,6 +175,7 @@ pub fn init(
             ._is_module = is_module,
             ._frame_id = frame_id,
             ._loader_id = loader_id,
+            ._document_frame_id = frame._frame_id,
             ._event_manager = .init(arena),
             ._script_manager = undefined,
             ._location = .{ ._url = url },
