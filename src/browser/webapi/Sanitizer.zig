@@ -1190,11 +1190,11 @@ fn mergeAdjacentText(parent: *Node, buffer: *std.ArrayList(u8), frame: *Frame) !
     var child = parent.firstChild();
     while (child) |node| {
         var next = node.nextSibling();
-        const text = node.is(Node.CData.Text) orelse {
+        const text = node.exclusiveText() orelse {
             child = next;
             continue;
         };
-        if (next == null or next.?.is(Node.CData.Text) == null) {
+        if (next == null or next.?.exclusiveText() == null) {
             child = next;
             continue;
         }
@@ -1202,7 +1202,7 @@ fn mergeAdjacentText(parent: *Node, buffer: *std.ArrayList(u8), frame: *Frame) !
         buffer.clearRetainingCapacity();
         try buffer.appendSlice(frame.call_arena, text.ownData());
         while (next) |sibling| {
-            const sibling_text = sibling.is(Node.CData.Text) orelse break;
+            const sibling_text = sibling.exclusiveText() orelse break;
             try buffer.appendSlice(frame.call_arena, sibling_text.ownData());
             next = sibling.nextSibling();
             frame.removeNode(parent, sibling, .{ .reconnect_to = null });

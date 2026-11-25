@@ -832,7 +832,7 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
             .cdata => {
                 const c = child.subtype(Node.CData);
                 switch (c._type) {
-                    .text => {
+                    .text, .cdata_section => {
                         if (child_filter != .none or text_hidden or closed_details) {
                             // Text directly inside <select>/<optgroup> or a closed
                             // <details> is skipped, as is visibility:hidden text
@@ -843,7 +843,7 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                         }
                         try writeText(c, state);
                     },
-                    .comment, .cdata_section, .processing_instruction => {},
+                    .comment, .processing_instruction => {},
                 }
             },
             else => {},

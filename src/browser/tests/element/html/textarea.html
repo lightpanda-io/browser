@@ -107,6 +107,66 @@
   }
 </script>
 
+<script id="defaultValue_child_text_content">
+  {
+    // The default value is every Text child in order. Comments and elements
+    // are skipped, including the text inside the element.
+    const ta = document.createElement('textarea')
+    const span = document.createElement('span')
+    span.textContent = 'x'
+    ta.append('a', document.createComment('c'), 'b', span, 'c')
+    testing.expectEqual('abc', ta.defaultValue)
+    testing.expectEqual('abc', ta.value)
+    testing.expectEqual(3, ta.textLength)
+    ta.select()
+    testing.expectEqual(3, ta.selectionEnd)
+
+    // A child added later still counts while the value is untouched.
+    ta.append('\r\nd')
+    testing.expectEqual('abc\r\nd', ta.defaultValue)
+    testing.expectEqual('abc\nd', ta.value)
+    testing.expectEqual(5, ta.textLength)
+
+    ta.setRangeText('X', 1, 2)
+    testing.expectEqual('aXc\nd', ta.value)
+    testing.expectEqual('abc\r\nd', ta.defaultValue)
+
+    // Setting it replaces all the children, and leaves an edited value alone.
+    ta.defaultValue = 'new'
+    testing.expectEqual(1, ta.childNodes.length)
+    testing.expectEqual('new', ta.textContent)
+    testing.expectEqual('aXc\nd', ta.value)
+  }
+
+  {
+    // No Text child at all is an empty value.
+    const ta = document.createElement('textarea')
+    ta.required = true
+    ta.append(document.createComment('c'), document.createElement('span'))
+    testing.expectEqual('', ta.defaultValue)
+    testing.expectEqual('', ta.value)
+    testing.expectEqual(true, ta.validity.valueMissing)
+
+    ta.append('', 'x')
+    testing.expectEqual('x', ta.value)
+    testing.expectEqual(false, ta.validity.valueMissing)
+  }
+
+  {
+    const form = document.createElement('form')
+    const ta = document.createElement('textarea')
+    ta.name = 'msg'
+    ta.append('a', document.createComment('c'), 'b')
+    form.append(ta)
+    testing.expectEqual('ab', new FormData(form).get('msg'))
+
+    ta.value = 'typed'
+    testing.expectEqual('typed', new FormData(form).get('msg'))
+    form.reset()
+    testing.expectEqual('ab', ta.value)
+  }
+</script>
+
 <script id="disabled_initial">
   testing.expectEqual(false, $('#textarea1').disabled)
   testing.expectEqual(true, $('#textarea3').disabled)

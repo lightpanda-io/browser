@@ -827,8 +827,10 @@ fn elementClear(cmd: *BiDi.Command, p: ElementId) !void {
     }
 
     if (element.is(Html.Input)) |input_element| {
+        if (input_element.getValue().len == 0) return cmd.sendDone();
         try clearControl(input_element, frame);
     } else if (element.is(Html.TextArea)) |textarea| {
+        if ((try textarea.getValue(frame.local_arena)).len == 0) return cmd.sendDone();
         try clearControl(textarea, frame);
     } else {
         try element.asNode().setTextContent("", frame);
@@ -837,10 +839,6 @@ fn elementClear(cmd: *BiDi.Command, p: ElementId) !void {
 }
 
 fn clearControl(ctl: anytype, frame: *Frame) !void {
-    if (ctl.getValue().len == 0) {
-        return;
-    }
-
     const element = ctl.asElement();
     // give it focus
     try element.focus(frame);

@@ -231,7 +231,7 @@ fn collectFormFields(
                 .input_type = null,
                 .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
-                .value = textarea.getValue(),
+                .value = try textarea.getValue(arena),
                 .validation_message = if (include_validation) textarea.getValidationMessage() else "",
                 .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},

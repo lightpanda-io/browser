@@ -180,7 +180,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
     }
 
     if (parent.lastChild()) |sibling| {
-        if (sibling.is(CData.Text)) |tn| {
+        if (sibling.exclusiveText()) |tn| {
             // Existing text sibling without a matching pending_text. Seed the
             // buf from its _data and register pending so subsequent chunks
             // accumulate cheaply.
@@ -214,6 +214,7 @@ const Error = struct {
         append,
         create_element,
         create_comment,
+        create_cdata,
         create_processing_instruction,
         append_doctype_to_document,
         add_attrs_if_missing,
@@ -304,6 +305,7 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         xmlParseErrorCallback,
         popCallback,
         createCommentCallback,
+        createCDATASectionCallback,
         createProcessingInstruction,
         appendDoctypeToDocument,
         addAttrsIfMissingCallback,
@@ -637,6 +639,25 @@ fn createCommentCallback(ctx: *anyopaque, str: h5e.StringSlice) callconv(.c) ?*a
 }
 fn _createCommentCallback(self: *Parser, str: []const u8) !*anyopaque {
     const node = try Frame.node_factory.createComment(self.creation_document, str);
+    const pn = try self.arena.create(ParsedNode);
+    pn.* = .{
+        .data = null,
+        .node = node,
+    };
+    return pn;
+}
+
+fn createCDATASectionCallback(ctx: *anyopaque, str: h5e.StringSlice) callconv(.c) ?*anyopaque {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    const cp = self.frame._ce_reactions.push();
+    defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
+    return self._createCDATASectionCallback(str.slice()) catch |err| {
+        self.err = .{ .err = err, .source = .create_cdata };
+        return null;
+    };
+}
+fn _createCDATASectionCallback(self: *Parser, str: []const u8) !*anyopaque {
+    const node = try Frame.node_factory.createCDATASection(self.creation_document, str);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,
@@ -1103,6 +1124,10 @@ fn pollTerminate(self: *Parser) bool {
 const testing = @import("../../testing.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
 test "Parser: isWellFormedXML" {
+    try testing.expectEqual(true, isWellFormedXML("<r xmlns=\"urn:a\"><![CDATA[x<y]]><![CDATA[]]></r>"));
+    try testing.expectEqual(false, isWellFormedXML("<![CDATA[]]><r/>"));
+    try testing.expectEqual(false, isWellFormedXML("<r/><![CDATA[ ]]>"));
+    try testing.expectEqual(false, isWellFormedXML("<r><![CDATA[unclosed</r>"));
     try testing.expectEqual(true, isWellFormedXML("<?xml version=\"1.0\"?><a><b/>&nbsp;&amp;</a>"));
     try testing.expectEqual(true, isWellFormedXML("<!DOCTYPE svg [ <!ENTITY x \"y\"> ]><svg/>"));
     try testing.expectEqual(false, isWellFormedXML("<a><b></a>"));
