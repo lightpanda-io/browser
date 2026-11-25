@@ -321,6 +321,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .frame = frame,
     } };
 
+    const settings = corsSettings(element, kind == .module);
+
     if (mode != .normal) {
         var preloaded = self.takePreload(remote_url);
         if (preloaded == null and kind == .module) {
@@ -355,8 +357,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             return;
         }
     }
-
-    const settings = corsSettings(element, kind == .module);
 
     const script = try arena.create(Script);
     script.* = .{
