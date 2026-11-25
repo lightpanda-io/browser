@@ -20,9 +20,8 @@ const zlib = @import("zlib.zig");
 const brotli = @import("brotli.zig");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
-
-const Execution = js.Execution;
 
 pub const Format = enum {
     brotli,
@@ -37,10 +36,10 @@ pub const Compressor = union(enum(u1)) {
     deflate: zlib.Deflate(.compress),
     brotli: brotli.EncodingStream,
 
-    pub fn init(exec: *const Execution, format: Format) Compressor {
+    pub fn init(page: *Page, format: Format) Compressor {
         return switch (format) {
-            inline .deflate, .@"deflate-raw", .gzip => .{ .deflate = .init(exec, format) },
-            .brotli => .{ .brotli = .init(exec) },
+            inline .deflate, .@"deflate-raw", .gzip => .{ .deflate = .init(page, format) },
+            .brotli => .{ .brotli = .init(page) },
         };
     }
 
@@ -61,10 +60,10 @@ pub const Decompressor = union(enum(u1)) {
     inflate: zlib.Deflate(.decompress),
     brotli: brotli.DecodingStream,
 
-    pub fn init(exec: *const Execution, format: Format) Decompressor {
+    pub fn init(page: *Page, format: Format) Decompressor {
         return switch (format) {
-            inline .deflate, .@"deflate-raw", .gzip => .{ .inflate = .init(exec, format) },
-            .brotli => .{ .brotli = .init(exec) },
+            inline .deflate, .@"deflate-raw", .gzip => .{ .inflate = .init(page, format) },
+            .brotli => .{ .brotli = .init(page) },
         };
     }
 

@@ -22,7 +22,6 @@ const brotli = @import("../../../sys/brotli.zig");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
-const Execution = js.Execution;
 
 const TransformStream = @import("../streams/TransformStream.zig");
 
@@ -43,8 +42,8 @@ pub const EncodingStream = struct {
 
     // Public API.
 
-    pub fn init(exec: *const Execution) EncodingStream {
-        return .{ .page = exec.page };
+    pub fn init(page: *Page) EncodingStream {
+        return .{ .page = page };
     }
 
     // Transformer API.
@@ -182,8 +181,8 @@ pub const DecodingStream = struct {
 
     // Public API.
 
-    pub fn init(exec: *const Execution) DecodingStream {
-        return .{ .page = exec.page };
+    pub fn init(page: *Page) DecodingStream {
+        return .{ .page = page };
     }
 
     // Transformer API.

@@ -24,8 +24,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const TransformStream = @import("../streams/TransformStream.zig");
 
-const Execution = js.Execution;
-
 const Format = @import("compress.zig").Format;
 
 const State = enum {
@@ -47,8 +45,8 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
         /// Internal zlib stream; lazily initialized. Valid if `state` is `active`.
         stream: zlib.z_stream = undefined,
 
-        pub fn init(exec: *const Execution, format: Format) Deflate(mode) {
-            return .{ .format = format, .page = exec.page };
+        pub fn init(page: *Page, format: Format) Deflate(mode) {
+            return .{ .format = format, .page = page };
         }
 
         /// Initializes internal `stream`.

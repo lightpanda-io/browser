@@ -33,7 +33,7 @@ _compressor: compress.Compressor,
 pub fn init(format: compress.Format, exec: *const Execution) !*CompressionStream {
     const self = try exec._factory.create(CompressionStream{
         ._transform = undefined,
-        ._compressor = .init(exec, format),
+        ._compressor = .init(exec.page, format),
     });
     self._transform = try TransformStream.initWithZigTransformer(.{ .compressor = &self._compressor }, exec);
     return self;
