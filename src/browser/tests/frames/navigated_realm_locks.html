@@ -69,4 +69,38 @@ callbacks can't run, and the manager's document is not fully active anymore.
     });
   });
 </script>
+
+<!--
+A request that an iframe queued on our LockManager, with its own realm's
+`request`, before it navigated. Its turn comes once that realm is gone: it
+can't be granted, and must not be left holding the lock.
+-->
+<script id=web_locks_queued_by_navigated_realm type=module>
+  const state = await testing.async();
+
+  const name = 'navigated_realm_queued';
+  let release = null;
+  await new Promise((granted) => {
+    navigator.locks.request(name, () => {
+      granted();
+      return new Promise((r) => { release = r; });
+    });
+  });
+
+  const calls = [];
+  await navigatedRealm('iframe', (w) => {
+    w.navigator.locks.request.call(navigator.locks, name, () => { calls.push('queued'); });
+  });
+
+  release();
+  const own = await outcome(navigator.locks.request(name, () => 'granted'));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('fulfilled granted', own);
+    testing.diverges("Chrome's request belongs to the manager's realm, whichever realm's function made it", () => {
+      testing.expectEqual([], calls);
+    });
+  });
+</script>
 </body>

@@ -435,12 +435,28 @@ fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
     }
     defer lock_request.deinit();
 
-    for (self._locks.items) |lr| {
-        if (lr.state != .pending or !lr.name.eql(lock_request.name)) continue;
+    var i: usize = 0;
+    while (i < self._locks.items.len) {
+        const lr = self._locks.items[i];
+        if (lr.state != .pending or !lr.name.eql(lock_request.name)) {
+            i += 1;
+            continue;
+        }
+
+        // The realm that queued it is gone, so its callback can't run and
+        // would never release the lock.
+        if (lr.exec.js() == null) {
+            _ = self._locks.orderedRemove(i);
+            lr.finished = true;
+            lr.deinit();
+            continue;
+        }
+
         if (self.heldConflicts(lr.name, lr.options.mode)) break;
 
         lr.state = .held;
         lr.scheduleFireCallback();
+        i += 1;
     }
 }
 
