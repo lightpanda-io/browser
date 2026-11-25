@@ -3,7 +3,9 @@ on:
   issue_comment:
     types: [created]
   pull_request_target:
-    types: [opened,closed,synchronize]
+    # No "closed": on that event the action only locks the PR and reports a
+    # passing CLAAssistant check. Locking is done in cla-lock.yml.
+    types: [opened,reopened,synchronize]
 
 permissions:
   actions: write
@@ -32,3 +34,4 @@ jobs:
 
           remote-organization-name: lightpanda-io
           remote-repository-name: cla
+          lock-pullrequest-aftermerge: false
