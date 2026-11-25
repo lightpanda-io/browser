@@ -619,14 +619,10 @@ fn linkSqlite(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.S
 
     const lib_mod = cLibModule(b, deps.target, deps.optimize, is_tsan);
     lib_mod.sanitize_c = enable_csan;
-    lib_mod.addCSourceFile(.{ .file = dep.path("sqlite3.c") });
+    lib_mod.addCSourceFile(.{ .file = dep.path("sqlite3.c"), .flags = &.{hide_symbols} });
     const lib = sectionize(b.addLibrary(.{ .name = "sqlite3", .root_module = lib_mod }), section);
 
     const macros = [_]struct { []const u8, []const u8 }{
-        // The amalgamation is one translation unit, so everything not static is
-        // tagged SQLITE_API; redefining it hides the lot. `-fvisibility=hidden`
-        // is not reachable here — the sources belong to the dependency.
-        .{ "SQLITE_API", "__attribute__((visibility(\"hidden\")))" },
         .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
         .{ "SQLITE_DEFAULT_MEMSTATUS", "0" },
         .{ "SQLITE_DEFAULT_WAL_SYNCHRONOUS", "1" },
@@ -732,6 +728,7 @@ fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimi
         .optimize = optimize,
         .link_libc = true,
         .sanitize_thread = is_tsan,
+        .pic = true,
     });
 }
 
@@ -819,6 +816,7 @@ fn buildZstd(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimiz
         .root = dep.path("lib"),
         .flags = &.{
             // RFC 9659 caps the zstd content coding's window at 8MB, as Chrome does.
+            hide_symbols,
             "-DZSTD_MAXWINDOWSIZE_DEFAULT=(1<<23)",
         },
         .files = &.{

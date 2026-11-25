@@ -96,7 +96,7 @@ typedef struct lp_result {
 } lp_result;
 
 /* Zero-initialize for defaults: no proxy, default user agent, no HTTP
- * cache, 5s HTTP timeout, 30s JS watchdog. */
+ * cache, 15s HTTP timeout, 30s JS watchdog. */
 typedef struct lp_options {
     const char *user_agent;      /* NULL: default ("Lightpanda/1.0") */
     size_t user_agent_len;
@@ -104,7 +104,7 @@ typedef struct lp_options {
     size_t http_proxy_len;
     const char *http_cache_dir;  /* NULL: no persistent HTTP cache */
     size_t http_cache_dir_len;
-    uint32_t http_timeout_ms;    /* 0: default (5000) */
+    uint32_t http_timeout_ms;    /* 0: default (15000) */
     int32_t watchdog_ms;         /* 0: default (30000), <0: disabled */
 } lp_options;
 
