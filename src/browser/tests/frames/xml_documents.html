@@ -23,13 +23,14 @@
       testing.expectEqual('application/xhtml+xml', doc.contentType);
       testing.expectEqual('XHTML page', doc.title);
       testing.expectEqual('http://www.w3.org/1999/xhtml', doc.documentElement.namespaceURI);
+      testing.expectEqual(true, doc.body instanceof f.contentWindow.HTMLBodyElement);
 
       // Scripts run as they're parsed.
       testing.expectEqual(false, f.contentWindow.sawAfter);
-      testing.expectEqual(true, doc.body instanceof f.contentWindow.HTMLBodyElement);
+      testing.expectEqual(false, f.contentWindow.cdataSawAfter);
       const script = doc.getElementById('probe');
       testing.expectEqual(4, script.firstChild.nodeType);
-      testing.expectEqual("window.sawAfter = document.getElementById('after') !== null;", script.text);
+      testing.expectEqual("window.cdataSawAfter = document.getElementById('after') !== null;", script.text);
       testing.expectEqual('Visible CDATA', doc.getElementById('visible').innerText);
       const input = doc.getElementById('input');
       testing.expectEqual('abc', input.defaultValue);

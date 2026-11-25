@@ -4,7 +4,8 @@
 <head><title>XHTML page</title></head>
 <body>
 <div id="root">
-  <script id="probe"><![CDATA[window.sawAfter = document.getElementById('after') !== null;]]></script>
+  <script>window.sawAfter = document.getElementById('after') !== null;</script>
+  <script id="probe"><![CDATA[window.cdataSawAfter = document.getElementById('after') !== null;]]></script>
   <script/>
   <div id="empty"/>
   <p id="after">a&nbsp;b&amp;c</p>

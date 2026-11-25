@@ -522,7 +522,8 @@
   testing.expectEqual(['xmlns', 'xmlns:b'], Array.from(original.attributes, a => a.name));
   testing.expectEqual(4, original.lastChild.nodeType);
   const root = doc.documentElement;
-  testing.expectEqual(['id', 'x', 'xmlns', 'xmlns:b'], Array.from(root.attributes, a => a.name).sort());
+  // Namespace declarations come before the other attributes.
+  testing.expectEqual(['xmlns', 'xmlns:b', 'id', 'x'], Array.from(root.attributes, a => a.name));
   testing.expectEqual('urn:a', root.getAttribute('xmlns'));
   testing.expectEqual('urn:b', root.getAttributeNS(ns, 'b'));
   testing.expectEqual('urn:b', root.firstChild.namespaceURI);
