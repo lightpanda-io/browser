@@ -182,14 +182,8 @@ pub fn compileFunction(
 }
 
 pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js.Value {
-    const script = try self.compile(src, name);
-    return script.run();
-}
-
-// Compile `src` into a context-bound Script
-pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Script {
-    const result = try self.compileWithCache(src, name, .{}, null, false);
-    return result.script;
+    const result = try self.compile(src, name, .{});
+    return result.script.run();
 }
 
 // Where a script's source starts in the resource `name`, e.g. an inline script
@@ -209,14 +203,22 @@ const CompileResult = struct {
     cache_rejected: bool,
 };
 
-// Like compile, but takes an optional cached_data which is a previously
-// compiled and serialized script (see Script.Unbound.createCodeCache).
-// `muted` marks the script's origin as opaque (HTML's "muted errors" flag,
+// Options for compile. `cached_data` is a previously compiled and
+// serialized script (see Script.Unbound.createCodeCache). `muted` marks the
+// script's origin as opaque (HTML's "muted errors" flag,
 // https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors): V8
 // tags every function compiled from it, including closures that escape to
 // run later (timers, event listeners), so an exception thrown from any of
 // them reports through Message.IsOpaque() rather than just at this call site.
-pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, position: SourcePosition, cached_data: ?[]const u8, muted: bool) !CompileResult {
+pub const CompileOptions = struct {
+    position: SourcePosition = .{},
+    cached_data: ?[]const u8 = null,
+    muted: bool = false,
+};
+
+// Compile `src` into a context-bound Script, optionally from cached_data
+// and/or with a muted origin — see CompileOptions.
+pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8, options: CompileOptions) !CompileResult {
     const script_name = try self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = try self.isolate.initStringHandle(src);
 
@@ -225,12 +227,12 @@ pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, 
     v8.v8__ScriptOrigin__CONSTRUCT2(
         &origin,
         script_name,
-        std.math.lossyCast(c_int, position.line),
-        std.math.lossyCast(c_int, position.column),
+        std.math.lossyCast(c_int, options.position.line),
+        std.math.lossyCast(c_int, options.position.column),
         false, // resource_is_shared_cross_origin
         -1, // script_id
         null, // source_map_url
-        muted, // resource_is_opaque
+        options.muted, // resource_is_opaque
         false, // is_wasm
         false, // is_module
         null, // host_defined_options
@@ -238,7 +240,7 @@ pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, 
 
     // The Source takes ownership of the CachedData pointer (it holds it in a
     // unique_ptr), so we must not delete it ourselves — Source__DESTRUCT does.
-    const cached: ?*v8.ScriptCompilerCachedData = if (cached_data) |bytes|
+    const cached: ?*v8.ScriptCompilerCachedData = if (options.cached_data) |bytes|
         v8.v8__ScriptCompiler__CachedData__NEW(bytes.ptr, @intCast(bytes.len))
     else
         null;
@@ -248,13 +250,13 @@ pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, 
     v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, cached, &script_comp_source);
     defer v8.v8__ScriptCompiler__Source__DESTRUCT(&script_comp_source);
 
-    const options: v8.CompileOptions = if (cached != null) v8.kConsumeCodeCache else v8.kNoCompileOptions;
+    const compile_options: v8.CompileOptions = if (cached != null) v8.kConsumeCodeCache else v8.kNoCompileOptions;
 
     // Compile the script
     const v8_script = v8.v8__ScriptCompiler__Compile(
         self.handle,
         &script_comp_source,
-        options,
+        compile_options,
         v8.kNoCacheNoReason,
     ) orelse return error.CompilationError;
 

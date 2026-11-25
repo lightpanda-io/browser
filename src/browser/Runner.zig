@@ -475,12 +475,12 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        const s = ls.local.compile(src, "wait_script") catch |err| {
+        const result = ls.local.compile(src, "wait_script", .{}) catch |err| {
             const caught = try_catch.caughtOrError(frame.local_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
         };
-        break :blk s.getUnboundScript().persist(ls.local.isolate);
+        break :blk result.script.getUnboundScript().persist(ls.local.isolate);
     };
     defer compiled.deinit();
 

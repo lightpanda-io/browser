@@ -1070,7 +1070,7 @@ pub const Script = struct {
     fn runClassic(self: *Script, local: *const js.Local, text: []const u8) !void {
         const sc = self.script_cache orelse {
             // wasn't in the cache and isn't cacheable
-            const result = try local.compileWithCache(text, self.url, self.text_position, null, self.muted);
+            const result = try local.compile(text, self.url, .{ .position = self.text_position, .muted = self.muted });
             _ = try result.script.run();
             return;
         };
@@ -1086,12 +1086,12 @@ pub const Script = struct {
             // the text changes without the cache entry being invalidated.
             // That's unlikely, but treating the script as uncacheable avoids
             // the complexity for a rare edge case.
-            const result = try local.compileWithCache(text, self.url, .{}, null, self.muted);
+            const result = try local.compile(text, self.url, .{ .muted = self.muted });
             _ = try result.script.run();
             return;
         }
 
-        const result = try local.compileWithCache(text, self.url, .{}, sc.bytes, self.muted);
+        const result = try local.compile(text, self.url, .{ .cached_data = sc.bytes, .muted = self.muted });
         _ = try result.script.run();
 
         if (sc.bytes != null) {
