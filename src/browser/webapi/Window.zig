@@ -70,9 +70,6 @@ const Window = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-/// Set by `Frame.init`, once the `Context` exists. null for the window of a
-/// `Frame` that was destroyed with its parent's document: `Window` w/o a
-/// browsing context, which `_opener` or an event's source can still point at.
 _frame: js.FrameHandle,
 _document: *Document,
 _css: CSS = .init,
