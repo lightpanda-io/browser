@@ -27,10 +27,11 @@ const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const layout = @import("../layout.zig");
+const Factory = @import("../Factory.zig");
 
 const Element = @import("Element.zig");
 const DOMRect = @import("DOMRect.zig");
-const Factory = @import("../Factory.zig");
 
 const log = lp.log;
 
@@ -51,14 +52,69 @@ _observations: std.ArrayList(Observation) = .empty,
 
 const Observation = struct {
     target: *Element,
-    connected: bool = false,
-    // -1 so the first delivery always reports, even for a zero-size target.
-    last_width: f64 = -1,
-    last_height: f64 = -1,
+    box: Box,
+    // The first delivery _always_ reports, even for a 0x0
+    last: Size = .{ .width = -1, .height = -1 },
+};
+
+const Box = enum {
+    @"content-box",
+    @"border-box",
+    @"device-pixel-content-box",
 };
 
 const Options = struct {
     box: []const u8 = "content-box",
+};
+
+const Size = struct {
+    width: f64 = 0,
+    height: f64 = 0,
+};
+
+// TODO: No border (just padding for now)
+const Boxes = struct {
+    x: f64 = 0,
+    y: f64 = 0,
+    content: Size = .{},
+    border: Size = .{},
+    device_pixel: Size = .{},
+
+    fn of(target: *Element, frame: *Frame) Boxes {
+        if (!target.asNode().isConnected() or !target.isVisible(frame)) {
+            return .{};
+        }
+        const owner = target.ownerFrame(frame) orelse return .{};
+        if (owner._style_manager.isPlainInline(target)) {
+            return .{};
+        }
+        const content: Size = .{
+            .width = layout.innerWidth(target, owner),
+            .height = layout.innerHeight(target, owner),
+        };
+        const scale: f64 = frame.page.getViewport().scale;
+        return .{
+            .x = layout.contentStart(target, .width, owner),
+            .y = layout.contentStart(target, .height, owner),
+            .content = content,
+            .border = .{
+                .width = target.boxAxis(frame, .width),
+                .height = target.boxAxis(frame, .height),
+            },
+            .device_pixel = .{
+                .width = @round(content.width * scale),
+                .height = @round(content.height * scale),
+            },
+        };
+    }
+
+    fn observed(self: *const Boxes, box: Box) Size {
+        return switch (box) {
+            .@"content-box" => self.content,
+            .@"border-box" => self.border,
+            .@"device-pixel-content-box" => self.device_pixel,
+        };
+    }
 };
 
 pub fn init(callback: js.Function.Global, frame: *Frame) !*ResizeObserver {
@@ -87,15 +143,18 @@ pub fn releaseRef(self: *ResizeObserver, page: *Page) void {
 }
 
 pub fn observe(self: *ResizeObserver, target: *Element, options_: ?Options, frame: *Frame) !void {
-    _ = options_; // Can't make use of this
+    const options = options_ orelse Options{};
+    const box = std.meta.stringToEnum(Box, options.box) orelse return error.TypeError;
 
-    for (self._observations.items) |obs| {
+    for (self._observations.items, 0..) |obs, i| {
         if (obs.target == target) {
-            return;
+            // Observing a target again replaces its observation
+            _ = self._observations.orderedRemove(i);
+            break;
         }
     }
 
-    try self._observations.append(self._arena.allocator(), .{ .target = target });
+    try self._observations.append(self._arena.allocator(), .{ .target = target, .box = box });
     if (self._observations.items.len == 1) {
         try Frame.observers.registerResizeObserver(frame, self);
     }
@@ -124,27 +183,14 @@ pub fn disconnect(self: *ResizeObserver, frame: *Frame) void {
     Frame.observers.unregisterResizeObserver(frame, self);
 }
 
-// True if any observed element's connectedness changed since the last
-// delivery. Runs on every DOM change (via Frame.observers), so it must stay
-// pointer walks only — no style lookups.
-pub fn connectivityChanged(self: *const ResizeObserver) bool {
+// True if any observed box's size changed since the last delivery. Runs
+// once per batch of DOM changes (via Frame.observers): the layout it reads
+// is cached until a change invalidates it.
+pub fn sizeChanged(self: *const ResizeObserver, frame: *Frame) bool {
     for (self._observations.items) |obs| {
-        if (obs.target.asNode().isConnected() != obs.connected) {
+        const size = Boxes.of(obs.target, frame).observed(obs.box);
+        if (size.width != obs.last.width or size.height != obs.last.height) {
             return true;
-        }
-    }
-    return false;
-}
-
-/// True if any observed element is `ancestor` or one of its descendants. Walks
-/// the same flat-tree chain StyleManager.isHidden resolves visibility through.
-pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element, frame: *const Frame) bool {
-    for (self._observations.items) |obs| {
-        var current: ?*Element = obs.target;
-        while (current) |el| : (current = el.asNode().flatTreeParentElement(frame)) {
-            if (el == ancestor) {
-                return true;
-            }
         }
     }
     return false;
@@ -155,27 +201,14 @@ pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element, frame: *c
 pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
     var entries: std.ArrayList(*ResizeObserverEntry) = .empty;
     for (self._observations.items) |*obs| {
-        const target = obs.target;
-        const connected = target.asNode().isConnected();
-        obs.connected = connected;
-
-        const width, const height = blk: {
-            if (!connected or !target.isVisible(frame)) {
-                break :blk .{ 0, 0 };
-            }
-            break :blk .{
-                target.getElementAxis(frame, .width).value,
-                target.getElementAxis(frame, .height).value,
-            };
-        };
-
-        if (width == obs.last_width and height == obs.last_height) {
+        const boxes = Boxes.of(obs.target, frame);
+        const size = boxes.observed(obs.box);
+        if (size.width == obs.last.width and size.height == obs.last.height) {
             continue;
         }
-        obs.last_width = width;
-        obs.last_height = height;
+        obs.last = size;
 
-        const entry = try ResizeObserverEntry.create(obs.target, width, height, frame._factory);
+        const entry = try ResizeObserverEntry.create(obs.target, &boxes, frame._factory);
         try entries.append(frame.call_arena, entry);
     }
 
@@ -196,15 +229,23 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
 pub const ResizeObserverEntry = struct {
     _target: *Element,
     _content_rect: *DOMRect,
-    _box_size: [1]*ResizeObserverSize,
+    _content_box_size: [1]*ResizeObserverSize,
+    _border_box_size: [1]*ResizeObserverSize,
+    _device_pixel_content_box_size: [1]*ResizeObserverSize,
 
-    pub fn create(target: *Element, width: f64, height: f64, factory: *Factory) !*ResizeObserverEntry {
-        const content_rect = try DOMRect.create(.{ .width = width, .height = height }, factory);
-        const size = try ResizeObserverSize.create(width, height, factory);
+    fn create(target: *Element, boxes: *const Boxes, factory: *Factory) !*ResizeObserverEntry {
+        const content_rect = try DOMRect.create(.{
+            .x = boxes.x,
+            .y = boxes.y,
+            .width = boxes.content.width,
+            .height = boxes.content.height,
+        }, factory);
         return factory.create(ResizeObserverEntry{
             ._target = target,
             ._content_rect = content_rect,
-            ._box_size = .{size},
+            ._content_box_size = .{try ResizeObserverSize.create(boxes.content, factory)},
+            ._border_box_size = .{try ResizeObserverSize.create(boxes.border, factory)},
+            ._device_pixel_content_box_size = .{try ResizeObserverSize.create(boxes.device_pixel, factory)},
         });
     }
 
@@ -217,15 +258,15 @@ pub const ResizeObserverEntry = struct {
     }
 
     fn getBorderBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
-        return &self._box_size;
+        return &self._border_box_size;
     }
 
     fn getContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
-        return &self._box_size;
+        return &self._content_box_size;
     }
 
     fn getDevicePixelContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
-        return &self._box_size;
+        return &self._device_pixel_content_box_size;
     }
 
     pub const JsApi = struct {
@@ -248,10 +289,11 @@ pub const ResizeObserverSize = struct {
     _inline_size: f64,
     _block_size: f64,
 
-    pub fn create(inline_size: f64, block_size: f64, factory: *Factory) !*ResizeObserverSize {
+    // No vertical writing modes: inline is width, block is height
+    fn create(size: Size, factory: *Factory) !*ResizeObserverSize {
         return factory.create(ResizeObserverSize{
-            ._inline_size = inline_size,
-            ._block_size = block_size,
+            ._inline_size = size.width,
+            ._block_size = size.height,
         });
     }
 

@@ -124,6 +124,11 @@ pub fn innerWidth(self: *Element, owner: *Frame) f64 {
     return Edges.of(self, .width, true, owner).inner(boxWidth(self, owner));
 }
 
+/// The height of the box's content box
+pub fn innerHeight(self: *Element, owner: *Frame) f64 {
+    return Edges.of(self, .height, true, owner).inner(boxHeight(self, owner));
+}
+
 /// How far the box's children start from its left (.width) or top (.height)
 /// edge: its padding on that side. One with no box (display: contents) has
 /// no padding to put them in.

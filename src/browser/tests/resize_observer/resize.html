@@ -83,3 +83,32 @@
     testing.expectEqual(0, widths[1]);
   });
 </script>
+
+<script id="content_change_delivers" type=module>
+  // A box without a declared height follows its content: a new child or
+  // longer text grows it.
+  const state = await testing.async();
+  const t = document.createElement('div');
+  t.textContent = 'one';
+  document.body.appendChild(t);
+
+  const heights = [];
+  const observer = new ResizeObserver((entries) => {
+    heights.push(entries[0].contentRect.height);
+    if (heights.length === 1) {
+      setTimeout(() => t.appendChild(document.createElement('div')).textContent = 'two');
+    } else if (heights.length === 2) {
+      setTimeout(() => { t.firstChild.data = 'one '.repeat(1000); });
+    } else if (heights.length === 3) {
+      observer.disconnect();
+      state.resolve();
+    }
+  });
+  observer.observe(t);
+
+  await state.done(() => {
+    testing.expectEqual(3, heights.length);
+    testing.expectTrue(heights[1] > heights[0]);
+    testing.expectTrue(heights[2] > heights[1]);
+  });
+</script>

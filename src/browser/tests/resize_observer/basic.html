@@ -3,6 +3,10 @@
 <script src="../testing.js"></script>
 <div id="target" style="width: 100px; height: 60px;">Target Element</div>
 <div id="hidden" style="width: 50px; display: none;">Hidden</div>
+<div id="auto">Auto size</div>
+<div id="padded" style="width: 100px; height: 50px; padding: 10px 20px;">Padded</div>
+<div id="border_box" style="width: 100px; height: 50px; padding: 10px; box-sizing: border-box;">Border box</div>
+<span id="inline">Inline</span>
 
 <script id="initial" type=module>
   {
@@ -31,7 +35,7 @@
         testing.expectEqual(100, entry.contentRect.width);
         testing.expectEqual(60, entry.contentRect.height);
 
-        // content-box / border-box / device-pixel are the same for us
+        // Without padding, the content box is the border box
         testing.expectEqual(1, entry.contentBoxSize.length);
         testing.expectEqual(100, entry.contentBoxSize[0].inlineSize);
         testing.expectEqual(60, entry.contentBoxSize[0].blockSize);
@@ -86,6 +90,109 @@
     state.resolve();
     await state.done(() => {
       testing.expectEqual(1, count);
+    });
+  }
+</script>
+
+<script>
+  // Observes el and resolves with the entries of the initial delivery.
+  async function initialEntries(el, options) {
+    let entries = null;
+    const observer = new ResizeObserver((e) => { entries = e; });
+    observer.observe(el, options);
+    await testing.nextFrame();
+    observer.disconnect();
+    return entries;
+  }
+</script>
+
+<script id="auto_size" type=module>
+  {
+    // A box with no declared size reports its laid out size, like
+    // getBoundingClientRect.
+    const state = await testing.async();
+    const auto = document.getElementById('auto');
+    const entries = await initialEntries(auto);
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(1, entries.length);
+      const rect = auto.getBoundingClientRect();
+      testing.expectTrue(rect.height > 0);
+      testing.expectEqual(rect.width, entries[0].contentRect.width);
+      testing.expectEqual(rect.height, entries[0].contentRect.height);
+    });
+  }
+</script>
+
+<script id="padding" type=module>
+  {
+    // contentRect is the content box, placed at the padding's top-left. The
+    // border box takes the padding in.
+    const state = await testing.async();
+    const padded = await initialEntries(document.getElementById('padded'));
+    const borderBox = await initialEntries(document.getElementById('border_box'));
+    state.resolve();
+    await state.done(() => {
+      const p = padded[0];
+      testing.expectEqual(20, p.contentRect.x);
+      testing.expectEqual(10, p.contentRect.y);
+      testing.expectEqual(100, p.contentRect.width);
+      testing.expectEqual(50, p.contentRect.height);
+      testing.expectEqual(100, p.contentBoxSize[0].inlineSize);
+      testing.expectEqual(50, p.contentBoxSize[0].blockSize);
+      testing.expectEqual(140, p.borderBoxSize[0].inlineSize);
+      testing.expectEqual(70, p.borderBoxSize[0].blockSize);
+      testing.expectEqual(100, p.devicePixelContentBoxSize[0].inlineSize);
+
+      const b = borderBox[0];
+      testing.expectEqual(80, b.contentRect.width);
+      testing.expectEqual(30, b.contentRect.height);
+      testing.expectEqual(100, b.borderBoxSize[0].inlineSize);
+      testing.expectEqual(50, b.borderBoxSize[0].blockSize);
+    });
+  }
+</script>
+
+<script id="inline_is_zero" type=module>
+  {
+    // A non-replaced inline has no box of its own to size.
+    const state = await testing.async();
+    const entries = await initialEntries(document.getElementById('inline'));
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(1, entries.length);
+      testing.expectEqual(0, entries[0].contentRect.width);
+      testing.expectEqual(0, entries[0].contentRect.height);
+      testing.expectEqual(0, entries[0].borderBoxSize[0].inlineSize);
+    });
+  }
+</script>
+
+<script id="box_option" type=module>
+  {
+    // Only a change to the observed box notifies: a padding change leaves
+    // the content box alone.
+    const state = await testing.async();
+    const padded = document.getElementById('padded');
+    const counts = {};
+    for (const box of ['content-box', 'border-box']) {
+      let count = 0;
+      const observer = new ResizeObserver(() => { count += 1; });
+      observer.observe(padded, { box });
+      await testing.nextFrame();
+      padded.style.padding = '30px';
+      await testing.nextFrame();
+      observer.disconnect();
+      padded.style.padding = '10px 20px';
+      counts[box] = count;
+    }
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(1, counts['content-box']);
+      testing.expectEqual(2, counts['border-box']);
+      testing.expectError('TypeError', () => {
+        new ResizeObserver(() => {}).observe(padded, { box: 'margin-box' });
+      });
     });
   }
 </script>
