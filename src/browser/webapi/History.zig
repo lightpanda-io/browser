@@ -29,12 +29,13 @@ const History = @This();
 
 const ScrollRestoration = enum { auto, manual };
 
-// Set by Frame.init, once the context exists.
 _frame: js.FrameHandle,
 _scroll_restoration: ScrollRestoration = .auto,
 
-// The frame this history belongs to. Like Chrome, a History whose document
-// isn't active anymore (its frame was destroyed) throws a SecurityError.
+// Like Chrome, a History whose frame was destroyed throws a SecurityError.
+// TODO: Chrome also throws for the History of a document that its frame has
+// navigated away from. Ours is reused with the Window, and acts on the frame's
+// next document.
 fn liveFrame(self: *const History) !*Frame {
     return self._frame.get() orelse error.SecurityError;
 }
