@@ -21,8 +21,8 @@
 //! A `Context` is destroyed when its frame navigates or its worker goes away,
 //! while another realm can still hold, and call, the objects that were created
 //! in it. The `Frame` struct is then re-initialized in place for the next
-//! document, so a `*Frame` kept by such an object would name the wrong document,
-//! and a `*Execution` would point into freed memory.
+//! document, so a `*Frame` kept by such an object would point at the wrong
+//! document, and a `*Execution` into freed memory.
 
 const Context = @import("Context.zig");
 const Execution = @import("Execution.zig");
@@ -65,8 +65,8 @@ pub const ExecutionHandle = struct {
     }
 };
 
-/// For an object that would keep a `*Frame`. It names the document the frame
-/// had when the handle was taken, not whichever one the frame shows now.
+/// For an object that would keep a `*Frame`. It resolves only while the
+/// context it was taken from is alive.
 pub const FrameHandle = struct {
     anchor: *const Anchor,
 
