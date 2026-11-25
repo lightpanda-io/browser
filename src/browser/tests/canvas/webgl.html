@@ -67,6 +67,10 @@
   const buffer = gl.createBuffer();
   testing.expectTrue(buffer instanceof WebGLBuffer);
   testing.expectTrue(gl.isBuffer(buffer));
+  testing.expectFalse(buffer === gl.createBuffer());
+  buffer.tag = 'mesh';
+  testing.expectEqual('mesh', buffer.tag);
+  testing.expectEqual('[object WebGLBuffer]', Object.prototype.toString.call(buffer));
   testing.expectFalse(gl.isBuffer(null));
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(6), gl.STATIC_DRAW);

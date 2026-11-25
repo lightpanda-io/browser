@@ -531,9 +531,11 @@ pub const Undefined = struct {};
 // Requires that the type's JsApi.Meta be flagged with `optional_identity` just
 // as extra precaution. When enabled, the entry isn't inserted into the
 // identity_map and isn't turned into a v8.Global.
+// An `empty_with_no_proto` type has no Zig instance at all: the JS object has
+// no internal field to point at one. Return `.fresh` instead of `wrap(ptr)`.
 pub fn NoIdentity(comptime T: type) type {
     return struct {
-        ptr: *T,
+        ptr: if (@hasDecl(T.JsApi.Meta, "empty_with_no_proto")) void else *T,
 
         pub const NoIdentityOf = T;
 
@@ -548,6 +550,8 @@ pub fn NoIdentity(comptime T: type) type {
         pub fn wrap(ptr: *T) @This() {
             return .{ .ptr = ptr };
         }
+
+        pub const fresh: @This() = .{ .ptr = {} };
     };
 }
 

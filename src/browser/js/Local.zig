@@ -1392,7 +1392,12 @@ fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: ty
     return self.wrapNew(js_obj_handle, &resolved, slot, store_tagged);
 }
 
-fn wrapNoIdentity(self: *const Local, comptime T: type, value: *T) !*const v8.Object {
+fn wrapNoIdentity(self: *const Local, comptime T: type, value: @FieldType(js.NoIdentity(T), "ptr")) !*const v8.Object {
+    if (comptime @hasDecl(T.JsApi.Meta, "empty_with_no_proto")) {
+        // Nothing to link to: just an instance of the class.
+        const template = v8.v8__FunctionTemplate__InstanceTemplate(self.ctx.templates[T.JsApi.Meta.class_id]).?;
+        return v8.v8__ObjectTemplate__NewInstance(template, self.handle).?;
+    }
     comptime {
         if (@hasField(T, "_type") or findFinalizerType(T) != null) {
             @compileError(@typeName(T) ++ ": js.NoIdentity needs a most specific type without a finalizer");

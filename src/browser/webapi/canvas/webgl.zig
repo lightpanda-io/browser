@@ -65,8 +65,6 @@ fn Object(comptime class_name: [:0]const u8) type {
     return struct {
         const Self = @This();
 
-        _pad: u8 = 0,
-
         pub const JsApi = struct {
             pub const bridge = js.Bridge(Self);
 
@@ -74,6 +72,8 @@ fn Object(comptime class_name: [:0]const u8) type {
                 pub const name = class_name;
 
                 pub var class_id: bridge.ClassId = undefined;
+                pub const optional_identity = true;
+                pub const empty_with_no_proto = true;
             };
         };
     };
@@ -342,10 +342,10 @@ pub fn Methods(comptime Self: type, comptime version: Version) type {
             return 0x911A; // ALREADY_SIGNALED
         }
 
-        pub fn create(comptime T: type) fn (*const Self, *const js.Execution) anyerror!*T {
+        pub fn create(comptime T: type) fn (*const Self) js.NoIdentity(T) {
             return struct {
-                fn create(_: *const Self, exec: *const js.Execution) !*T {
-                    return exec._factory.create(T{});
+                fn create(_: *const Self) js.NoIdentity(T) {
+                    return .fresh;
                 }
             }.create;
         }
