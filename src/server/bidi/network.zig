@@ -160,6 +160,11 @@ const BaseParameters = struct {
                 .current => null,
                 .redirect => responseUrl(transfer),
             },
+            // Whether to report the request's cookies, in `cookies` and in the
+            // Cookie header. The response events don't: we read the jar when we
+            // send the event, and by then it has the response's Set-Cookie.
+            // TODO: keep the exact Cookie header sent on the transfer and report it.
+            .req_cookies = self.response == null,
         });
 
         if (self.response) |*response| {
@@ -181,6 +186,7 @@ const RequestData = struct {
     transfer: *Transfer,
     // The url of a redirect hop: req.url is already the redirect target.
     url: ?[]const u8 = null,
+    req_cookies: bool,
 
     pub fn jsonStringify(self: *const RequestData, jws: anytype) !void {
         self._jsonStringify(jws) catch return error.WriteFailed;
@@ -190,10 +196,6 @@ const RequestData = struct {
         const transfer = self.transfer;
         const req = &transfer.req;
         const arena = transfer.arena.allocator();
-
-        // The jar adds the Cookie header when the request goes out, so it
-        // isn't in req_headers yet.
-        const cookie_header = try transfer.getCookieString(arena);
 
         try jws.beginObject();
         try jws.objectField("request");
@@ -212,19 +214,28 @@ const RequestData = struct {
             try jws.write(Header{ .name = hdr.name, .value = hdr.value });
             headers_size += Header.size(hdr.name, hdr.value);
         }
-        if (cookie_header) |value| {
-            try jws.write(Header{ .name = "Cookie", .value = value });
-            headers_size += Header.size("Cookie", value);
+
+        if (self.req_cookies) {
+            // The jar adds the Cookie header when the request goes out, so it
+            // isn't in req_headers yet.
+            const cookie_header = try transfer.getCookieString(arena);
+
+            if (cookie_header) |value| {
+                try jws.write(Header{ .name = "Cookie", .value = value });
+                headers_size += Header.size("Cookie", value);
+            }
         }
         try jws.endArray();
 
         try jws.objectField("cookies");
         try jws.beginArray();
-        try transfer.forEachCookie(jws, struct {
-            fn write(w: @TypeOf(jws), cookie: *const Cookie) !void {
-                try w.write(storage.BiDiCookie{ .cookie = cookie });
-            }
-        }.write);
+        if (self.req_cookies) {
+            try transfer.forEachCookie(jws, struct {
+                fn write(w: @TypeOf(jws), cookie: *const Cookie) !void {
+                    try w.write(storage.BiDiCookie{ .cookie = cookie });
+                }
+            }.write);
+        }
         try jws.endArray();
 
         try jws.objectField("headersSize");
