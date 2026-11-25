@@ -1079,7 +1079,16 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .form, .anchor => |p| p,
         .script => |p| p orelse originator,
         // Only a `Frame` with existing content can be navigated.
-        .iframe => |iframe| iframe._window.?._frame.get().?,
+        .iframe => |iframe| blk: {
+            if (iframe._window) |window| {
+                if (window._frame.get()) |frame| {
+                    break :blk frame;
+                }
+            }
+            // don't defer this, the caller is responsible for freeing it on error
+            arena.release();
+            return;
+        },
     };
 
     // The competing navigation, if any, is queued on the target, which isn't
