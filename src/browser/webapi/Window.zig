@@ -518,15 +518,17 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     frame.js.call_depth = call_depth + 1;
     defer frame.js.call_depth = call_depth;
 
+    const message = err.toStringSlice() catch "Unknown error";
+
     frame.page.recordJsError(error.JsException);
-    frame.page.status.noteException(err.toStringSlice() catch "");
+    frame.page.status.noteException(message);
 
     const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
 
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error")) {
         log.warn(.page_error, "uncaught exception", .{
-            .message = err.toStringSlice() catch "Unknown error",
+            .message = message,
             .url = location.url,
             .line = location.line,
             .column = location.column,
@@ -548,7 +550,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         .cancelable = true,
     } else .{
         .@"error" = try err.persist(),
-        .message = err.toStringSlice() catch "Unknown error",
+        .message = message,
         .filename = location.url,
         .lineno = location.line,
         .colno = location.column,
@@ -571,7 +573,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         // event's fields are sanitized to "Script error.", but our own log
         // and the CDP notification should still show the real details.
         log.warn(.page_error, "uncaught exception", .{
-            .message = err.toStringSlice() catch "Unknown error",
+            .message = message,
             .url = location.url,
             .line = location.line,
             .column = location.column,
