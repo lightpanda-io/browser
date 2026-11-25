@@ -485,7 +485,8 @@ pub const CallOpts = struct {
     /// Set by model-facing callers so `tree` can answer `delta`.
     tree_seen: ?*TreeSeen = null,
     /// The caller parses the result, so `getCookies` answers in JSON rather
-    /// than the text lines a model reads.
+    /// than the text lines a model reads, and `evaluate` with its value as
+    /// JSON text, where the string "42" and the number 42 differ.
     structured: bool = false,
     source: TelemetryTool.Source,
 };
@@ -803,7 +804,7 @@ fn dispatch(
         .selectOption => .{ .text = try execSelectOption(arena, session, registry, substituted) },
         .setChecked => .{ .text = try execSetChecked(arena, session, registry, substituted) },
         .findElement => execFindElement(arena, session, registry, substituted),
-        .evaluate => execEvaluate(arena, session, registry, substituted),
+        .evaluate => execEvaluate(arena, session, registry, substituted, if (opts.structured) .json else .text),
         .extract => execExtract(arena, session, registry, substituted),
         .classify => classify.exec(arena, session, registry, substituted),
         .acceptCookies => consent.exec(arena, session, registry, substituted),
@@ -835,7 +836,7 @@ pub fn evalScript(
 ) ToolError!ToolResult {
     const z = try arena.dupeSentinel(u8, script, 0);
     const page = try ensurePage(session, registry, null, null);
-    return runEval(arena, page, z, null, null);
+    return runEval(arena, page, z, null, null, .text);
 }
 
 /// Schema-driven extraction. The schema is parsed in Zig so a syntax error
@@ -854,7 +855,7 @@ pub fn extract(
 
     const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
     const page = try ensurePage(session, registry, null, null);
-    var result = try runEval(arena, page, script, null, null);
+    var result = try runEval(arena, page, script, null, null, .text);
     // Checked here, on the full text: callers cap what they pass on.
     if (!result.is_error) result.no_data = isEmptyJson(arena, result.text);
     return result;
@@ -1408,8 +1409,16 @@ const EvaluateParams = struct {
     save: ?[]const u8 = null,
 };
 
-fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
-    return (try beginEvaluate(arena, session, registry, try parseArgs(EvaluateParams, arena, arguments), .wait)).done;
+/// How a script's value becomes result text.
+const ValueEncoding = enum {
+    /// Objects as JSON, anything else as its string form, undefined as "".
+    text,
+    /// Always JSON; undefined as null.
+    json,
+};
+
+fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value, encoding: ValueEncoding) ToolError!ToolResult {
+    return (try beginEvaluate(arena, session, registry, try parseArgs(EvaluateParams, arena, arguments), .wait, encoding)).done;
 }
 
 /// A page promise `startEvaluate` left pending, for `pollEvaluate`.
@@ -1439,7 +1448,7 @@ pub fn startEvaluate(
         .invalid => |result| return .{ .done = result },
         .ok => |args| args,
     };
-    return beginEvaluate(arena, session, registry, args, .hand_back);
+    return beginEvaluate(arena, session, registry, args, .hand_back, .text);
 }
 
 /// The result once the promise settled or its document went away, null while
@@ -1467,7 +1476,7 @@ pub fn pollEvaluate(
         var try_catch: lp.js.TryCatch = undefined;
         try_catch.init(&ls.local);
         defer try_catch.deinit();
-        break :blk try settledResult(arena, promise, &try_catch);
+        break :blk try settledResult(arena, promise, &try_catch, .text);
     };
     return try finishEvaluate(arena, session, registry, page, pending.save, result);
 }
@@ -1485,11 +1494,12 @@ fn beginEvaluate(
     registry: *NodeRegistry,
     args: EvaluateParams,
     on_pending: enum { wait, hand_back },
+    encoding: ValueEncoding,
 ) ToolError!StartedEvaluate {
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const prelude = bridgePrelude(arena, &session.bridge_store) catch return ToolError.OutOfMemory;
-    _ = try runEval(arena, page, prelude, null, null);
+    _ = try runEval(arena, page, prelude, null, null, .text);
 
     // Block scope preserves a trailing expression's value and keeps top-level
     // `let`/`const` from leaking; top-level `await`/`return` need the async IIFE.
@@ -1505,7 +1515,7 @@ fn beginEvaluate(
     ) catch return ToolError.OutOfMemory;
 
     var promise: ?lp.js.Promise.Global = null;
-    const result = try runEval(arena, page, block_script, iife_script, if (on_pending == .hand_back) &promise else null);
+    const result = try runEval(arena, page, block_script, iife_script, if (on_pending == .hand_back) &promise else null, encoding);
     if (promise) |p| return .{ .pending = .{ .frame_id = page._frame_id, .loader_id = page._loader_id, .promise = p, .save = args.save } };
     return .{ .done = try finishEvaluate(arena, session, registry, page, args.save, result) };
 }
@@ -1525,7 +1535,7 @@ fn finishEvaluate(
     const app_allocator = session.browser.app.allocator;
 
     // Sync lp.* before any queued navigation tears down this JS context.
-    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude, null, null) catch |err| switch (err) {
+    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude, null, null, .text) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => null,
     };
@@ -1715,10 +1725,10 @@ fn caughtMessage(arena: std.mem.Allocator, try_catch: *const lp.js.TryCatch, err
 /// Tools written for MCP return a `CallToolResult`; its text parts are the
 /// answer. Anything else prints like an evaluate result.
 fn pageToolResult(arena: std.mem.Allocator, value: lp.js.Value) !ToolResult {
-    if (!value.isObject() or value.isArray()) return .{ .text = try evalResultText(arena, value) };
+    if (!value.isObject() or value.isArray()) return .{ .text = try evalResultText(arena, value, .text) };
     const obj = value.toObject();
     const content = try obj.get("content");
-    if (!content.isArray()) return .{ .text = try evalResultText(arena, value) };
+    if (!content.isArray()) return .{ .text = try evalResultText(arena, value, .text) };
 
     var text: std.Io.Writer.Allocating = .init(arena);
     const parts = content.toArray();
@@ -1734,7 +1744,7 @@ fn pageToolResult(arena: std.mem.Allocator, value: lp.js.Value) !ToolResult {
     // structured part, or failing that the object itself.
     if (text.written().len == 0) {
         const structured = try obj.get("structuredContent");
-        return .{ .text = try evalResultText(arena, if (structured.isObject()) structured else value) };
+        return .{ .text = try evalResultText(arena, if (structured.isObject()) structured else value, .text) };
     }
     return .{ .text = text.written(), .is_error = (try obj.get("isError")).isTrue() };
 }
@@ -1749,6 +1759,7 @@ fn runEval(
     script: [:0]const u8,
     fallback: ?[:0]const u8,
     pending_out: ?*?lp.js.Promise.Global,
+    encoding: ValueEncoding,
 ) ToolError!ToolResult {
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
@@ -1759,7 +1770,7 @@ fn runEval(
     defer try_catch.deinit();
 
     const js_result = ls.local.compileAndRun(script, null) catch |err| {
-        if (err == error.CompilationError) if (fallback) |fb| return runEval(arena, page, fb, null, pending_out);
+        if (err == error.CompilationError) if (fallback) |fb| return runEval(arena, page, fb, null, pending_out, encoding);
         return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true };
     };
 
@@ -1771,22 +1782,22 @@ fn runEval(
             return .{ .text = "" };
         };
         if (waitForPromise(page, promise)) |failed| return failed;
-        return settledResult(arena, promise, &try_catch);
+        return settledResult(arena, promise, &try_catch, encoding);
     }
 
-    const text = evalResultText(arena, js_result) catch |err| switch (err) {
+    const text = evalResultText(arena, js_result, encoding) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
     };
     return .{ .text = text };
 }
 
-fn settledResult(arena: std.mem.Allocator, promise: lp.js.Promise, try_catch: *lp.js.TryCatch) error{OutOfMemory}!ToolResult {
+fn settledResult(arena: std.mem.Allocator, promise: lp.js.Promise, try_catch: *lp.js.TryCatch, encoding: ValueEncoding) error{OutOfMemory}!ToolResult {
     const settled = promise.result();
     const rejected = promise.state() == .rejected;
     // No-return async IIFE → undefined → silence, so pipes stay clean.
-    if (!rejected and settled.isUndefined()) return .{ .text = "" };
-    const text = (if (rejected) settled.toStringSliceWithAlloc(arena) else evalResultText(arena, settled)) catch |err| switch (err) {
+    if (!rejected and settled.isUndefined()) return .{ .text = if (encoding == .json) "null" else "" };
+    const text = (if (rejected) settled.toStringSliceWithAlloc(arena) else evalResultText(arena, settled, encoding)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .text = try formatJsError(arena, try_catch, err), .is_error = true },
     };
@@ -1815,7 +1826,8 @@ fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
 
 /// Objects/arrays serialize as JSON so `return obj` prints data, not
 /// `[object Object]`; errors and primitives keep their string form.
-fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value) ![]const u8 {
+fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value, encoding: ValueEncoding) ![]const u8 {
+    if (encoding == .json) return try value.toJson(arena) orelse "null";
     if (value.isObject() and !value.isFunction() and !value.isNativeError()) {
         return try value.toJson(arena) orelse "undefined";
     }
@@ -2947,6 +2959,32 @@ test "click: waits for the CSS animation it starts" {
     // evaluate does not wait for timers, so this reads the state the click left
     const r = try call(aa, page.session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"script\":\"String(window.grown)\"}", .{}), .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, r.text, "true") != null);
+}
+
+test "evaluate: structured answers with the value as JSON" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const cases = [_]struct { script: []const u8, text: []const u8, json: []const u8 }{
+        .{ .script = "'42'", .text = "42", .json = "\"42\"" },
+        .{ .script = "42", .text = "42", .json = "42" },
+        .{ .script = "({a: [1, null]})", .text = "{\"a\":[1,null]}", .json = "{\"a\":[1,null]}" },
+        .{ .script = "undefined", .text = "undefined", .json = "null" },
+        .{ .script = "await Promise.resolve()", .text = "", .json = "null" },
+        .{ .script = "return await Promise.resolve('x')", .text = "x", .json = "\"x\"" },
+    };
+    for (cases) |case| {
+        var args: std.json.ObjectMap = .empty;
+        try args.put(aa, "script", .{ .string = case.script });
+        const text = try call(aa, page.session, &registry, "evaluate", .{ .object = args }, .{ .source = .user });
+        try std.testing.expectEqualStrings(case.text, text.text);
+        const json = try call(aa, page.session, &registry, "evaluate", .{ .object = args }, .{ .source = .user, .structured = true });
+        try std.testing.expectEqualStrings(case.json, json.text);
+    }
 }
 
 test "fill: the wrong element type names the constraint" {
