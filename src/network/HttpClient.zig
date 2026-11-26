@@ -7024,7 +7024,7 @@ test "HttpClient: encodedDataLength of an early-stopped partial fetch is the byt
 
 test "HttpClient: encodedDataLength of a cache hit is the stored body, of a revalidation the 304's bytes" {
     const client = &testing.test_browser.http_client;
-    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0, false) } };
     defer cache.deinit();
     const previous = client.cache;
     client.cache = &cache;
@@ -7046,7 +7046,7 @@ test "HttpClient: privatecache caches Set-Cookie responses" {
 
     inline for (.{ .{ false, "skip" }, .{ true, "strip" } }) |mode| {
         var cache: Cache = .{
-            .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) },
+            .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0, false) },
             .set_cookie = mode[0],
         };
         defer cache.deinit();
@@ -7061,7 +7061,7 @@ test "HttpClient: a cors-mode fetch is blocked even when the response is a cache
     const previous = client.cache;
     defer client.cache = previous;
 
-    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0, false) } };
     defer cache.deinit();
     client.cache = &cache;
 
@@ -7073,7 +7073,7 @@ test "HttpClient: a Range request and a URL with userinfo skip the cache" {
     defer pool.deinit();
     var client: Client = undefined;
     initTestClient(&client, &pool);
-    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0, false) } };
     defer cache.deinit();
     client.cache = &cache;
 
@@ -7100,7 +7100,7 @@ test "HttpClient: Vary sees the jar's cookies" {
     defer pool.deinit();
     var client: Client = undefined;
     initTestClient(&client, &pool);
-    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0, false) } };
     defer cache.deinit();
     client.cache = &cache;
 

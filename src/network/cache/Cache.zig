@@ -47,6 +47,7 @@ pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
         allocator,
         .{ .path = cache_path },
         config.httpCacheEntryLimit(),
+        config.experimentalFeatures().privatecache,
     ) catch |err| {
         log.err(.cache, "failed to init", .{
             .kind = "SqliteCache",
@@ -817,7 +818,7 @@ test "Cache: renew strips a 304's Set-Cookie" {
         defer arena.deinit();
 
         var cache: Cache = .{
-            .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0) },
+            .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0, false) },
             .set_cookie = mode,
         };
         defer cache.deinit();

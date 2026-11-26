@@ -39,6 +39,7 @@ pub const SqliteCache = @This();
 pool: Pool,
 allocator: std.mem.Allocator,
 entry_limit: u32,
+privatecache: bool,
 
 // When the schema changes, change this value, and the DB will be deleted and
 // re-created with the schema
@@ -96,8 +97,8 @@ const SqliteCachePath = union(enum) {
 const db_name = "cache.db";
 const db_files = [_][]const u8{ db_name, db_name ++ "-wal", db_name ++ "-shm" };
 
-pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !SqliteCache {
-    return open(allocator, path, entry_limit) catch |err| {
+pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32, privatecache: bool) !SqliteCache {
+    return open(allocator, path, entry_limit, privatecache) catch |err| {
         const cache_dir = switch (path) {
             .path => |p| p,
             .memory => return err,
@@ -116,11 +117,11 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u3
                 else => return delete_err,
             };
         }
-        return open(allocator, path, entry_limit);
+        return open(allocator, path, entry_limit, privatecache);
     };
 }
 
-fn open(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !SqliteCache {
+fn open(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32, privatecache: bool) !SqliteCache {
     var pool = switch (path) {
         .memory => try Pool.init(allocator, ":memory:"),
         .path => |cache_dir| blk: {
@@ -152,7 +153,7 @@ fn open(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !
         try createSchema(conn);
     }
 
-    var cache: SqliteCache = .{ .allocator = allocator, .pool = pool, .entry_limit = entry_limit };
+    var cache: SqliteCache = .{ .allocator = allocator, .pool = pool, .entry_limit = entry_limit, .privatecache = privatecache };
     cache.maintenance(lp.datetime.timestamp(.real));
 
     log.info(.cache, "sqlite cache initialized", .{ .path = path, .entry_limit = entry_limit, .version = schema_version });
@@ -611,7 +612,7 @@ const HeaderIterator = struct {
 const testing = @import("../../testing.zig");
 
 fn setupCache(allocator: std.mem.Allocator) !SqliteCache {
-    return .init(allocator, .memory, 0);
+    return .init(allocator, .memory, 0, false);
 }
 
 test "SqliteCache: basic put and get" {
@@ -1311,7 +1312,7 @@ test "SqliteCache: maintenance purges expired entries without validators" {
 }
 
 test "SqliteCache: expired purge uses the cache_expiry index" {
-    var cache = try SqliteCache.init(testing.allocator, .memory, 0);
+    var cache = try setupCache(testing.allocator);
     defer cache.deinit();
 
     const conn = try cache.pool.acquire();
@@ -1331,7 +1332,7 @@ test "SqliteCache: expired purge uses the cache_expiry index" {
 }
 
 test "SqliteCache: evicts oldest entries over the limit" {
-    var cache = try SqliteCache.init(testing.allocator, .memory, 3);
+    var cache = try SqliteCache.init(testing.allocator, .memory, 3, false);
     defer cache.deinit();
 
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
@@ -1387,7 +1388,7 @@ test "SqliteCache: starts over from an unreadable database" {
     const cache_dir = try std.Io.Dir.path.join(testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
     defer testing.allocator.free(cache_dir);
 
-    var cache = try SqliteCache.init(testing.allocator, .{ .path = cache_dir }, 0);
+    var cache = try SqliteCache.init(testing.allocator, .{ .path = cache_dir }, 0, false);
     defer cache.deinit();
 
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
@@ -1430,7 +1431,7 @@ test "SqliteCache: starts over from another schema version" {
         try conn.exec("create table cache (url text not null primary key, body blob not null) strict", .{});
     }
 
-    var cache = try SqliteCache.init(testing.allocator, .{ .path = cache_dir }, 0);
+    var cache = try SqliteCache.init(testing.allocator, .{ .path = cache_dir }, 0, false);
     defer cache.deinit();
 
     {
