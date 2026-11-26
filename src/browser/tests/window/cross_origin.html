@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <iframe src=support/frame1.html></iframe>
@@ -41,11 +42,51 @@
     testing.expectEqual(expected_urls.sort(), captures.map((c) => {return c.url}).sort());
     captures.forEach((c) => {
       if (c.url.includes(testing.BASE_URL)) {
-        testing.expectEqual(false, c.document_is_undefined);
+        testing.expectEqual(null, c.document_error);
       } else {
-        testing.expectEqual(true, c.document_is_undefined);
+        testing.expectEqual('SecurityError', c.document_error);
       }
     });
   });
 }
+</script>
+
+<script id=cross_origin_window type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  iframe.src = testing.BASE_URL.replace('127.0.0.1', 'localhost') + 'window/support/frame1.html';
+  iframe.onload = () => state.resolve();
+  document.documentElement.appendChild(iframe);
+
+  await state.done(() => {
+    // Only booleans in assertions: formatting a cross-origin object throws.
+    const w = iframe.contentWindow;
+    testing.expectEqual(true, Object.getPrototypeOf(w) === null);
+    testing.expectEqual(true, w.window === w);
+    testing.expectEqual(true, w.parent === window);
+    testing.expectEqual(true, w.top === window.top);
+    testing.expectEqual(0, w.length);
+    testing.expectEqual(false, w.closed);
+    testing.expectEqual('function', typeof w.postMessage);
+    testing.expectEqual(true, Object.getOwnPropertyNames(w).includes('postMessage'));
+    testing.expectEqual('undefined', typeof w.then);
+
+    testing.expectError('SecurityError', () => w.document);
+    testing.expectError('SecurityError', () => w.foo);
+    testing.expectError('SecurityError', () => w.toString);
+    testing.expectError('SecurityError', () => w[0]);
+    testing.expectError('SecurityError', () => 'document' in w);
+    testing.expectError('SecurityError', () => { w.foo = 1; });
+    testing.expectError('SecurityError', () => String(w));
+
+    const loc = w.location;
+    testing.expectEqual(true, Object.getPrototypeOf(loc) === null);
+    testing.expectEqual('function', typeof loc.replace);
+    testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(loc, 'href').set);
+    testing.expectError('SecurityError', () => loc.href);
+    testing.expectError('SecurityError', () => loc.hash);
+    testing.expectError('SecurityError', () => loc.toString);
+    testing.expectError('SecurityError', () => { loc.hash = 'x'; });
+  });
 </script>

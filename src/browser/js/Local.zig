@@ -1389,7 +1389,12 @@ fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: ty
     }
     const resolved = resolveT(T, value);
     const store_tagged = comptime !@hasDecl(T.JsApi.Meta, "empty_with_no_proto");
-    return self.wrapNew(js_obj_handle, &resolved, slot, store_tagged);
+    const handle = try self.wrapNew(js_obj_handle, &resolved, slot, store_tagged);
+    if (comptime bridge.isCrossOrigin(T.JsApi)) {
+        var out: v8.MaybeBool = undefined;
+        v8.v8__Object__SetPrototype(handle, self.handle, @ptrCast(self.isolate.initNull()), &out);
+    }
+    return handle;
 }
 
 fn wrapNoIdentity(self: *const Local, comptime T: type, value: *T) !*const v8.Object {

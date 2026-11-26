@@ -1475,6 +1475,12 @@ pub const JsApis = blk: {
 };
 
 // Whether Child is Ancestor or inherits from it, following the Proto chain.
+// A cross-origin Window or Location: members are own properties, the prototype
+// is null and the interface isn't exposed on the global.
+pub fn isCrossOrigin(comptime JsApi: type) bool {
+    return @hasDecl(JsApi.Meta, "cross_origin") and JsApi.Meta.cross_origin;
+}
+
 pub fn inheritsOrIs(comptime Child: type, comptime Ancestor: type) bool {
     comptime {
         const target = Ancestor.bridge.type;
