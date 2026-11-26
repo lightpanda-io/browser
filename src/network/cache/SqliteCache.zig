@@ -49,7 +49,7 @@ const schema_version = 4;
 // overflow pages.
 const schema = [_][:0]const u8{
     \\ create table cache (
-    \\      url               text not null primary key,
+    \\      url               text not null,
     \\      private           integer not null,
     \\      status            integer not null,
     \\      stored_at         integer not null,
@@ -62,9 +62,11 @@ const schema = [_][:0]const u8{
     \\      vary_headers      blob not null,
     \\      headers           blob not null,
     \\      script_cache      blob,
-    \\      body              blob not null
+    \\      body              blob not null,
+    \\      primary key (url, private)
     \\ ) strict
     ,
+    "create index cache_url on cache(url)",
     "create index cache_stored_at on cache(stored_at)",
     \\ create index cache_expiry on cache(stored_at + max_age - age_at_store)
     \\     where etag is null and last_modified is null
@@ -223,22 +225,31 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, body_allocator: std.mem
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    return readEntry(conn, arena, body_allocator, req) catch |err| switch (err) {
+    return readEntry(conn, arena, body_allocator, req, self.privatecache) catch |err| switch (err) {
         error.CorruptEntry => {
-            discardCorrupt(conn, req.url);
+            discardCorrupt(conn, req.url, self.privatecache);
             return .miss;
         },
         else => return err,
     };
 }
 
-fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
-    var entry = try conn.row(
+fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest, privatecache: bool) !CacheGetResult {
+    // Private rows win over shared rows for the same URL, but only when
+    // privatecache is enabled; otherwise ignore any (stale) private rows.
+    var entry = (if (privatecache) try conn.row(
         \\ select status, stored_at, age_at_store, max_age, must_revalidate,
         \\     content_type, etag, last_modified, vary_headers, headers,
         \\     script_cache, body
         \\ from cache where url = $1
-    , .{req.url}) orelse {
+        \\ order by private desc
+        \\ limit 1
+    , .{req.url}) else try conn.row(
+        \\ select status, stored_at, age_at_store, max_age, must_revalidate,
+        \\     content_type, etag, last_modified, vary_headers, headers,
+        \\     script_cache, body
+        \\ from cache where url = $1 and private = 0
+    , .{req.url})) orelse {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
         return .miss;
     };
@@ -312,7 +323,7 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
         \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     , .{
         req.url,
-        false,
+        req.private,
         @as(i64, @intCast(req.status)),
         req.stored_at,
         @as(i64, @intCast(req.age_at_store)),
@@ -333,13 +344,15 @@ pub fn putScriptCache(self: *SqliteCache, url: []const u8, body: []const u8, byt
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    // We match on the body to make sure we're setting the script_cache for
-    // the right body. It is possible, though unlikely, that this row has been
-    // updated since we read it with a new body. If so, our cached script would
-    // no longer be valid.
+    const rowid = try targetRowid(conn, url, self.privatecache) orelse return;
+
+    // We also match on the body to make sure we're setting the script_cache
+    // for the right body. It is possible, though unlikely, that this row has
+    // been updated since we read it with a new body. If so, our cached
+    // script would no longer be valid.
     try conn.exec(
-        "update cache set script_cache = $1 where url = $2 and body = $3",
-        .{ Blob{ .data = bytes }, url, Blob{ .data = body } },
+        "update cache set script_cache = $1 where rowid = $2 and body = $3",
+        .{ Blob{ .data = bytes }, rowid, Blob{ .data = body } },
     );
 }
 
@@ -358,19 +371,34 @@ pub fn evict(self: *SqliteCache, url: []const u8) void {
     };
     defer self.pool.release(conn);
 
-    deleteEntry(conn, url);
+    deleteEntry(conn, url, self.privatecache);
     log.debug(.cache, "evict", .{ .url = url });
 }
 
-fn deleteEntry(conn: Sqlite.Conn, url: []const u8) void {
-    conn.exec("delete from cache where url = $1", .{url}) catch |err| {
+// Picks the same row get()/readEntry() would have picked for this url: the
+// private row when privatecache is on and one exists, otherwise the shared
+// row. Keeps deletes/updates from touching the other row's entry.
+fn targetRowid(conn: Sqlite.Conn, url: []const u8, privatecache: bool) !?i64 {
+    return if (privatecache)
+        conn.scalar(i64, "select rowid from cache where url = $1 order by private desc limit 1", .{url})
+    else
+        conn.scalar(i64, "select rowid from cache where url = $1 and private = 0", .{url});
+}
+
+fn deleteEntry(conn: Sqlite.Conn, url: []const u8, privatecache: bool) void {
+    deleteRow(conn, url, privatecache) catch |err| {
         log.err(.cache, "delete from cache", .{ .url = url, .err = err });
     };
 }
 
-fn discardCorrupt(conn: Sqlite.Conn, url: []const u8) void {
+fn deleteRow(conn: Sqlite.Conn, url: []const u8, privatecache: bool) !void {
+    const rowid = try targetRowid(conn, url, privatecache) orelse return;
+    try conn.exec("delete from cache where rowid = $1", .{rowid});
+}
+
+fn discardCorrupt(conn: Sqlite.Conn, url: []const u8, privatecache: bool) void {
     log.warn(.cache, "discarding corrupt entry", .{ .url = url });
-    deleteEntry(conn, url);
+    deleteEntry(conn, url, privatecache);
 }
 
 pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !void {
@@ -382,13 +410,19 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
 
     assertLowercaseNames(req.headers);
 
+    const rowid = try targetRowid(conn, req.url, self.privatecache) orelse {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
+        try conn.commit();
+        return;
+    };
+
     // The 304's headers replace stored ones with the same name, except
     // content-length, which describes the 304 itself.
     var encoded: std.Io.Writer.Allocating = .init(arena);
     var encoder: HeaderEncoder = .{ .writer = &encoded.writer };
-    keepStoredHeaders(conn, &encoder, req) catch |err| switch (err) {
+    keepStoredHeaders(conn, &encoder, rowid, req) catch |err| switch (err) {
         error.CorruptEntry => {
-            discardCorrupt(conn, req.url);
+            discardCorrupt(conn, req.url, self.privatecache);
             try conn.commit();
             return;
         },
@@ -418,7 +452,7 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
         \\     last_modified = coalesce($7, last_modified),
         \\     vary_headers = $8,
         \\     headers = $9
-        \\ where url = $10
+        \\ where rowid = $10
     , .{
         directive.timestamp,
         directive.age_at_store,
@@ -429,7 +463,7 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
         directive.last_modified,
         Blob{ .data = &vary_digest },
         Blob{ .data = encoded.written() },
-        req.url,
+        rowid,
     });
 
     try conn.commit();
@@ -441,8 +475,8 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
 }
 
 // Encodes the stored headers the 304 doesn't replace.
-fn keepStoredHeaders(conn: Sqlite.Conn, encoder: *HeaderEncoder, req: RenewResponse) !void {
-    var current = try conn.row("select headers from cache where url = $1", .{req.url}) orelse {
+fn keepStoredHeaders(conn: Sqlite.Conn, encoder: *HeaderEncoder, rowid: i64, req: RenewResponse) !void {
+    var current = try conn.row("select headers from cache where rowid = $1", .{rowid}) orelse {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
         return error.CacheEntryNotFound;
     };

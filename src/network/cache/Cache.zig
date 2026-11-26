@@ -466,11 +466,7 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, private_cache: 
     const cc: CacheControl = blk: {
         const directives = response.directives;
         // "private" bars shared cache, which is how our caching works - tied
-        // to the app while the cookie jar is on the Session. Safer not to cache.
-        if (directives.no_store or directives.private) {
-            break :blk null;
-        }
-
+        // to the app while the cookie jar is on the Session.
         if (directives.no_store) {
             break :blk null;
         }
