@@ -29,6 +29,7 @@ const Mime = @import("../../browser/Mime.zig");
 
 const BiDi = @import("BiDi.zig");
 const storage = @import("storage.zig");
+const net_error = @import("../net_error.zig");
 
 const Transfer = HttpClient.Transfer;
 
@@ -43,6 +44,7 @@ pub fn registerNotifications(bidi: *BiDi) !void {
     try bidi.notification.register(.http_request_start, bidi, onHttpRequestStart);
     try bidi.notification.register(.http_response_header_done, bidi, onHttpResponseHeaderDone);
     try bidi.notification.register(.http_request_done, bidi, onHttpRequestDone);
+    try bidi.notification.register(.http_request_fail, bidi, onHttpRequestFail);
 }
 
 fn onHttpRequestStart(ptr: *anyopaque, msg: *const Notification.RequestStart) !void {
@@ -89,6 +91,21 @@ fn onHttpRequestDone(ptr: *anyopaque, msg: *const Notification.RequestDone) !voi
     return sendResponseEvent(bidi, "network.responseCompleted", msg.transfer, .current, .completed);
 }
 
+// Every failure is reported, the page's own aborts (net::ERR_ABORTED)
+// included, as chromium-bidi does.
+fn onHttpRequestFail(ptr: *anyopaque, msg: *const Notification.RequestFail) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    const method = "network.fetchError";
+    if (!bidi.subscribed(method)) {
+        return;
+    }
+    return bidi.sendEvent(method, BaseParameters{
+        .bidi = bidi,
+        .transfer = msg.transfer,
+        .error_text = net_error.netError(msg.err),
+    });
+}
+
 fn sendResponseEvent(bidi: *BiDi, comptime method: []const u8, transfer: *Transfer, hop: Hop, phase: ResponseData.Phase) !void {
     if (!bidi.subscribed(method)) {
         return;
@@ -112,12 +129,13 @@ const Hop = enum {
 };
 
 // network.BaseParameters, the fields every network event has, plus the
-// `response` of the response events.
+// `response` of the response events and the `errorText` of fetchError.
 const BaseParameters = struct {
     bidi: *const BiDi,
     transfer: *Transfer,
     hop: Hop = .current,
     response: ?ResponseData = null,
+    error_text: ?[]const u8 = null,
 
     pub fn jsonStringify(self: *const BaseParameters, jws: anytype) !void {
         const bidi = self.bidi;
@@ -166,15 +184,21 @@ const BaseParameters = struct {
                 .redirect => url,
             },
             // Whether to report the request's cookies, in `cookies` and in the
-            // Cookie header. The response events don't: we read the jar when we
-            // send the event, and by then it has the response's Set-Cookie.
+            // Cookie header. The response events and fetchError don't: we read
+            // the jar when we send the event, and by then it can have the
+            // response's Set-Cookie.
             // TODO: keep the exact Cookie header sent on the transfer and report it.
-            .req_cookies = self.response == null,
+            .req_cookies = self.response == null and self.error_text == null,
         });
 
         if (self.response) |*response| {
             try jws.objectField("response");
             try jws.write(response);
+        }
+
+        if (self.error_text) |text| {
+            try jws.objectField("errorText");
+            try jws.write(text);
         }
 
         try jws.objectField("timestamp");
@@ -625,6 +649,56 @@ test "bidi.network: redirect" {
         try std.testing.expectEqualStrings(exp[1], e.url);
         try std.testing.expectEqualStrings(events[0].request_id, e.request_id);
     }
+}
+
+test "bidi.network: fetchError on a failed navigation" {
+    testing.silenceLog(&.{ .http, .frame });
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = .{"network"} } });
+    // Nothing listens on port 2.
+    const url = "http://127.0.0.1:2/";
+    try navigateUrl(&ctx, context_id, url);
+    const navigation = &ctx.bidi().browsing_context.?.navigation_id;
+
+    try ctx.expectSentEvent("network.fetchError", .{
+        .context = context_id,
+        .isBlocked = false,
+        .navigation = navigation,
+        .redirectCount = 0,
+        .request = .{ .url = url, .method = "GET", .destination = "document" },
+        .errorText = "net::ERR_CONNECTION_REFUSED",
+    });
+
+    // The request has no response events.
+    const events = try networkEvents(&ctx, url);
+    try testing.expectEqual(2, events.len);
+    try std.testing.expectEqualStrings("network.beforeRequestSent", events[0].method);
+    try std.testing.expectEqualStrings("network.fetchError", events[1].method);
+    try std.testing.expectEqualStrings(events[0].request_id, events[1].request_id);
+}
+
+test "bidi.network: fetchError on a request the page aborts" {
+    testing.silenceLog(&.{ .http, .js, .frame });
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = .{"network.fetchError"} } });
+    try navigate(&ctx, context_id, "bidi/network_abort.html");
+
+    try ctx.expectSentEvent("network.fetchError", .{
+        .context = context_id,
+        .request = .{ .url = "http://127.0.0.1:9582/xhr/slow", .initiatorType = "fetch" },
+        .errorText = "net::ERR_ABORTED",
+    });
+    const event = (try findEvent(&ctx, "network.fetchError", "/xhr/slow")).object;
+    try testing.expect(event.get("navigation").? == .null);
+
+    // Only fetchError is subscribed: the document's other events aren't sent.
+    try testing.expectError(error.EventNotFound, findEvent(&ctx, "network.beforeRequestSent", "/xhr/slow"));
 }
 
 test "bidi.network: no event without a subscription" {

@@ -23,6 +23,7 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const SafeString = @import("../SafeString.zig");
 const Base64Writer = @import("../../../Base64Writer.zig");
+const net_error = @import("../../net_error.zig");
 
 const Config = @import("../../../Config.zig");
 const URL = @import("../../../browser/URL.zig");
@@ -87,36 +88,18 @@ pub const ErrorReason = enum {
             inline else => |reason| @field(Failure, @tagName(reason)),
         };
     }
-
-    fn netError(self: ErrorReason) []const u8 {
-        return switch (self) {
-            .Failed => "net::ERR_FAILED",
-            .Aborted => "net::ERR_ABORTED",
-            .TimedOut => "net::ERR_TIMED_OUT",
-            .AccessDenied => "net::ERR_ACCESS_DENIED",
-            .ConnectionClosed => "net::ERR_CONNECTION_CLOSED",
-            .ConnectionReset => "net::ERR_CONNECTION_RESET",
-            .ConnectionRefused => "net::ERR_CONNECTION_REFUSED",
-            .ConnectionAborted => "net::ERR_CONNECTION_ABORTED",
-            .ConnectionFailed => "net::ERR_CONNECTION_FAILED",
-            .NameNotResolved => "net::ERR_NAME_NOT_RESOLVED",
-            .InternetDisconnected => "net::ERR_INTERNET_DISCONNECTED",
-            .AddressUnreachable => "net::ERR_ADDRESS_UNREACHABLE",
-            .BlockedByClient => "net::ERR_BLOCKED_BY_CLIENT",
-            .BlockedByResponse => "net::ERR_BLOCKED_BY_RESPONSE",
-        };
-    }
 };
 
-// Chrome's net error for an ErrorReason's error, else the error's name.
+// Chrome's net error for an ErrorReason's error or an unsafe port, else the
+// error's name.
 pub fn errorText(err: anyerror) []const u8 {
     if (err == error.UnsafePort) {
         // Not a Fetch.failRequest reason, so not in ErrorReason.
-        return "net::ERR_UNSAFE_PORT";
+        return net_error.netError(err);
     }
     inline for (comptime std.enums.values(ErrorReason)) |reason| {
         if (err == reason.toError()) {
-            return reason.netError();
+            return net_error.netError(err);
         }
     }
     return @errorName(err);
