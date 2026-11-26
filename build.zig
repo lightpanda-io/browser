@@ -579,10 +579,9 @@ fn linkPcre2(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.Sa
     mod.addImport("pcre2", translator.mod);
 }
 
-/// Replaces the libc malloc on musl targets. Zig's libc malloc wraps
-/// std.heap.SmpAllocator, which never unmaps its small-allocation slabs, so
-/// memory freed after a connection stays resident. mimalloc's strong malloc
-/// symbols override Zig's weak ones.
+/// Replaces Zig's libc malloc (std.heap.SmpAllocator) on musl targets: it
+/// never unmaps small-allocation slabs, so freed memory stays resident. This
+/// covers C, C++ and Rust code; Zig code goes through malloc_tuning.allocator.
 fn linkMimalloc(b: *Build, mod: *Build.Module, deps: Deps, section: bool) void {
     const dep = b.dependency("mimalloc", .{});
 

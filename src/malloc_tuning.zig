@@ -57,6 +57,42 @@ extern "c" fn malloc_trim(pad: usize) c_int;
 const mi_option_purge_delay: c_int = 15;
 extern "c" fn mi_option_set(option: c_int, value: c_long) void;
 extern "c" fn mi_collect(force: bool) void;
+extern "c" fn mi_malloc_aligned(size: usize, alignment: usize) ?*anyopaque;
+extern "c" fn mi_realloc_aligned(p: *anyopaque, newsize: usize, alignment: usize) ?*anyopaque;
+extern "c" fn mi_usable_size(p: *const anyopaque) usize;
+extern "c" fn mi_free(p: *anyopaque) void;
+
+/// The process allocator. On musl, std.heap.c_allocator calls Zig's libc
+/// malloc directly, bypassing mimalloc's `malloc` override.
+pub const allocator: std.mem.Allocator = if (is_mimalloc) .{
+    .ptr = undefined,
+    .vtable = &mimalloc_vtable,
+} else std.heap.c_allocator;
+
+const mimalloc_vtable: std.mem.Allocator.VTable = .{
+    .alloc = miAlloc,
+    .resize = miResize,
+    .remap = miRemap,
+    .free = miFree,
+};
+
+fn miAlloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
+    return @ptrCast(mi_malloc_aligned(len, alignment.toByteUnits()));
+}
+
+// Like c_allocator: grows in place up to the usable size, and a shrink
+// keeps the block.
+fn miResize(_: *anyopaque, memory: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
+    return new_len <= memory.len or new_len <= mi_usable_size(memory.ptr);
+}
+
+fn miRemap(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, _: usize) ?[*]u8 {
+    return @ptrCast(mi_realloc_aligned(memory.ptr, new_len, alignment.toByteUnits()));
+}
+
+fn miFree(_: *anyopaque, memory: []u8, _: std.mem.Alignment, _: usize) void {
+    mi_free(memory.ptr);
+}
 
 pub fn apply() void {
     if (comptime is_mimalloc) {
