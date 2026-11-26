@@ -62,7 +62,7 @@ const log = lp.log;
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
-    return &.{ Window, CrossOriginWindow };
+    return &.{ Window, CrossOriginWindow, CrossOriginLocation };
 }
 
 const Window = @This();
@@ -839,14 +839,19 @@ pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
     return value.structuredClone() catch error.TryCatchRethrow;
 }
 
-fn getFrame(self: *Window, idx: usize) !?*Window {
-    const frame = self._frame.get() orelse return null;
-    const frames = frame.child_frames.items;
+fn getFrame(self: *Window, idx: usize, frame: *Frame) ?Access {
+    const child = self.childFrame(idx) orelse return null;
+    return Access.init(frame.window, child);
+}
+
+fn childFrame(self: *Window, idx: usize) ?*Window {
+    const target = self._frame.get() orelse return null;
+    const frames = target.child_frames.items;
     if (idx >= frames.len) {
         return null;
     }
 
-    if (frame.child_frames_sorted == false) {
+    if (target.child_frames_sorted == false) {
         std.mem.sort(*Frame, frames, {}, struct {
             fn lessThan(_: void, a: *Frame, b: *Frame) bool {
                 const iframe_a = a.iframe orelse return false;
@@ -857,7 +862,7 @@ fn getFrame(self: *Window, idx: usize) !?*Window {
                 return (pos & 0x04) != 0; // FOLLOWING bit: b follows a
             }
         }.lessThan);
-        frame.child_frames_sorted = true;
+        target.child_frames_sorted = true;
     }
     return frames[idx].window;
 }
@@ -1407,15 +1412,68 @@ pub const JsApi = struct {
     pub const webdriver = bridge.accessor(Window.getWebDriver, null, .{ .wpt_only = true });
 };
 
+const CrossOriginError = error{ NotHandled, SecurityError };
+
+fn crossOriginNamed(name: []const u8) CrossOriginError {
+    if (std.mem.eql(u8, name, "then")) {
+        return error.NotHandled;
+    }
+    return error.SecurityError;
+}
+
 const CrossOriginWindow = struct {
     window: *Window,
+    // Its own field so that it has its own identity (the identity map is keyed
+    // by address).
+    location: CrossOriginLocation,
+
+    pub fn init(window: *Window) CrossOriginWindow {
+        return .{ .window = window, .location = .{ .window = window } };
+    }
+
+    fn getNamed(_: *CrossOriginWindow, name: []const u8) CrossOriginError!void {
+        return crossOriginNamed(name);
+    }
+
+    fn setNamed(_: *CrossOriginWindow, name: []const u8, _: js.Value) CrossOriginError!void {
+        return crossOriginNamed(name);
+    }
+
+    fn queryNamed(_: *CrossOriginWindow, name: []const u8) CrossOriginError!bool {
+        return crossOriginNamed(name);
+    }
+
+    // Child browsing contexts are reachable by index; any other index throws.
+    fn getIndexed(self: *CrossOriginWindow, idx: u32, frame: *Frame) !Access {
+        const child = self.window.childFrame(idx) orelse return error.SecurityError;
+        return Access.init(frame.window, child);
+    }
+
+    fn setIndexed(_: *CrossOriginWindow, _: u32, _: js.Value) !void {
+        return error.SecurityError;
+    }
+
+    fn queryIndexed(self: *CrossOriginWindow, idx: u32) !bool {
+        if (self.window.childFrame(idx) == null) {
+            return error.SecurityError;
+        }
+        return true;
+    }
+
+    fn getLocation(self: *CrossOriginWindow) *CrossOriginLocation {
+        return &self.location;
+    }
+
+    fn setLocation(self: *CrossOriginWindow, url: [:0]const u8, frame: *Frame) !void {
+        return self.window._location.assign(url, frame);
+    }
 
     pub fn postMessage(self: *CrossOriginWindow, message: js.Value, target_origin_or_options: ?js.Value, transfer: ?js.Value, frame: *Frame) !void {
         return self.window.postMessage(message, target_origin_or_options, transfer, frame);
     }
 
     pub fn getTop(self: *CrossOriginWindow, frame: *Frame) ?Access {
-        return self.window.getParent(frame);
+        return self.window.getTop(frame);
     }
 
     fn getParent(self: *CrossOriginWindow, frame: *Frame) ?Access {
@@ -1456,7 +1514,12 @@ const CrossOriginWindow = struct {
         pub const Meta = struct {
             pub const name = "CrossOriginWindow";
             pub var class_id: bridge.ClassId = undefined;
+            pub const cross_origin = true;
         };
+
+        pub const @"[int]" = bridge.indexedReadWrite(CrossOriginWindow.getIndexed, CrossOriginWindow.setIndexed, null, CrossOriginWindow.queryIndexed, null, .{});
+        pub const @"[str]" = bridge.namedIndexed(CrossOriginWindow.getNamed, CrossOriginWindow.setNamed, null, null, CrossOriginWindow.queryNamed, .{});
+        pub const location = bridge.accessor(CrossOriginWindow.getLocation, CrossOriginWindow.setLocation, .{});
 
         pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{});
         pub const close = bridge.function(CrossOriginWindow.close, .{});
@@ -1470,6 +1533,51 @@ const CrossOriginWindow = struct {
         pub const opener = bridge.accessor(CrossOriginWindow.getOpener, null, .{});
         pub const closed = bridge.accessor(CrossOriginWindow.getClosed, null, .{});
         pub const length = bridge.accessor(CrossOriginWindow.getFramesLength, null, .{});
+    };
+};
+
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#crossoriginproperties-(-o-)
+// A cross-origin Location exposes only the href setter and replace().
+const CrossOriginLocation = struct {
+    window: *Window,
+
+    fn getNamed(_: *CrossOriginLocation, name: []const u8) CrossOriginError!void {
+        return crossOriginNamed(name);
+    }
+
+    fn setNamed(_: *CrossOriginLocation, name: []const u8, _: js.Value) CrossOriginError!void {
+        return crossOriginNamed(name);
+    }
+
+    fn queryNamed(_: *CrossOriginLocation, name: []const u8) CrossOriginError!bool {
+        return crossOriginNamed(name);
+    }
+
+    // href has no cross-origin getter.
+    fn getHref(_: *CrossOriginLocation) !void {
+        return error.SecurityError;
+    }
+
+    fn setHref(self: *CrossOriginLocation, url: [:0]const u8, frame: *Frame) !void {
+        return self.window._location.assign(url, frame);
+    }
+
+    fn replace(self: *CrossOriginLocation, url: [:0]const u8, frame: *Frame) !void {
+        return self.window._location.replace(url, frame);
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(CrossOriginLocation);
+
+        pub const Meta = struct {
+            pub const name = "CrossOriginLocation";
+            pub var class_id: bridge.ClassId = undefined;
+            pub const cross_origin = true;
+        };
+
+        pub const @"[str]" = bridge.namedIndexed(CrossOriginLocation.getNamed, CrossOriginLocation.setNamed, null, null, CrossOriginLocation.queryNamed, .{});
+        pub const href = bridge.accessor(CrossOriginLocation.getHref, CrossOriginLocation.setHref, .{});
+        pub const replace = bridge.function(CrossOriginLocation.replace, .{});
     };
 };
 

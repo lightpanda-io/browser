@@ -325,7 +325,7 @@ fn createSnapshotContext(
         @setEvalBranchQuota(10_000);
         const template_index = comptime bridge.JsApiLookup.getId(JsApi);
         const func = v8.v8__FunctionTemplate__GetFunction(templates[template_index], context);
-        if (@hasDecl(JsApi.Meta, "name") and comptime isNamespace(JsApi) == false) {
+        if (@hasDecl(JsApi.Meta, "name") and comptime isNamespace(JsApi) == false and bridge.isCrossOrigin(JsApi) == false) {
             const name = JsApi.Meta.name;
             const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
             var maybe_result: v8.MaybeBool = undefined;
@@ -827,7 +827,8 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
     // Namespace objects (e.g. console) expose their members as own properties
     // of each instance rather than via the prototype, so Object.entries(...)
     // returns them. See https://console.spec.whatwg.org/#console-namespace.
-    const own_properties = isNamespace(JsApi);
+    // Same with cross-origin objects as their prototype is null.
+    const own_properties = isNamespace(JsApi) or bridge.isCrossOrigin(JsApi);
     const member_template = if (own_properties) instance else prototype;
 
     const decl_names = @typeInfo(JsApi).@"struct".decl_names;
@@ -858,7 +859,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     // later in this function.
                     continue;
                 }
-                attachAccessorProperty(name, value, isolate, template, signature, define_on orelse prototype);
+                attachAccessorProperty(name, value, isolate, template, signature, define_on orelse member_template);
             },
             bridge.Function => {
                 if (value.wpt_only and wpt_extensions_enabled == false) {

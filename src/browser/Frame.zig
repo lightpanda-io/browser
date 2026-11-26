@@ -438,7 +438,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     } else {
         self.window = try factory.eventTarget(window_template);
     }
-    self.window._cross_origin_wrapper = .{ .window = self.window };
+    self.window._cross_origin_wrapper = .init(self.window);
 
     self._http_owner = GlobalScope.initHttpOwner(.{ .frame = self });
 

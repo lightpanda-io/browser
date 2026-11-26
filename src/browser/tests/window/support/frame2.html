@@ -1,7 +1,13 @@
 <!DOCTYPE html>
 <script>
+  let document_error = null;
+  try {
+    window.top.document;
+  } catch (e) {
+    document_error = e.name;
+  }
   window.top.postMessage({
     url: location.toString(),
-    document_is_undefined: window.top.document === undefined,
+    document_error: document_error,
   }, '*')
 </script>
