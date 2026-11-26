@@ -181,7 +181,7 @@ pub fn initFromBytes(data: []const u8, content_type: []const u8, exec: *const Ex
     return self;
 }
 
-/// Like `initFromBytes` but where `_ but `content_type` is a Content-Type
+/// Like `initFromBytes` but where `content_type` is a Content-Type header value
 /// and needs to be parsed.
 pub fn initFromContentType(data: []const u8, content_type: []const u8, exec: *const Execution) !*Blob {
     const arena = try exec.getPinnedArena(data.len + content_type.len + 256, "Blob");
