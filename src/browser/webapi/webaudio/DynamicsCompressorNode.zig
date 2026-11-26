@@ -149,5 +149,5 @@ pub const JsApi = struct {
     pub const ratio = bridge.accessor(DynamicsCompressorNode.getRatio, null, .{});
     pub const attack = bridge.accessor(DynamicsCompressorNode.getAttack, null, .{});
     pub const release = bridge.accessor(DynamicsCompressorNode.getRelease, null, .{});
-    pub const reduction = bridge.fastAccessor("_reduction", null, .{});
+    pub const reduction = bridge.fastAccessor("_reduction", null);
 };

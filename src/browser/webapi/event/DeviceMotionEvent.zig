@@ -87,5 +87,5 @@ pub const JsApi = struct {
     pub const acceleration = bridge.accessor(DeviceMotionEvent.getAcceleration, null, .{});
     pub const accelerationIncludingGravity = bridge.accessor(DeviceMotionEvent.getAccelerationIncludingGravity, null, .{});
     pub const rotationRate = bridge.accessor(DeviceMotionEvent.getRotationRate, null, .{});
-    pub const interval = bridge.fastAccessor("_interval", null, .{});
+    pub const interval = bridge.fastAccessor("_interval", null);
 };

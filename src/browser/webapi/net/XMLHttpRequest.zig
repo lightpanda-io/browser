@@ -991,8 +991,8 @@ pub const JsApi = struct {
 
     pub const onreadystatechange = EventTarget.handlerAccessor(XMLHttpRequest, "readystatechange");
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
-    pub const timeout = bridge.fastAccessor("_timeout", XMLHttpRequest.setTimeout, .{});
-    pub const withCredentials = bridge.fastAccessor("_with_credentials", XMLHttpRequest.setWithCredentials, .{});
+    pub const timeout = bridge.fastAccessor("_timeout", XMLHttpRequest.setTimeout);
+    pub const withCredentials = bridge.fastAccessor("_with_credentials", XMLHttpRequest.setWithCredentials);
     pub const open = bridge.function(XMLHttpRequest.open, .{});
     pub const send = bridge.function(XMLHttpRequest.send, .{});
     pub const responseType = bridge.accessor(XMLHttpRequest.getResponseType, XMLHttpRequest.setResponseType, .{});

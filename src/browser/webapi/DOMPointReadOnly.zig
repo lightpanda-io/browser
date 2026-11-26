@@ -194,10 +194,10 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(DOMPointReadOnly.init, .{});
     pub const fromPoint = bridge.function(DOMPointReadOnly.fromPoint, .{ .static = true });
-    pub const x = bridge.fastAccessor("_x", null, .{});
-    pub const y = bridge.fastAccessor("_y", null, .{});
-    pub const z = bridge.fastAccessor("_z", null, .{});
-    pub const w = bridge.fastAccessor("_w", null, .{});
+    pub const x = bridge.fastAccessor("_x", null);
+    pub const y = bridge.fastAccessor("_y", null);
+    pub const z = bridge.fastAccessor("_z", null);
+    pub const w = bridge.fastAccessor("_w", null);
 
     pub const matrixTransform = bridge.function(DOMPointReadOnly.matrixTransform, .{});
     pub const toJSON = bridge.function(DOMPointReadOnly.toJSON, .{});

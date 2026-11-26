@@ -87,6 +87,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(MediaQueryListEvent.init, .{});
-    pub const matches = bridge.fastAccessor("_matches", null, .{});
+    pub const matches = bridge.fastAccessor("_matches", null);
     pub const media = bridge.accessor(MediaQueryListEvent.getMedia, null, .{});
 };

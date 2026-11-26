@@ -320,8 +320,8 @@ pub const JsApi = struct {
     pub const buffer = bridge.accessor(AudioBufferSourceNode.getBuffer, AudioBufferSourceNode.setBuffer, .{});
     pub const playbackRate = bridge.accessor(AudioBufferSourceNode.getPlaybackRate, null, .{});
     pub const detune = bridge.accessor(AudioBufferSourceNode.getDetune, null, .{});
-    pub const loop = bridge.fastAccessor("_loop", AudioBufferSourceNode.setLoop, .{});
-    pub const loopStart = bridge.fastAccessor("_loop_start", AudioBufferSourceNode.setLoopStart, .{});
-    pub const loopEnd = bridge.fastAccessor("_loop_end", AudioBufferSourceNode.setLoopEnd, .{});
+    pub const loop = bridge.fastAccessor("_loop", AudioBufferSourceNode.setLoop);
+    pub const loopStart = bridge.fastAccessor("_loop_start", AudioBufferSourceNode.setLoopStart);
+    pub const loopEnd = bridge.fastAccessor("_loop_end", AudioBufferSourceNode.setLoopEnd);
     pub const start = bridge.function(AudioBufferSourceNode.start, .{});
 };

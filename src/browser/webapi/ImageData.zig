@@ -199,8 +199,8 @@ pub const JsApi = struct {
     pub const pixelFormat = bridge.property("rgba-unorm8", .{ .template = false, .readonly = true });
 
     pub const data = bridge.accessor(ImageData.getData, null, .{});
-    pub const width = bridge.fastAccessor("_width", null, .{});
-    pub const height = bridge.fastAccessor("_height", null, .{});
+    pub const width = bridge.fastAccessor("_width", null);
+    pub const height = bridge.fastAccessor("_height", null);
 };
 
 const testing = @import("../../testing.zig");

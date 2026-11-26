@@ -193,7 +193,7 @@ pub const JsApi = struct {
     pub const data = bridge.accessor(InputEvent.getData, null, .{});
     pub const dataTransfer = bridge.accessor(InputEvent.getDataTransfer, null, .{});
     pub const inputType = bridge.accessor(InputEvent.getInputType, null, .{});
-    pub const isComposing = bridge.fastAccessor("_is_composing", null, .{});
+    pub const isComposing = bridge.fastAccessor("_is_composing", null);
     pub const getTargetRanges = bridge.function(InputEvent.getTargetRanges, .{});
 };
 

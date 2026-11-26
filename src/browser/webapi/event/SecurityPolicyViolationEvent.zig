@@ -172,8 +172,8 @@ pub const JsApi = struct {
     pub const sample = bridge.accessor(SecurityPolicyViolationEvent.getSample, null, .{});
     pub const disposition = bridge.accessor(SecurityPolicyViolationEvent.getDisposition, null, .{});
     pub const statusCode = bridge.accessor(SecurityPolicyViolationEvent.getStatusCode, null, .{});
-    pub const lineNumber = bridge.fastAccessor("_line_number", null, .{});
-    pub const columnNumber = bridge.fastAccessor("_column_number", null, .{});
+    pub const lineNumber = bridge.fastAccessor("_line_number", null);
+    pub const columnNumber = bridge.fastAccessor("_column_number", null);
 };
 
 const testing = @import("../../../testing.zig");

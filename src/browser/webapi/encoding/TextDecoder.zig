@@ -226,8 +226,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(TextDecoder.init, .{});
     pub const decode = bridge.function(TextDecoder.decode, .{});
     pub const encoding = bridge.accessor(TextDecoder.getEncoding, null, .{});
-    pub const fatal = bridge.fastAccessor("_fatal", null, .{});
-    pub const ignoreBOM = bridge.fastAccessor("_ignore_bom", null, .{});
+    pub const fatal = bridge.fastAccessor("_fatal", null);
+    pub const ignoreBOM = bridge.fastAccessor("_ignore_bom", null);
 };
 
 const testing = @import("../../../testing.zig");

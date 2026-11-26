@@ -74,5 +74,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const maxChannelCount = bridge.fastAccessor("_max_channel_count", null, .{});
+    pub const maxChannelCount = bridge.fastAccessor("_max_channel_count", null);
 };

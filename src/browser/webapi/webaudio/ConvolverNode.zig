@@ -134,5 +134,5 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(ConvolverNode.constructor, .{});
     pub const buffer = bridge.accessor(ConvolverNode.getBuffer, ConvolverNode.setBuffer, .{});
-    pub const normalize = bridge.fastAccessor("_normalize", ConvolverNode.setNormalize, .{});
+    pub const normalize = bridge.fastAccessor("_normalize", ConvolverNode.setNormalize);
 };

@@ -305,8 +305,8 @@ pub const ResizeObserverSize = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const inlineSize = bridge.fastAccessor("_inline_size", null, .{});
-        pub const blockSize = bridge.fastAccessor("_block_size", null, .{});
+        pub const inlineSize = bridge.fastAccessor("_inline_size", null);
+        pub const blockSize = bridge.fastAccessor("_block_size", null);
     };
 };
 

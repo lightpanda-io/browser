@@ -249,8 +249,8 @@ pub const JsApi = struct {
 
     pub const root = bridge.accessor(DOMNodeIterator.getRoot, null, .{});
     pub const referenceNode = bridge.accessor(DOMNodeIterator.getReferenceNode, null, .{});
-    pub const pointerBeforeReferenceNode = bridge.fastAccessor("_pointer_before_reference_node", null, .{});
-    pub const whatToShow = bridge.fastAccessor("_what_to_show", null, .{});
+    pub const pointerBeforeReferenceNode = bridge.fastAccessor("_pointer_before_reference_node", null);
+    pub const whatToShow = bridge.fastAccessor("_what_to_show", null);
     pub const filter = bridge.accessor(DOMNodeIterator.getFilter, null, .{});
 
     pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{});

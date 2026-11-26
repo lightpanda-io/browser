@@ -18,13 +18,7 @@
 
 //! Reused metaprogramming routines.
 
-const std = @import("std");
-
 const js = @import("js/js.zig");
-const Caller = @import("js/Caller.zig");
-
-const Page = @import("Page.zig");
-const Frame = @import("Frame.zig");
 
 // The prototype ("parent") type of T, as declared by its `pub const Proto`.
 // This decl is the single source of truth for prototype-chain discovery.
@@ -52,23 +46,6 @@ pub fn Struct(comptime T: type) type {
         .@"struct" => T,
         .void => T,
         else => unreachable,
-    };
-}
-
-/// Takes a type, can be an optional type, and unwraps it.
-pub fn UnwrapOptional(comptime T: type) type {
-    return switch (@typeInfo(T)) {
-        .optional => |info| info.child,
-        else => T,
-    };
-}
-
-/// Returns whether `T` is a pointer, possibly optional, to a type bound to
-/// JavaScript, i.e. one that has a `JsApi`.
-pub fn isJavaScriptObject(comptime T: type) bool {
-    return switch (@typeInfo(UnwrapOptional(T))) {
-        .pointer => |info| info.size == .one and @typeInfo(info.child) == .@"struct" and @hasDecl(info.child, "JsApi"),
-        else => false,
     };
 }
 

@@ -64,16 +64,16 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.fastAccessor("_width", null, .{});
+    pub const width = bridge.fastAccessor("_width", null);
     pub const actualBoundingBoxLeft = bridge.property(0.0, .{ .template = false });
-    pub const actualBoundingBoxRight = bridge.fastAccessor("_width", null, .{});
-    pub const actualBoundingBoxAscent = bridge.fastAccessor("_ascent", null, .{});
-    pub const actualBoundingBoxDescent = bridge.fastAccessor("_descent", null, .{});
-    pub const fontBoundingBoxAscent = bridge.fastAccessor("_ascent", null, .{});
-    pub const fontBoundingBoxDescent = bridge.fastAccessor("_descent", null, .{});
-    pub const emHeightAscent = bridge.fastAccessor("_ascent", null, .{});
-    pub const emHeightDescent = bridge.fastAccessor("_descent", null, .{});
-    pub const hangingBaseline = bridge.fastAccessor("_ascent", null, .{});
+    pub const actualBoundingBoxRight = bridge.fastAccessor("_width", null);
+    pub const actualBoundingBoxAscent = bridge.fastAccessor("_ascent", null);
+    pub const actualBoundingBoxDescent = bridge.fastAccessor("_descent", null);
+    pub const fontBoundingBoxAscent = bridge.fastAccessor("_ascent", null);
+    pub const fontBoundingBoxDescent = bridge.fastAccessor("_descent", null);
+    pub const emHeightAscent = bridge.fastAccessor("_ascent", null);
+    pub const emHeightDescent = bridge.fastAccessor("_descent", null);
+    pub const hangingBaseline = bridge.fastAccessor("_ascent", null);
     pub const alphabeticBaseline = bridge.property(0.0, .{ .template = false });
     pub const ideographicBaseline = bridge.accessor(TextMetrics.getIdeographicBaseline, null, .{});
 };

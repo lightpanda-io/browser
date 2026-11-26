@@ -119,8 +119,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(ErrorEvent.init, .{});
     pub const message = bridge.accessor(ErrorEvent.getMessage, null, .{});
     pub const filename = bridge.accessor(ErrorEvent.getFilename, null, .{});
-    pub const lineno = bridge.fastAccessor("_line_number", null, .{});
-    pub const colno = bridge.fastAccessor("_column_number", null, .{});
+    pub const lineno = bridge.fastAccessor("_line_number", null);
+    pub const colno = bridge.fastAccessor("_column_number", null);
     pub const @"error" = bridge.accessor(ErrorEvent.getError, null, .{ .null_as_undefined = true });
 };
 

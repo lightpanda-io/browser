@@ -588,5 +588,5 @@ pub const JsApi = struct {
     pub const setInterval = bridge.function(WorkerGlobalScope.setInterval, .{});
     pub const clearInterval = bridge.function(WorkerGlobalScope.clearInterval, .{});
 
-    pub const isSecureContext = bridge.fastAccessor("_secure_context", null, .{});
+    pub const isSecureContext = bridge.fastAccessor("_secure_context", null);
 };

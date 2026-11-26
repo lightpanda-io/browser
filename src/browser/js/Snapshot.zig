@@ -425,10 +425,10 @@ fn hasGatedMember(comptime JsApi: type) bool {
 
 fn memberExposed(value: anytype) Caller.Function.Opts.Exposed {
     const T = @TypeOf(value);
-    return switch (T) {
-        bridge.Accessor, bridge.Function => value.exposed,
-        else => .both,
-    };
+    if (T == bridge.Accessor or T == bridge.Function) {
+        return value.exposed;
+    }
+    return .both;
 }
 
 fn countExternalReferences() comptime_int {
@@ -570,7 +570,7 @@ fn collectExternalReferences() *const ExternalReferences {
                     idx += 1;
                 }
             } else if (T == bridge.FastAccessor) {
-                references[idx] = @bitCast(@intFromPtr(value.getter.?));
+                references[idx] = @bitCast(@intFromPtr(value.getter));
                 idx += 1;
                 if (value.setter) |setter| {
                     references[idx] = @bitCast(@intFromPtr(setter));
@@ -578,7 +578,7 @@ fn collectExternalReferences() *const ExternalReferences {
                 }
                 // V8 stores a pointer to the v8.CFunction itself (not its
                 // .address) as a Foreign in the template's C function overloads.
-                references[idx] = @bitCast(@intFromPtr(value.fast_getter.?));
+                references[idx] = @bitCast(@intFromPtr(value.fast_getter));
                 idx += 1;
             } else if (T == bridge.Function) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -864,7 +864,8 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         if (comptime flatten) {
             // [Global] flattening only mirrors non-static accessors/methods onto itself
             switch (definition) {
-                bridge.Accessor, bridge.FastAccessor, bridge.Function => if (value.static) continue,
+                bridge.Accessor, bridge.Function => if (value.static) continue,
+                bridge.FastAccessor => {},
                 else => continue,
             }
         }
@@ -1064,8 +1065,10 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: anytype, isolate: 
         bridge.FastAccessor => true,
         else => |T| @compileError("not an accessor: " ++ @typeName(T)),
     };
+    // A FastAccessor reads a field off its receiver, so it's never static.
+    const static = !is_fast and value.static;
     const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-    const getter_signature = if (value.static) null else signature;
+    const getter_signature = if (static) null else signature;
     const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
         .callback = value.getter,
         .signature = getter_signature,
@@ -1096,7 +1099,7 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: anytype, isolate: 
         attribute |= v8.DontDelete;
     }
 
-    if (value.static) {
+    if (static) {
         v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
     } else {
         // Web IDL: attributes on the interface prototype object

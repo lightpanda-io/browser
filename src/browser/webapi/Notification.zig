@@ -155,9 +155,9 @@ pub const JsApi = struct {
     pub const tag = bridge.accessor(getTag, null, .{});
     pub const lang = bridge.accessor(getLang, null, .{});
     pub const dir = bridge.accessor(getDir, null, .{});
-    pub const silent = bridge.fastAccessor("_silent", null, .{});
-    pub const requireInteraction = bridge.fastAccessor("_require_interaction", null, .{});
-    pub const renotify = bridge.fastAccessor("_renotify", null, .{});
+    pub const silent = bridge.fastAccessor("_silent", null);
+    pub const requireInteraction = bridge.fastAccessor("_require_interaction", null);
+    pub const renotify = bridge.fastAccessor("_renotify", null);
 };
 
 const testing = @import("../../testing.zig");

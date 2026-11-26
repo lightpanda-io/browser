@@ -531,19 +531,19 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(KeyboardEvent.init, .{});
-    pub const altKey = bridge.fastAccessor("_alt_key", null, .{});
-    pub const ctrlKey = bridge.fastAccessor("_ctrl_key", null, .{});
-    pub const isComposing = bridge.fastAccessor("_is_composing", null, .{});
+    pub const altKey = bridge.fastAccessor("_alt_key", null);
+    pub const ctrlKey = bridge.fastAccessor("_ctrl_key", null);
+    pub const isComposing = bridge.fastAccessor("_is_composing", null);
     pub const key = bridge.accessor(struct {
         fn keyAsString(self: *const KeyboardEvent) []const u8 {
             return self._key.asString();
         }
     }.keyAsString, null, .{});
     pub const code = bridge.accessor(KeyboardEvent.getCode, null, .{});
-    pub const location = bridge.fastAccessor("_location", null, .{});
-    pub const metaKey = bridge.fastAccessor("_meta_key", null, .{});
-    pub const repeat = bridge.fastAccessor("_repeat", null, .{});
-    pub const shiftKey = bridge.fastAccessor("_shift_key", null, .{});
+    pub const location = bridge.fastAccessor("_location", null);
+    pub const metaKey = bridge.fastAccessor("_meta_key", null);
+    pub const repeat = bridge.fastAccessor("_repeat", null);
+    pub const shiftKey = bridge.fastAccessor("_shift_key", null);
     pub const charCode = bridge.accessor(KeyboardEvent.getCharCode, null, .{});
     pub const keyCode = bridge.accessor(KeyboardEvent.getKeyCode, null, .{});
     pub const getModifierState = bridge.function(KeyboardEvent.getModifierState, .{});

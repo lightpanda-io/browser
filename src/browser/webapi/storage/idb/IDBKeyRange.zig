@@ -237,7 +237,7 @@ pub const JsApi = struct {
 
     pub const lower = bridge.accessor(IDBKeyRange.getLower, null, .{ .null_as_undefined = true });
     pub const upper = bridge.accessor(IDBKeyRange.getUpper, null, .{ .null_as_undefined = true });
-    pub const lowerOpen = bridge.fastAccessor("_lower_open", null, .{});
-    pub const upperOpen = bridge.fastAccessor("_upper_open", null, .{});
+    pub const lowerOpen = bridge.fastAccessor("_lower_open", null);
+    pub const upperOpen = bridge.fastAccessor("_upper_open", null);
     pub const includes = bridge.function(IDBKeyRange.includes, .{});
 };

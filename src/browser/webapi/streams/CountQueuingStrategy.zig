@@ -45,6 +45,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(CountQueuingStrategy.init, .{});
-    pub const highWaterMark = bridge.fastAccessor("_high_water_mark", null, .{});
+    pub const highWaterMark = bridge.fastAccessor("_high_water_mark", null);
     pub const size = bridge.function(CountQueuingStrategy.size, .{});
 };

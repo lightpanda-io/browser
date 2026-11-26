@@ -150,7 +150,7 @@ fn EncodedChunk(comptime interface_name: [:0]const u8) type {
 
             pub const constructor = bridge.constructor(Self.init, .{});
             pub const @"type" = bridge.accessor(Self.getType, null, .{});
-            pub const timestamp = bridge.fastAccessor("_timestamp", null, .{});
+            pub const timestamp = bridge.fastAccessor("_timestamp", null);
             pub const duration = bridge.accessor(Self.getDuration, null, .{});
             pub const byteLength = bridge.accessor(Self.getByteLength, null, .{});
             pub const copyTo = bridge.function(Self.copyTo, .{});

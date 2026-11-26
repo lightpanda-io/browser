@@ -1000,7 +1000,7 @@ pub const JsApi = struct {
     pub const m43 = bridge.accessor(getM(14), null, .{});
     pub const m44 = bridge.accessor(getM(15), null, .{});
 
-    pub const is2D = bridge.fastAccessor("_is_2d", null, .{});
+    pub const is2D = bridge.fastAccessor("_is_2d", null);
     pub const isIdentity = bridge.accessor(DOMMatrixReadOnly.getIsIdentity, null, .{});
 
     pub const translate = bridge.function(DOMMatrixReadOnly.translate, .{});

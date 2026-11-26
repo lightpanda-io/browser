@@ -111,10 +111,10 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(WheelEvent.init, .{});
-    pub const deltaX = bridge.fastAccessor("_delta_x", null, .{});
-    pub const deltaY = bridge.fastAccessor("_delta_y", null, .{});
-    pub const deltaZ = bridge.fastAccessor("_delta_z", null, .{});
-    pub const deltaMode = bridge.fastAccessor("_delta_mode", null, .{});
+    pub const deltaX = bridge.fastAccessor("_delta_x", null);
+    pub const deltaY = bridge.fastAccessor("_delta_y", null);
+    pub const deltaZ = bridge.fastAccessor("_delta_z", null);
+    pub const deltaMode = bridge.fastAccessor("_delta_mode", null);
     pub const DOM_DELTA_PIXEL = bridge.property(WheelEvent.DOM_DELTA_PIXEL, .{ .template = true });
     pub const DOM_DELTA_LINE = bridge.property(WheelEvent.DOM_DELTA_LINE, .{ .template = true });
     pub const DOM_DELTA_PAGE = bridge.property(WheelEvent.DOM_DELTA_PAGE, .{ .template = true });

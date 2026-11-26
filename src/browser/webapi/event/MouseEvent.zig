@@ -262,13 +262,13 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(MouseEvent.init, .{});
-    pub const altKey = bridge.fastAccessor("_alt_key", null, .{});
+    pub const altKey = bridge.fastAccessor("_alt_key", null);
     pub const button = bridge.accessor(getButton, null, .{});
     pub const buttons = bridge.accessor(getButtons, null, .{});
     pub const clientX = bridge.accessor(getClientX, null, .{});
     pub const clientY = bridge.accessor(getClientY, null, .{});
-    pub const ctrlKey = bridge.fastAccessor("_ctrl_key", null, .{});
-    pub const metaKey = bridge.fastAccessor("_meta_key", null, .{});
+    pub const ctrlKey = bridge.fastAccessor("_ctrl_key", null);
+    pub const metaKey = bridge.fastAccessor("_meta_key", null);
     pub const offsetX = bridge.property(0.0, .{ .template = false });
     pub const offsetY = bridge.property(0.0, .{ .template = false });
     pub const pageX = bridge.accessor(getPageX, null, .{});
@@ -276,7 +276,7 @@ pub const JsApi = struct {
     pub const relatedTarget = bridge.accessor(getRelatedTarget, null, .{});
     pub const screenX = bridge.accessor(getScreenX, null, .{});
     pub const screenY = bridge.accessor(getScreenY, null, .{});
-    pub const shiftKey = bridge.fastAccessor("_shift_key", null, .{});
+    pub const shiftKey = bridge.fastAccessor("_shift_key", null);
     pub const layerX = bridge.accessor(getLayerX, null, .{});
     pub const layerY = bridge.accessor(getLayerY, null, .{});
     pub const x = bridge.accessor(getClientX, null, .{});

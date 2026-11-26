@@ -173,10 +173,10 @@ pub const JsApi = struct {
     pub const activeElement = bridge.accessor(ShadowRoot.getActiveElement, null, .{});
     pub const mode = bridge.accessor(ShadowRoot.getMode, null, .{});
     pub const host = bridge.accessor(ShadowRoot.getHost, null, .{});
-    pub const delegatesFocus = bridge.fastAccessor("_delegates_focus", null, .{});
+    pub const delegatesFocus = bridge.fastAccessor("_delegates_focus", null);
     pub const slotAssignment = bridge.accessor(ShadowRoot.getSlotAssignment, null, .{});
-    pub const clonable = bridge.fastAccessor("_clonable", null, .{});
-    pub const serializable = bridge.fastAccessor("_serializable", null, .{});
+    pub const clonable = bridge.fastAccessor("_clonable", null);
+    pub const serializable = bridge.fastAccessor("_serializable", null);
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *ShadowRoot, value_: ?js.Value) !?*Element {
         const value = value_ orelse return null;

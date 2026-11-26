@@ -159,7 +159,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const size = bridge.fastAccessor("_size", null, .{});
+    pub const size = bridge.fastAccessor("_size", null);
     pub const has = bridge.function(CustomStateSet.has, .{});
     pub const add = bridge.function(CustomStateSet.add, .{});
     pub const delete = bridge.function(CustomStateSet.delete, .{});

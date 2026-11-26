@@ -492,24 +492,20 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
     return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
-/// Per Web IDL, exceptions belong to the operation's relevant realm — the
-/// receiver's — which differs from the calling realm for cross-realm calls
-/// (v8 API callbacks run in the caller's context, and our JS wrappers are
-/// shared across the page's contexts). For DOM nodes, the relevant realm is
-/// the node document's frame; otherwise fall back to the calling realm.
-fn errorLocal(local: *const Local, info: FunctionCallbackInfo, receiver: *const ReceiverInfo) Local {
+// Per Web IDL, exceptions belong to the operation's relevant realm — the
+// receiver's — which differs from the calling realm for cross-realm calls
+// (v8 API callbacks run in the caller's context, and our JS wrappers are
+// shared across the page's contexts). For DOM nodes, the relevant realm is
+// the node document's frame; otherwise fall back to the calling realm.
+fn errorLocal(local: *const Local, info: FunctionCallbackInfo, receiver: *const Receiver) Local {
     const nodeOf = receiver.node orelse return local.*;
-    const node = nodeOf(info) orelse return local.*;
-    return nodeErrorLocal(local, node);
-}
 
-// errorLocal for a receiver that is already known to be a node.
-fn nodeErrorLocal(local: *const Local, node: *Node) Local {
     const frame = switch (local.ctx.global) {
-        .frame => |frame| frame,
+        .frame => |f| f,
         .worker => return local.*,
     };
 
+    const node = nodeOf(info) orelse return local.*;
     const doc: *Document = node.ownerDocument(frame) orelse switch (node._type) {
         .document => node.subtype(Document),
         else => return local.*,
@@ -530,24 +526,21 @@ fn nodeErrorLocal(local: *const Local, node: *Node) Local {
 }
 
 // What handleError needs from the receiver type T. Keeps handleError non-generic.
-const ReceiverInfo = struct {
+const Receiver = struct {
     type_name: []const u8,
     // Null unless T is a Node: see errorLocal.
     node: ?*const fn (FunctionCallbackInfo) ?*Node,
 
-    fn of(comptime T: type) *const ReceiverInfo {
-        const receiver: ReceiverInfo = .{
+    fn of(comptime T: type) *const Receiver {
+        const is_node_type = @typeInfo(T) == .@"struct" and @hasDecl(T, "JsApi") and
+            @import("bridge.zig").inheritsOrIs(T.JsApi, Node.JsApi);
+        const receiver: Receiver = .{
             .type_name = @typeName(T),
-            .node = if (isNodeType(T)) receiverNode(T) else null,
+            .node = if (is_node_type) receiverNode(T) else null,
         };
         return &receiver;
     }
 };
-
-fn isNodeType(comptime T: type) bool {
-    return @typeInfo(T) == .@"struct" and @hasDecl(T, "JsApi") and
-        bridge.inheritsOrIs(T.JsApi, Node.JsApi);
-}
 
 fn receiverNode(comptime T: type) *const fn (FunctionCallbackInfo) ?*Node {
     return &struct {
@@ -556,15 +549,6 @@ fn receiverNode(comptime T: type) *const fn (FunctionCallbackInfo) ?*Node {
             return protoNode(T, instance);
         }
     }.get;
-}
-
-// receiverNode for the fast variant, which has its receiver unwrapped already:
-// null if the function is static.
-fn fastReceiverNode(comptime T: type, receiver: ?*T) ?*Node {
-    if (comptime !isNodeType(T)) {
-        return null;
-    }
-    return protoNode(T, receiver orelse return null);
 }
 
 // Upcast a Node-descendant instance to *Node by walking the Proto chain.
@@ -579,7 +563,7 @@ fn protoNode(comptime T: type, instance: *T) *Node {
 
 /// Converts a Zig error to JS error, then either throws it or, if function
 /// returns a promise, rejects with error.
-fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, receiver: *const ReceiverInfo, func_name: []const u8, returns_promise: bool) void {
+fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, receiver: *const Receiver, func_name: []const u8, returns_promise: bool) void {
     if (comptime lp.IS_DEBUG) {
         if (log.enabled(.js, .debug)) {
             if (DOMException.fromError(err) == null) {
@@ -610,18 +594,6 @@ fn handlePropertyError(local: *const Local, err: anyerror, info: PropertyCallbac
     }
     const js_err = createError(local, local, err);
     info.getReturnValue().setValueHandle(local.isolate.throwException(js_err));
-}
-
-// Fast functions throw in the receiver's realm and cannot return promises.
-// `node` is the receiver if it's a node (see fastReceiverNode): null otherwise,
-// or if the receiver is what failed to unwrap.
-fn handleFastError(local: *const Local, err: anyerror, node: ?*Node) void {
-    if (isPending(err)) {
-        return;
-    }
-    const err_local = if (node) |n| nodeErrorLocal(local, n) else local.*;
-    const js_err = createError(local, &err_local, err);
-    _ = local.isolate.throwException(js_err);
 }
 
 fn isPending(err: anyerror) bool {
@@ -1077,35 +1049,9 @@ pub const Function = struct {
 
 /// V8 Fast API integration.
 pub const FastFunction = struct {
-    pub const Options = struct {
-        static: bool = false,
-    };
-
-    fn toCTypeEnum(comptime T: type) v8.CTypeInfo {
-        // Treat pointers as V8 values; we can change this in the future.
-        if (comptime reflect.isJavaScriptObject(T)) {
-            return .{ .type = v8.kCTypeInfoType_V8Value };
-        }
-        // Primitives.
-        return switch (T) {
-            void => .{ .type = v8.kCTypeInfoType_Void },
-            bool => .{ .type = v8.kCTypeInfoType_Bool },
-            // V8 declares the type, but its compiler takes it neither as an
-            // argument nor as a return value.
-            u8 => unreachable,
-            i32 => .{ .type = v8.kCTypeInfoType_Int32 },
-            u32 => .{ .type = v8.kCTypeInfoType_Uint32 },
-            i64 => .{ .type = v8.kCTypeInfoType_Int64 },
-            u64 => .{ .type = v8.kCTypeInfoType_Uint64 },
-            f32 => .{ .type = v8.kCTypeInfoType_Float32 },
-            f64 => .{ .type = v8.kCTypeInfoType_Float64 },
-            else => unreachable,
-        };
-    }
-
-    /// Whether a receiver that passed V8's signature check can still hold
-    /// something other than a `Receiver`. The check proves the object was made
-    /// from the accessor's interface, and an object normally holds the type it
+    /// Whether an object that passed V8's signature check for `T`'s interface
+    /// can still hold something other than a `T`. The check proves the object
+    /// was made from that interface, and an object normally holds the type it
     /// was made for. HTML element interfaces are the exception: they share
     /// `HtmlElement.upgradeConstruct`, which binds the custom element being
     /// upgraded to whichever of them got constructed. A custom element whose
@@ -1115,38 +1061,45 @@ pub const FastFunction = struct {
     /// `HtmlElement` itself is included to keep the rule simple. Its own
     /// constructor binds the element being upgraded too, and only the fact
     /// that such an element is always an HTML one makes that harmless.
-    fn canReceiverMismatch(comptime Receiver: type) bool {
-        const T = @typeInfo(Receiver).pointer.child;
+    fn canReceiverMismatch(comptime T: type) bool {
         return bridge.inheritsOrIs(T.JsApi, HtmlElement.JsApi);
     }
 
-    /// Creates a constant `v8.CFunction` for getter-by-field. Like `create`,
-    /// should be called after a call to `reflect.fast.isEligible`.
+    /// Creates a constant `v8.CFunction` that reads `field` off a `T`.
     ///
     /// A field read can't throw, makes no JS value and doesn't reach the
-    /// context, so it needs nothing of what `create` sets up. It gets a
-    /// callback of its own, which takes the receiver and nothing else.
+    /// context, so the callback takes the receiver and nothing else: no
+    /// `Caller`, no `HandleScope`.
     pub fn createFieldGetter(comptime T: type, comptime field: []const u8) *const v8.CFunction {
-        const Receiver = *const T;
-        if (canReceiverMismatch(Receiver)) {
+        if (canReceiverMismatch(T)) {
             @compileError("getter-by-field cannot be used for type: " ++ @typeName(T) ++ " and field: " ++ field);
         }
+
         const Return = @FieldType(T, field);
-        switch (Return) {
-            bool, i32, u32, i64, u64, f32, f64 => {},
+        const return_info: v8.CTypeInfo = .{ .type = switch (Return) {
+            bool => v8.kCTypeInfoType_Bool,
+            i32 => v8.kCTypeInfoType_Int32,
+            u32 => v8.kCTypeInfoType_Uint32,
+            i64 => v8.kCTypeInfoType_Int64,
+            u64 => v8.kCTypeInfoType_Uint64,
+            f32 => v8.kCTypeInfoType_Float32,
+            f64 => v8.kCTypeInfoType_Float64,
             else => @compileError("getter-by-field cannot return " ++ @typeName(Return) ++ ": " ++ @typeName(T) ++ "." ++ field),
-        }
+        } };
 
         const func = struct {
             fn wrap(recv: ?*const v8.Value) callconv(.c) Return {
-                const self = TaggedOpaque.fromJS(Receiver, @ptrCast(recv)) catch unreachable;
+                // V8 only takes the fast path for a receiver that passed the
+                // accessor's signature check, and canReceiverMismatch ruled
+                // out the interfaces whose objects can hold another type.
+                const self = TaggedOpaque.fromJS(*const T, @ptrCast(recv)) catch unreachable;
                 return @field(self, field);
             }
         }.wrap;
 
         const arg = v8.CTypeInfo{ .type = v8.kCTypeInfoType_V8Value };
         const func_info: *const v8.CFunctionInfo = &.{
-            .return_info = toCTypeEnum(Return),
+            .return_info = return_info,
             .arg_count = 1,
             .arg_info = @ptrCast(&arg),
         };
