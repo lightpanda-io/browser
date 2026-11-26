@@ -256,7 +256,7 @@ fn getLocks(self: *Navigator, exec: *Execution) !*LockManager {
     if (self._locks) |l| {
         return l;
     }
-    const l = try exec._factory.create(LockManager{});
+    const l = try exec._factory.create(LockManager{ ._exec = exec.handle() });
     self._locks = l;
     return l;
 }

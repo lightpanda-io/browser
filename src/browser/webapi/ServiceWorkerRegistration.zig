@@ -34,7 +34,7 @@ const ServiceWorkerRegistration = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_exec: *Execution,
+_exec: js.ExecutionHandle,
 
 // Null once the scope is gone
 _scope: ?*ServiceWorkerGlobalScope,
@@ -52,7 +52,7 @@ _node: std.DoublyLinkedList.Node = .{},
 pub fn init(scope: *ServiceWorkerGlobalScope, container: ?*ServiceWorkerContainer, exec: *Execution) !*ServiceWorkerRegistration {
     const self = try exec._factory.eventTargetWithAllocator(exec.page_arena, ServiceWorkerRegistration{
         ._proto = undefined,
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._scope = scope,
         ._scope_url = try exec.page_arena.dupe(u8, scope._scope_url),
         ._container = container,
@@ -133,7 +133,8 @@ pub fn worker(self: *ServiceWorkerRegistration, scope: *ServiceWorkerGlobalScope
     if (self._worker) |w| {
         return w;
     }
-    const w = try ServiceWorker.init(scope, self._exec);
+    const exec = self._exec.get() orelse return error.InvalidStateError;
+    const w = try ServiceWorker.init(scope, exec);
     self._worker = w;
     return w;
 }

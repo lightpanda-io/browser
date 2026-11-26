@@ -39,7 +39,7 @@ fn dispatchConsoleMessage(values: []const js.Value, console_type: Notification.C
     // The frame the message is logged in; a worker's is its owner's.
     const frame_id = switch (exec.js.global) {
         .frame => |frame| frame._frame_id,
-        .worker => |worker| worker._frame._frame_id,
+        .worker => |worker| worker._document_frame_id,
     };
 
     notification.dispatch(.console_message, &.{

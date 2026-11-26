@@ -112,7 +112,14 @@ pub fn initWithZigTransformer(zig_transformer: ZigTransformer, exec: *const Exec
     return self;
 }
 
+// The transformer and the readable side work in the realm the stream was
+// created in.
+fn realm(self: *const TransformStream) !*js.Context {
+    return self._readable._execution.js() orelse error.InvalidStateError;
+}
+
 pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Execution) !void {
+    _ = try self.realm();
     if (self._controller._zig_transformer) |zig| {
         // Zig-level transform (used by TextEncoderStream etc.)
         return zig.transform(self._controller, chunk);
@@ -130,6 +137,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Exec
 }
 
 pub fn transformClose(self: *TransformStream, exec: *const Execution) !void {
+    _ = try self.realm();
     if (self._controller._zig_transformer) |zig| {
         try zig.flush(self._controller);
     } else if (self._controller._flush_fn) |flush_fn| {
@@ -216,8 +224,9 @@ pub const TransformStreamDefaultController = struct {
 
     /// Errors both sides with the same TypeError object.
     pub fn typeError(self: *TransformStreamDefaultController, message: []const u8) !void {
+        const context = try self._stream.realm();
         var ls: js.Local.Scope = undefined;
-        self._stream._readable._execution.js.localScope(&ls);
+        context.localScope(&ls);
         defer ls.deinit();
 
         const local = &ls.local;

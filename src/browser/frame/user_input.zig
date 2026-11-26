@@ -595,7 +595,7 @@ fn mouseHitTest(frame: *Frame, x: f64, y: f64) !MouseHit {
         const iframe = target.is(Element.Html.IFrame) orelse break;
         const window = iframe._window orelse break;
         if (window._closed) break;
-        const child = window._frame;
+        const child = window._frame.get() orelse break;
         const rect = target.boundingClientRectValues(hit.frame);
         const child_x = hit.x - rect.x - target.getClientLeft();
         const child_y = hit.y - rect.y - target.getClientTop();
@@ -1714,7 +1714,7 @@ pub fn focusedFrame(frame: *Frame) *Frame {
     while (current.document._active_element) |active| {
         const iframe = active.is(Element.Html.IFrame) orelse break;
         const window = iframe._window orelse break;
-        current = window._frame;
+        current = window._frame.get() orelse break;
     }
     return current;
 }

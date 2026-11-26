@@ -39,7 +39,7 @@ const FileReader = @This();
 pub const Proto = EventTarget;
 
 _rc: lp.RC = .{},
-_exec: *Execution,
+_exec: js.ExecutionHandle,
 _proto: *EventTarget,
 _arena: *lp.Arena,
 
@@ -65,7 +65,7 @@ pub fn init(exec: *Execution) !*FileReader {
     errdefer arena.release();
 
     return exec._factory.eventTargetWithAllocator(arena.allocator(), FileReader{
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._arena = arena,
         ._proto = undefined,
     });
@@ -124,6 +124,11 @@ const ReadType = enum {
 };
 
 fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType, encoding_: ?[]const u8) !void {
+    // The read is a chain of tasks on the reader's own scheduler, which goes
+    // with its realm.
+    //
+    // As in Chrome, a detached reader throws an AbortError.
+    const exec = self._exec.get() orelse return error.AbortError;
     if (self._ready_state == .loading) {
         return error.InvalidStateError;
     }
@@ -132,8 +137,6 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType, encoding_: 
     self._result = null;
     self._generation +%= 1;
     self._ready_state = .loading;
-
-    const exec = self._exec;
 
     // The task holds the blob rather than a copy of its bytes: the events are
     // dispatched from later tasks, by which point JS may have dropped its last
@@ -160,7 +163,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType, encoding_: 
     });
 }
 
-fn complete(self: *FileReader, task: *const ReadTask) !void {
+fn complete(self: *FileReader, task: *const ReadTask, exec: *Execution) !void {
     const arena = self._arena.allocator();
     const data = task.blob._slice;
 
@@ -176,7 +179,6 @@ fn complete(self: *FileReader, task: *const ReadTask) !void {
 
     self._ready_state = .done;
 
-    const exec = self._exec;
     const size = data.len;
     try self.dispatch(.load, .{ .loaded = size, .total = size }, exec);
     try self.dispatch(.load_end, .{ .loaded = size, .total = size }, exec);
@@ -194,11 +196,11 @@ const ReadTask = struct {
 
     fn deinit(self: *ReadTask) void {
         const reader = self.reader;
-        const exec = reader._exec;
+        const page = reader._exec.page();
 
-        self.blob.releaseRef(exec.page);
-        reader.releaseRef(exec.page);
-        exec._factory.destroy(self);
+        self.blob.releaseRef(page);
+        reader.releaseRef(page);
+        page.factory.destroy(self);
     }
 
     fn cancelled(ctx: *anyopaque) void {
@@ -209,12 +211,15 @@ const ReadTask = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *ReadTask = @ptrCast(@alignCast(ctx));
         const reader = self.reader;
-        const exec = reader._exec;
 
         if (self.generation != reader._generation) {
             self.deinit();
             return null;
         }
+        const exec = reader._exec.get() orelse {
+            self.deinit();
+            return null;
+        };
         errdefer self.deinit();
 
         const size = self.blob._slice.len;
@@ -228,7 +233,7 @@ const ReadTask = struct {
                 try reader.dispatch(.progress, .{ .loaded = size, .total = size }, exec);
             },
             .complete => {
-                try reader.complete(self);
+                try reader.complete(self, exec);
                 self.deinit();
                 return null;
             },
@@ -301,7 +306,8 @@ pub fn abort(self: *FileReader) !void {
     // Retires the queued read chain.
     self._generation +%= 1;
 
-    const exec = self._exec;
+    // No events once the reader's realm is gone, and its listeners with it.
+    const exec = self._exec.get() orelse return;
     try self.dispatch(.abort, null, exec);
     try self.dispatch(.load_end, null, exec);
 }

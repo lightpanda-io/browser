@@ -58,7 +58,7 @@ pub fn init(label: ?[]const u8, opts_: ?InitOpts, exec: *const Execution) !TextD
 /// uses it: encoding_rs's state is built in place and holds no heap memory,
 /// so a stream that's never closed leaks nothing.
 pub const Decoder = struct {
-    exec: *const Execution,
+    exec: js.ExecutionHandle,
     encoding_name: []const u8,
     fatal: bool,
     ignore_bom: bool,
@@ -74,7 +74,7 @@ pub const Decoder = struct {
         const ok = html5ever.encoding_decoder_init(info.handle.?, state.ptr);
         std.debug.assert(ok == 1);
         return exec._factory.create(Decoder{
-            .exec = exec,
+            .exec = exec.handle(),
             .encoding_name = info.name(),
             .fatal = fatal,
             .ignore_bom = ignore_bom,
@@ -99,7 +99,8 @@ pub const Decoder = struct {
 
     // The output only lives for the call: enqueue copies it into a JS string.
     fn decode(self: *Decoder, controller: *TransformStream.DefaultController, input: []const u8, is_last: bool) !void {
-        const decoded = TextDecoder.decodeChunk(self.exec.call_arena, .{
+        const exec = self.exec.get() orelse return error.InvalidStateError;
+        const decoded = TextDecoder.decodeChunk(exec.call_arena, .{
             .encoding_name = self.encoding_name,
             .fatal = self.fatal,
             .ignore_bom = self.ignore_bom,

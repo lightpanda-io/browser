@@ -80,7 +80,9 @@ pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
 /// The URL the iframe's document is on, which can differ from `src` after
 /// in-frame navigation or redirects; `src` until a document exists.
 pub fn currentURL(self: *IFrame, frame: *Frame) ![]const u8 {
-    if (self._window) |window| return window._frame.url;
+    if (self._window) |window| {
+        if (window._frame.get()) |child| return child.url;
+    }
     return self.getSrc(frame);
 }
 
@@ -142,7 +144,8 @@ pub const JsApi = struct {
         fn wrap(self: *const IFrame, frame: *Frame) ?*Document {
             // specific JS implementation which is origin-aware.
             const window = self._window orelse return null;
-            if (window._frame.js.origin != frame.js.origin) {
+            const child = window._frame.get() orelse return null;
+            if (child.js.origin != frame.js.origin) {
                 return null;
             }
             return window._document;
@@ -164,7 +167,8 @@ pub const Build = struct {
         self._executed = false;
         const window = self._window orelse return;
         self._window = null;
-        try window._frame.discard();
+        const child = window._frame.get() orelse return;
+        try child.discard();
     }
 
     /// Removing srcdoc falls back to src, removing src to about:blank.

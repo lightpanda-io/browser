@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+WebCodecs codecs of an iframe that has since navigated, kept by its parent. A
+codec does its work, and calls back, in the realm it was created in: like
+Chrome, it is closed once that realm is gone.
+-->
+
+<script id=codecs type=module>
+  const state = await testing.async();
+
+  const audio = { codec: 'opus', sampleRate: 48000, numberOfChannels: 2 };
+  const video = { codec: 'vp8', width: 16, height: 16 };
+  const kept = await navigatedRealm('iframe', (w) => {
+    const calls = [];
+    const init = { output: () => calls.push('output'), error: () => calls.push('error') };
+    return {
+      calls,
+      codecs: [
+        [new w.AudioDecoder(init), audio],
+        [new w.AudioEncoder(init), audio],
+        [new w.VideoDecoder(init), { codec: 'vp8' }],
+        [new w.VideoEncoder(init), video],
+      ],
+    };
+  });
+
+  const name = (fn) => {
+    try {
+      fn();
+      return null;
+    } catch (e) {
+      return e.name;
+    }
+  };
+
+  const results = [];
+  const flushes = [];
+  for (const [codec, config] of kept.codecs) {
+    codec.ondequeue = () => kept.calls.push('dequeue');
+    results.push([
+      codec.state,
+      name(() => codec.configure(config)),
+      name(() => codec.reset()),
+      name(() => codec.close()),
+    ]);
+    const flushed = codec.flush();
+    flushed.catch(() => {});
+    flushes.push(await Promise.race([
+      flushed.then(() => 'fulfilled', (e) => 'rejected ' + e.name),
+      new Promise((r) => setTimeout(() => r('pending'), 30)),
+    ]));
+  }
+
+  state.resolve();
+  await state.done(() => {
+    const closed = ['closed', 'InvalidStateError', 'InvalidStateError', 'InvalidStateError'];
+    testing.expectEqual([closed, closed, closed, closed], results);
+    testing.expectEqual([], kept.calls);
+    testing.diverges("Chrome's promise belongs to the realm that is gone, and never settles", () => {
+      const rejected = 'rejected InvalidStateError';
+      testing.expectEqual([rejected, rejected, rejected, rejected], flushes);
+    });
+  });
+</script>
+</body>

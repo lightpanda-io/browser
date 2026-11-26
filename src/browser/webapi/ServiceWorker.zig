@@ -36,7 +36,7 @@ const ServiceWorker = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_exec: *Execution,
+_exec: js.ExecutionHandle,
 // Null once the scope is gone. Reports as `redundant` in that case
 _scope: ?*ServiceWorkerGlobalScope,
 
@@ -63,7 +63,7 @@ pub const State = enum {
 pub fn init(scope: *ServiceWorkerGlobalScope, exec: *Execution) !*ServiceWorker {
     return exec._factory.eventTargetWithAllocator(exec.page_arena, ServiceWorker{
         ._proto = undefined,
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._scope = scope,
     });
 }
@@ -92,7 +92,7 @@ pub fn postMessage(self: *ServiceWorker, data: js.Value) !void {
 }
 
 pub fn stateChanged(self: *ServiceWorker) void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     if (exec.hasDirectListeners(self._proto, "statechange") == false) {
         return;
     }
@@ -103,7 +103,7 @@ pub fn stateChanged(self: *ServiceWorker) void {
 }
 
 fn scheduleStateChange(self: *ServiceWorker) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
 
     const arena = try exec.getArena(.tiny, "ServiceWorker.statechange");
     errdefer arena.release();
@@ -130,7 +130,7 @@ const StateChangeCallback = struct {
         defer self.arena.release();
 
         const worker = self.worker;
-        const exec = worker._exec;
+        const exec = worker._exec.get() orelse return null;
         const event = (try Event.initTrusted(comptime .wrap("statechange"), .{
             .bubbles = false,
             .cancelable = false,

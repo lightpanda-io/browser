@@ -47,7 +47,8 @@ pub fn Core(comptime Owner: type) type {
     return struct {
         const Self = @This();
 
-        exec: *Execution,
+        // A codec is closed with its realm.
+        exec: js.ExecutionHandle,
         state: State = .unconfigured,
         // [[decodeQueueSize]] / [[encodeQueueSize]]
         queue_size: u32 = 0,
@@ -64,7 +65,7 @@ pub fn Core(comptime Owner: type) type {
 
         pub fn init(callbacks: Init, exec: *Execution) Self {
             return .{
-                .exec = exec,
+                .exec = exec.handle(),
                 .output = callbacks.output,
                 .error_callback = callbacks.@"error",
             };
@@ -83,12 +84,15 @@ pub fn Core(comptime Owner: type) type {
         }
 
         pub fn getState(self: *const Self) []const u8 {
+            if (self.exec.get() == null) {
+                return @tagName(State.closed);
+            }
             return @tagName(self.state);
         }
 
         // configure(), after the config was found valid.
         pub fn configure(self: *Self, comptime is_decoder: bool) !void {
-            if (self.state == .closed) {
+            if (self.state == .closed or self.exec.get() == null) {
                 return error.InvalidStateError;
             }
             self.state = .configured;
@@ -101,7 +105,7 @@ pub fn Core(comptime Owner: type) type {
         // The checks decode()/encode() make before enqueuing. The work itself
         // never happens: the configure message ahead of it closes the codec.
         pub fn enqueue(self: *Self) !void {
-            if (self.state != .configured) {
+            if (self.state != .configured or self.exec.get() == null) {
                 return error.InvalidStateError;
             }
             self.queue_size += 1;
@@ -111,7 +115,7 @@ pub fn Core(comptime Owner: type) type {
         // the codec was created in: hence `exec`, rather than `self.exec`.
         pub fn flush(self: *Self, comptime is_decoder: bool, exec: *const Execution) !js.Promise {
             const local = exec.js.local.?;
-            if (self.state != .configured) {
+            if (self.state != .configured or self.exec.get() == null) {
                 return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidStateError } });
             }
             if (is_decoder) {
@@ -129,7 +133,7 @@ pub fn Core(comptime Owner: type) type {
         }
 
         pub fn close(self: *Self) !void {
-            if (self.state == .closed) {
+            if (self.state == .closed or self.exec.get() == null) {
                 return error.InvalidStateError;
             }
             self.closeWith(error.AbortError);
@@ -137,7 +141,7 @@ pub fn Core(comptime Owner: type) type {
 
         // "Reset"
         fn resetWith(self: *Self, exception: anyerror) !void {
-            if (self.state == .closed) {
+            if (self.state == .closed or self.exec.get() == null) {
                 return error.InvalidStateError;
             }
             self.state = .unconfigured;
@@ -172,8 +176,9 @@ pub fn Core(comptime Owner: type) type {
             if (self.flushes.items.len == 0) {
                 return;
             }
+            const context = self.exec.js() orelse return;
             var ls: js.Local.Scope = undefined;
-            self.exec.js.localScope(&ls);
+            context.localScope(&ls);
             defer ls.deinit();
 
             // taken first: rejecting can't re-enter, but keep it simple
@@ -186,8 +191,9 @@ pub fn Core(comptime Owner: type) type {
         }
 
         fn reportError(self: *Self, exception: anyerror) void {
+            const context = self.exec.js() orelse return;
             var ls: js.Local.Scope = undefined;
-            self.exec.js.localScope(&ls);
+            context.localScope(&ls);
             defer ls.deinit();
 
             const dom_exception = DOMException.fromError(exception) orelse return;
@@ -208,9 +214,9 @@ pub fn Core(comptime Owner: type) type {
                 const core = task.core;
                 const kind = task.kind;
                 const generation = task.generation;
-                const exec = core.exec;
-                exec._factory.destroy(task);
-                defer core.owner().releaseRef(exec.page);
+                const page = core.exec.page();
+                page.factory.destroy(task);
+                defer core.owner().releaseRef(page);
 
                 switch (kind) {
                     // "Check Configuration Support" says no.
@@ -219,7 +225,8 @@ pub fn Core(comptime Owner: type) type {
                     },
                     .dequeue => {
                         core.dequeue_event_scheduled = false;
-                        const event = try Event.initTrusted(comptime .wrap("dequeue"), .{}, exec.page);
+                        const exec = core.exec.get() orelse return null;
+                        const event = try Event.initTrusted(comptime .wrap("dequeue"), .{}, page);
                         try exec.dispatch(core.owner().asEventTarget(), event, .{ .context = "codec dequeue" });
                     },
                 }
@@ -229,18 +236,18 @@ pub fn Core(comptime Owner: type) type {
             fn cancelled(ctx: *anyopaque) void {
                 const task: *Task = @ptrCast(@alignCast(ctx));
                 const core = task.core;
-                const exec = core.exec;
-                exec._factory.destroy(task);
-                core.owner().releaseRef(exec.page);
+                const page = core.exec.page();
+                page.factory.destroy(task);
+                core.owner().releaseRef(page);
             }
         };
 
         fn queueTask(self: *Self, comptime kind: TaskKind) !void {
+            const exec = self.exec.get() orelse return error.InvalidStateError;
             if (kind == .dequeue) {
                 if (self.dequeue_event_scheduled) return;
                 self.dequeue_event_scheduled = true;
             }
-            const exec = self.exec;
             const task = try exec._factory.create(Task{ .core = self, .kind = kind, .generation = self.generation });
             errdefer exec._factory.destroy(task);
 

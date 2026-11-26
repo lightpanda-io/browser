@@ -35,7 +35,10 @@ pub const Chunk = union(enum) {
 };
 
 _stream: *ReadableStream,
-_execution: *const Execution,
+/// The stream's chunks are queued, and its reads settle, in its own realm. Once
+/// that is gone, as in Chrome, the controller's methods don't throw and reads
+/// stay pending.
+_execution: js.ExecutionHandle,
 _arena: std.mem.Allocator,
 _queue: std.ArrayList(js.Value.Global),
 _pending_reads: std.ArrayList(js.PromiseResolver.Global),
@@ -45,7 +48,7 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, exec: *const Executio
     return exec._factory.create(ReadableStreamDefaultController{
         ._queue = .empty,
         ._stream = stream,
-        ._execution = exec,
+        ._execution = exec.handle(),
         ._arena = exec.page_arena,
         ._pending_reads = .empty,
         ._high_water_mark = high_water_mark,
@@ -64,12 +67,13 @@ pub fn addPendingRead(self: *ReadableStreamDefaultController, local: *const js.L
 ///
 /// TODO: Come up with a better name.
 pub fn enqueueNoSideEffects(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
+    const context = self._execution.js() orelse return error.StreamNotReadable;
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
 
     var ls: js.Local.Scope = undefined;
-    self._execution.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
     try self.queueValue(try chunkToJs(&ls.local, chunk));
 }
@@ -77,7 +81,7 @@ pub fn enqueueNoSideEffects(self: *ReadableStreamDefaultController, chunk: Chunk
 /// Resolves pending reads with queued chunks. Pairs with `enqueueNoSideEffects`.
 /// Call it once the producer no longer holds state that page JS could invalidate.
 pub fn fulfillPendingReads(self: *ReadableStreamDefaultController) void {
-    const exec = self._execution;
+    const exec = self._execution.get() orelse return;
     if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.fulfillPendingReads", .url = exec.url.* });
@@ -103,12 +107,13 @@ pub fn fulfillPendingReads(self: *ReadableStreamDefaultController) void {
 }
 
 pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
+    const context = self._execution.js() orelse return;
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
 
     var ls: js.Local.Scope = undefined;
-    self._execution.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
     return self.enqueueLocal(&ls.local, try chunkToJs(&ls.local, chunk), "stream enqueue");
 }
@@ -116,12 +121,13 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
 /// Enqueue a raw JS value, preserving its type (number, bool, object, etc.).
 /// Used by the JS-facing API; internal Zig callers should use enqueue(Chunk).
 pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !void {
+    const context = self._execution.js() orelse return;
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
 
     var ls: js.Local.Scope = undefined;
-    self._execution.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
     return self.enqueueLocal(&ls.local, value, "stream enqueue value");
 }
@@ -135,10 +141,10 @@ fn enqueueLocal(self: *ReadableStreamDefaultController, local: *const js.Local, 
     }
 
     if (comptime lp.IS_DEBUG) {
-        const exec = self._execution;
-        if (exec.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController." ++ source, .url = exec.url.* });
-            std.debug.assert(exec.js.local != null);
+        const context = local.ctx;
+        if (context.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController." ++ source, .url = context.execution.url.* });
+            std.debug.assert(context.local != null);
         }
     }
 
@@ -178,6 +184,7 @@ pub fn clearQueue(self: *ReadableStreamDefaultController) void {
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
+    const context = self._execution.js() orelse return;
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
@@ -196,17 +203,16 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
         .value = .empty,
     };
 
-    const exec = self._execution;
     if (comptime lp.IS_DEBUG) {
-        if (exec.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.close", .url = exec.url.* });
-            std.debug.assert(exec.js.local != null);
+        if (context.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.close", .url = context.execution.url.* });
+            std.debug.assert(context.local != null);
         }
     }
 
     for (self._pending_reads.items) |resolver| {
         var ls: js.Local.Scope = undefined;
-        exec.js.localScope(&ls);
+        context.localScope(&ls);
         defer ls.deinit();
         ls.toLocal(resolver).resolve("stream close", result);
         resolver.release();
@@ -216,8 +222,9 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
 }
 
 pub fn doError(self: *ReadableStreamDefaultController, reason: ?js.Value) !void {
+    const context = self._execution.js() orelse return;
     var ls: js.Local.Scope = undefined;
-    self._execution.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
 
     const local = &ls.local;
@@ -225,8 +232,9 @@ pub fn doError(self: *ReadableStreamDefaultController, reason: ?js.Value) !void 
 }
 
 pub fn typeError(self: *ReadableStreamDefaultController, message: []const u8) !void {
+    const context = self._execution.js() orelse return;
     var ls: js.Local.Scope = undefined;
-    self._execution.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
 
     const local = &ls.local;

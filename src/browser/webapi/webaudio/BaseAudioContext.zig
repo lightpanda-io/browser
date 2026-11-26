@@ -62,7 +62,7 @@ _type: Type,
 _rc: lp.RC = .{},
 _arena: *lp.Arena,
 // where tasks run and events dispatch
-_frame: *Frame,
+_frame: js.FrameHandle,
 // for releasing refs: teardown can outlive the frame
 _page: *Page,
 _sample_rate: f32,
@@ -105,7 +105,7 @@ pub fn init(typ: Type, arena: *lp.Arena, sample_rate: f32, frame: *Frame) BaseAu
         ._proto = undefined,
         ._type = typ,
         ._arena = arena,
-        ._frame = frame,
+        ._frame = frame.handle(),
         ._page = frame.page,
         ._sample_rate = sample_rate,
     };
@@ -207,7 +207,7 @@ pub fn renderQuantum(self: *BaseAudioContext, local: *const js.Local) !*const Bu
 
 // Listeners run script, so the list is re-read after each one.
 pub fn dispatchEnded(self: *BaseAudioContext) void {
-    const frame = self._frame;
+    const frame = self._frame.get() orelse return;
     while (self._finished.items.len > 0) {
         const source = self._finished.orderedRemove(0);
         const target = source.asEventTarget();
@@ -243,7 +243,8 @@ const StateChangeTask = struct {
     context: *BaseAudioContext,
 
     fn queue(context: *BaseAudioContext) !void {
-        const frame = context._frame;
+        // No event for a context whose document is gone.
+        const frame = context._frame.get() orelse return;
         const task = try frame._factory.create(StateChangeTask{ .context = context });
         errdefer frame._factory.destroy(task);
         context.acquireRef();
@@ -257,10 +258,11 @@ const StateChangeTask = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const task: *StateChangeTask = @ptrCast(@alignCast(ctx));
         const context = task.context;
-        const frame = context._frame;
-        frame._factory.destroy(task);
-        defer context.releaseRef(frame.page);
+        const page = context._page;
+        page.factory.destroy(task);
+        defer context.releaseRef(page);
 
+        const frame = context._frame.get() orelse return null;
         const target = context.asEventTarget();
         if (frame._event_manager.hasDirectListeners(target, "statechange")) {
             const event = try Event.initTrusted(comptime .wrap("statechange"), .{}, frame.page);
@@ -272,9 +274,9 @@ const StateChangeTask = struct {
     fn cancelled(ctx: *anyopaque) void {
         const task: *StateChangeTask = @ptrCast(@alignCast(ctx));
         const context = task.context;
-        const frame = context._frame;
-        frame._factory.destroy(task);
-        context.releaseRef(frame.page);
+        const page = context._page;
+        page.factory.destroy(task);
+        context.releaseRef(page);
     }
 };
 
@@ -402,7 +404,7 @@ const DecodeTask = struct {
     // Once queued, the task owns the handles and the buffer ref.
     fn queue(task: DecodeTask) !void {
         const context = task.context;
-        const frame = context._frame;
+        const frame = context._frame.get() orelse return error.InvalidStateError;
         const created = try frame._factory.create(task);
         errdefer frame._factory.destroy(created);
 
@@ -420,8 +422,9 @@ const DecodeTask = struct {
         defer task.destroy();
         const context = task.context;
 
+        const frame = context._frame.get() orelse return null;
         var ls: js.Local.Scope = undefined;
-        context._frame.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
         const local = &ls.local;
         const resolver = task.resolver.local(local);
@@ -453,7 +456,7 @@ const DecodeTask = struct {
 
     fn destroy(task: *DecodeTask) void {
         const context = task.context;
-        const frame = context._frame;
+        const page = context._page;
         task.resolver.release();
 
         if (task.success) |f| {
@@ -465,11 +468,11 @@ const DecodeTask = struct {
         }
 
         if (task.buffer) |b| {
-            b.releaseRef(frame.page);
+            b.releaseRef(page);
         }
 
-        frame._factory.destroy(task);
-        context.releaseRef(frame.page);
+        page.factory.destroy(task);
+        context.releaseRef(page);
     }
 };
 

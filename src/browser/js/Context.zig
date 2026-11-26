@@ -32,6 +32,7 @@ const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 const Attribution = @import("Attribution.zig");
 const Execution = @import("Execution.zig");
+const Anchor = @import("handle.zig").Anchor;
 const WasmStreaming = @import("WasmStreaming.zig");
 
 const v8 = js.v8;
@@ -69,8 +70,12 @@ heap_profiler: ?*v8.HeapProfiler = null,
 // references Env.templates
 templates: []*const v8.FunctionTemplate,
 
-// Arena for the lifetime of the context
+/// Arena for the lifetime of the `Context`.
 arena: *lp.Arena,
+
+/// What the handles to this realm point at (see `@handle.zig`).
+/// Outlives the `Context`.
+anchor: *Anchor,
 
 // The call_arena for this context. For main world contexts this is
 // frame.call_arena. For isolated world contexts this is a separate arena
@@ -216,6 +221,8 @@ pub fn deinit(self: *Context) void {
             });
         }
     }
+
+    self.anchor.context = null;
 
     const env = self.env;
     defer self.arena.release();

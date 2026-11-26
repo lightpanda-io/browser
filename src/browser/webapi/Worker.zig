@@ -49,9 +49,12 @@ _frame_id: u32,
 _loader_id: u32,
 
 _proto: *EventTarget,
-_frame: *Frame,
+/// `Frame` that created the `Worker`, which goes away with it.
+_frame: js.FrameHandle,
 _arena: *lp.Arena,
-_worker_scope: *DedicatedWorkerGlobalScope,
+/// null once deinitialized. Another `Frame` can keep the `Worker` object past
+/// that.
+_worker_scope: ?*DedicatedWorkerGlobalScope,
 
 _url: [:0]const u8,
 _type: WorkerType = .classic,
@@ -72,21 +75,25 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     errdefer arena.release();
 
     const resolved_url = try URL.resolve(arena.allocator(), frame.base(), url, .{ .encoding = frame.charset });
-    const self = try frame.page.factory.eventTargetWithAllocator(arena.allocator(), Worker{
+    const self = try frame._factory.eventTarget(Worker{
         ._arena = arena,
         ._proto = undefined,
-        ._frame = frame,
+        ._frame = frame.handle(),
         ._url = resolved_url,
         ._type = if (options) |o| o.type else .classic,
-        ._worker_scope = undefined,
+        ._worker_scope = null,
         ._frame_id = session.nextFrameId(),
         ._loader_id = session.nextLoaderId(),
     });
-    const dedicated_worker = try DedicatedWorkerGlobalScope.init(self, resolved_url);
+    errdefer frame._factory.destroy(self);
+
+    const dedicated_worker = try DedicatedWorkerGlobalScope.init(self, resolved_url, frame);
     errdefer dedicated_worker.deinit();
 
     self._worker_scope = dedicated_worker;
     try frame.trackWorker(self);
+    // The errdefers above free what Frame.deinit would deinit again.
+    errdefer frame.removeWorker(self);
 
     if (session.load_resources.worker == false) {
         frame.page.status.noteSkipped(.worker);
@@ -112,7 +119,6 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .shutdown_callback = httpShutdownCallback,
     }) catch |err| {
         log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
-        frame.removeWorker(self);
         return err;
     };
 
@@ -124,7 +130,6 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 
     transfer.submit() catch |err| {
         log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
-        frame.removeWorker(self);
         return err;
     };
     return self;
@@ -139,8 +144,11 @@ pub fn deinit(self: *Worker) void {
         self._http_transfer = null;
     }
     self.releaseScriptArena();
-    self._worker_scope.deinit();
-    self._frame.page.event_listeners.removeTarget(self.asEventTarget());
+    if (self._worker_scope) |scope| {
+        self._worker_scope = null;
+        scope.deinit();
+    }
+    self._frame.page().event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -183,7 +191,8 @@ fn httpDoneCallback(transfer: *Transfer) !void {
 }
 
 fn loadInitialScript(self: *Worker, script: []const u8) !void {
-    const js_context = self._worker_scope._proto.js;
+    const worker_scope = self._worker_scope orelse return;
+    const js_context = worker_scope._proto.js;
 
     if (js_context.env.terminatePending()) {
         return;
@@ -203,7 +212,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     // httpErrorCallback path.
     defer {
         self._script_loaded = true;
-        self._worker_scope.drainPendingMessages();
+        worker_scope.drainPendingMessages();
     }
 
     var ls: js.Local.Scope = undefined;
@@ -273,7 +282,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // dropped at the "no listener" check) rather than accumulating until
     // worker teardown. Future postMessages then schedule normally.
     self._script_loaded = true;
-    self._worker_scope.drainPendingMessages();
+    if (self._worker_scope) |worker_scope| {
+        worker_scope.drainPendingMessages();
+    }
 
     if (!canceled) {
         self.fireErrorEvent(@errorName(err), null);
@@ -294,8 +305,11 @@ fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Glo
 }
 
 fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Global) !void {
-    const frame = self._frame;
     const target = self.asEventTarget();
+    const frame = self._frame.get() orelse {
+        if (error_value) |ev| ev.release();
+        return;
+    };
     // Check if there are any listeners
     if (!frame._event_manager.hasDirectListeners(target, "error")) {
         if (error_value) |ev| ev.release();
@@ -324,13 +338,22 @@ pub fn terminate(self: *Worker) void {
 }
 
 // Posts a message from the frame to the worker.
-pub fn postMessage(self: *Worker, data: js.Value, transfer: ?js.Value) !void {
-    try self._worker_scope.receiveMessage(data, try MessagePort.transferList(transfer));
+pub fn postMessage(self: *Worker, data: js.Value, transfer: ?js.Value, exec: *js.Execution) !void {
+    const ports = try MessagePort.transferList(transfer);
+    const worker_scope = self._worker_scope orelse {
+        // Dropped, as for a terminated worker. It's still serialized, into the
+        // caller's realm, so the transferred ports detach and bad data throws.
+        const cloned = try MessagePort.cloneMessage(data, ports, exec);
+        cloned.release();
+        return;
+    };
+    try worker_scope.receiveMessage(data, ports);
 }
 
 // Called internally by DedicatedWorkerGlobalScope when it wants to post a message to us
 pub fn receiveMessage(self: *Worker, data: js.Value, transfer: []const *MessagePort) !void {
-    const frame = self._frame;
+    // The worker doesn't run past the frame that created it.
+    const frame = self._frame.get() orelse return;
 
     // clones from where it currently is (the Worker context) to our Page's context
     const message = try MessagePort.cloneMessage(data, transfer, &frame.js.execution);
@@ -375,8 +398,13 @@ const ReceiveMessageCallback = struct {
         defer self.message.releasePorts();
 
         const worker = self.worker;
-        const frame = worker._frame;
         const target = worker.asEventTarget();
+        const frame = worker._frame.get() orelse {
+            if (self.message.data) |d| {
+                d.release();
+            }
+            return null;
+        };
 
         // If data is null, deserialization failed - fire messageerror
         const data = self.message.data orelse {

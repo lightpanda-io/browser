@@ -41,7 +41,7 @@ const WebSocket = @This();
 pub const Proto = EventTarget;
 
 _rc: lp.RC = .{},
-_exec: *const Execution,
+_exec: js.ExecutionHandle,
 _proto: *EventTarget,
 _arena: *lp.Arena,
 
@@ -206,7 +206,7 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
     const http_client = &exec.session.browser.http_client;
 
     const self = try exec._factory.eventTargetWithAllocator(arena.allocator(), WebSocket{
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._conn = null,
         ._arena = arena,
         ._proto = undefined,
@@ -245,7 +245,7 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
 }
 
 fn connect(self: *WebSocket, protocols: []const []const u8) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return error.InvalidStateError;
     const arena = self._arena;
     const resolved_url = self._url;
     const http_client = self._http_client;
@@ -372,10 +372,15 @@ pub fn transportClosed(self: *WebSocket, err: ?anyerror) void {
 pub fn deliverEvents(self: *WebSocket) void {
     // The dispatch queue's reference. Runs last (LIFO defers): keeps self
     // alive even when a terminal event releases the base reference.
-    defer self.releaseRef(self._exec.page);
+    defer self.releaseRef(self._exec.page());
 
-    const page_scope = self._exec.page.logScope();
+    const page_scope = self._exec.page().logScope();
     defer page_scope.exit();
+
+    // The socket belongs to the `Frame` or `Worker`, which an isolated world's
+    // socket can be left with once that world is gone.
+    const context = self._exec.js() orelse return self.clearEvents();
+    const attribution = context.attribution;
 
     self._delivering = true;
     defer self._delivering = false;
@@ -387,7 +392,7 @@ pub fn deliverEvents(self: *WebSocket) void {
             break;
         }
         const event = self._events.items[i];
-        const task_scope = self._exec.js.attribution.enterNew(.message, .{
+        const task_scope = attribution.enterNew(.message, .{
             .parent = self._task,
             .label = "WebSocket",
             .detail = @tagName(event),
@@ -471,8 +476,10 @@ fn deactivate(self: *WebSocket) void {
     }
     self._active = false;
     self.releaseTransport();
-    self._exec.httpOwner().removeWS(self);
-    self.releaseRef(self._exec.page);
+    if (self._exec.global()) |global| {
+        global.httpOwner().removeWS(self);
+    }
+    self.releaseRef(self._exec.page());
 }
 
 // Unlink the connection from the http client. Queued outgoing messages are
@@ -500,7 +507,7 @@ fn bufferMessage(self: *WebSocket, message: []const u8, frame_type: http.WsFrame
         return error.MessageTooLarge;
     }
     const arena = self._batch_arena orelse blk: {
-        const arena = try self._exec.getArena(message.len, "WebSocket.recv");
+        const arena = try self._exec.page().getArena(message.len, "WebSocket.recv");
         self._batch_arena = arena;
         break :blk arena;
     };
@@ -528,7 +535,7 @@ fn unlinkDispatch(self: *WebSocket) void {
     }
     self._dispatch_queued = false;
     self._http_client.wsDequeue(&self._dispatch_node);
-    self.releaseRef(self._exec.page);
+    self.releaseRef(self._exec.page());
 }
 
 fn clearEvents(self: *WebSocket) void {
@@ -584,7 +591,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
 
     switch (data) {
         .blob => |blob| {
-            const arena = try self._exec.getArena(blob._slice.len, "WebSocket.message");
+            const arena = try self._exec.page().getArena(blob._slice.len, "WebSocket.message");
             errdefer arena.release();
             try self.queueMessage(.{ .binary = .{
                 .arena = arena,
@@ -595,7 +602,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
             if (js_val.isArrayBuffer() == false and js_val.isArrayBufferView() == false) {
                 // Anything that isn't a buffer is sent as its string, as in Chrome
                 const str = try js_val.toString();
-                const arena = try self._exec.getArena(str.len(), "WebSocket.message");
+                const arena = try self._exec.page().getArena(str.len(), "WebSocket.message");
                 errdefer arena.release();
                 try self.queueMessage(.{ .text = .{
                     .arena = arena,
@@ -604,7 +611,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
             } else {
                 const buffer = (try js_val.toZig(js.BufferSource)).bytes();
 
-                const arena = try self._exec.getArena(buffer.len, "WebSocket.message");
+                const arena = try self._exec.page().getArena(buffer.len, "WebSocket.message");
                 errdefer arena.release();
                 try self.queueMessage(.{ .binary = .{
                     .arena = arena,
@@ -686,7 +693,7 @@ fn setBinaryType(self: *WebSocket, value: []const u8) void {
 }
 
 fn dispatchOpenEvent(self: *WebSocket) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
 
     if (exec.hasDirectListeners(target, "open")) {
@@ -696,7 +703,7 @@ fn dispatchOpenEvent(self: *WebSocket) !void {
 }
 
 fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsFrameType) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
 
     if (exec.hasDirectListeners(target, "message")) {
@@ -721,7 +728,7 @@ fn dispatchMessageEvent(self: *WebSocket, data: []const u8, frame_type: http.WsF
 }
 
 fn dispatchErrorEvent(self: *WebSocket) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
 
     if (exec.hasDirectListeners(target, "error")) {
@@ -731,7 +738,7 @@ fn dispatchErrorEvent(self: *WebSocket) !void {
 }
 
 fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean: bool) !void {
-    const exec = self._exec;
+    const exec = self._exec.get() orelse return;
     const target = self.asEventTarget();
 
     if (exec.hasDirectListeners(target, "close")) {
@@ -820,7 +827,7 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
 
     if (self._send_offset >= byte_msg.data.len) {
         const removed = self._send_queue.orderedRemove(0);
-        removed.deinit(self._exec.page);
+        removed.deinit(self._exec.page());
         if (comptime lp.IS_DEBUG) {
             log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
         }

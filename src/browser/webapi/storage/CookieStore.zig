@@ -36,7 +36,7 @@ const CookieStore = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_exec: ?*Execution = null,
+_exec: ?js.ExecutionHandle = null,
 
 pub fn asEventTarget(self: *CookieStore) *EventTarget {
     return self._proto;
@@ -48,20 +48,21 @@ pub fn asEventTarget(self: *CookieStore) *EventTarget {
 /// Idempotent on re-call.
 pub fn attach(self: *CookieStore, exec: *Execution) !void {
     if (self._exec != null) return;
-    self._exec = exec;
+    self._exec = exec.handle();
     try exec.session.notification.register(.cookie_changed, self, onCookieChanged);
 }
 
 /// Removes this CookieStore from the notification list.
 pub fn detach(self: *CookieStore) void {
-    const exec = self._exec orelse return;
-    exec.session.notification.unregisterAll(self);
+    const handle = self._exec orelse return;
+    handle.page().session.notification.unregisterAll(self);
     self._exec = null;
 }
 
 fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !void {
     const self: *CookieStore = @ptrCast(@alignCast(ctx));
-    const exec = self._exec orelse return;
+    const handle = self._exec orelse return;
+    const exec = handle.get() orelse return;
 
     // CookieStore exposes only cookies that script would see for the
     // current document — same filter as `match` (HttpOnly hidden,
@@ -153,7 +154,8 @@ const ChangeCallback = struct {
         // We use the CookieStore's exec here instead of self.exec to detect if
         // the store has been detached. In this case, we don't dispatch the
         // event.
-        const exec = cs._exec orelse return null;
+        const handle = cs._exec orelse return null;
+        const exec = handle.get() orelse return null;
         const target = cs.asEventTarget();
 
         // Skip event construction when nobody is listening.

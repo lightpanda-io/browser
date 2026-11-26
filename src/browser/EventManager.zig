@@ -84,7 +84,7 @@ pub fn getHandler(self: *EventManager, target: *EventTarget, typ: []const u8) ?j
         .node => target.subtype(Node).ownerFrame(self.frame) orelse self.frame,
         .window => blk: {
             const window = target.subtype(Window);
-            break :blk if (window._closed) self.frame else window._frame;
+            break :blk if (window._closed) self.frame else window._frame.get() orelse self.frame;
         },
         else => self.frame,
     };

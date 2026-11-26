@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+A window can keep an object of a popup or an iframe that has since navigated:
+the realm the object was created in is gone. A FileReader reads from tasks of
+that realm, so it can't read anymore.
+-->
+
+<script id=popup_navigated type=module>
+  const state = await testing.async();
+
+  const reader = await navigatedRealm('popup', (w) => new w.FileReader());
+
+  let error = null;
+  try {
+    reader.readAsText(new Blob(['x']));
+  } catch (e) {
+    error = e.name;
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('AbortError', error);
+  });
+</script>
+
+<script id=iframe_navigated type=module>
+  const state = await testing.async();
+
+  const readers = await navigatedRealm('iframe', (w) => {
+    const idle = new w.FileReader();
+    // still reading when its realm goes away
+    const reading = new w.FileReader();
+    reading.readAsText(new w.Blob(['pending']));
+    return { idle, reading };
+  });
+
+  const events = [];
+  for (const type of ['loadstart', 'load', 'loadend', 'abort', 'error']) {
+    readers.idle.addEventListener(type, () => events.push(type));
+  }
+
+  const errors = [];
+  for (const read of ['readAsText', 'readAsArrayBuffer', 'readAsDataURL', 'readAsBinaryString']) {
+    try {
+      readers.idle[read](new Blob(['x']));
+      errors.push(null);
+    } catch (e) {
+      errors.push(e.name);
+    }
+  }
+  readers.idle.abort();
+  readers.reading.abort();
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['AbortError', 'AbortError', 'AbortError', 'AbortError'], errors);
+    testing.expectEqual(null, readers.idle.result);
+    testing.expectEqual([], events);
+  });
+</script>
+</body>

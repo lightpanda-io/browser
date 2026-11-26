@@ -29,16 +29,24 @@ const History = @This();
 
 const ScrollRestoration = enum { auto, manual };
 
-_frame: *Frame,
+_frame: js.FrameHandle,
 _scroll_restoration: ScrollRestoration = .auto,
 
-pub fn getLength(self: *const History) u32 {
-    const target = self._frame;
+// Like Chrome, a History whose frame was destroyed throws a SecurityError.
+// TODO: Chrome also throws for the History of a document that its frame has
+// navigated away from. Ours is reused with the Window, and acts on the frame's
+// next document.
+fn liveFrame(self: *const History) !*Frame {
+    return self._frame.get() orelse error.SecurityError;
+}
+
+pub fn getLength(self: *const History) !u32 {
+    const target = try self.liveFrame();
     return @intCast(target._session.navigationFor(target)._entries.items.len);
 }
 
 pub fn getState(self: *const History, frame: *Frame) !?js.Value {
-    const target = self._frame;
+    const target = try self.liveFrame();
     if (target._session.navigationFor(target).getCurrentEntry()._state.value) |state| {
         const value = try frame.js.local.?.parseJSON(state);
         return value;
@@ -75,7 +83,7 @@ fn resolveHistoryUrl(target: *Frame, url_: ?[]const u8) ![:0]const u8 {
 }
 
 pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8) !void {
-    const target = self._frame;
+    const target = try self.liveFrame();
     const session = target._session;
     const arena = session.arena;
     const url = try resolveHistoryUrl(target, _url);
@@ -108,7 +116,7 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
 }
 
 fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8) !void {
-    const target = self._frame;
+    const target = try self.liveFrame();
     const session = target._session;
     const arena = session.arena;
     const url = try resolveHistoryUrl(target, _url);
@@ -183,7 +191,7 @@ pub fn firePopState(frame: *Frame, state: ?[]const u8) !void {
     }
 }
 
-// Traversals still act on the injected frame, not self._frame.
+// Traversals still act on the injected frame, not this History's.
 pub fn back(_: *History, frame: *Frame) !void {
     try goInner(-1, frame);
 }

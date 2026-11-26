@@ -21,7 +21,7 @@ const std = @import("std");
 const brotli = @import("../../../sys/brotli.zig");
 
 const js = @import("../../js/js.zig");
-const Execution = js.Execution;
+const Page = @import("../../Page.zig");
 
 const TransformStream = @import("../streams/TransformStream.zig");
 
@@ -34,15 +34,16 @@ const State = enum {
 
 /// Does brotli encoding in streaming fashion.
 pub const EncodingStream = struct {
-    exec: *const Execution,
+    // Whose allocator brotli uses. The stream can outlive its realm.
+    page: *Page,
     state: State = .idle,
     /// Lazily initialized, valid if `state` is `active`.
     stream: *brotli.BrotliEncoderState = undefined,
 
     // Public API.
 
-    pub fn init(exec: *const Execution) EncodingStream {
-        return .{ .exec = exec };
+    pub fn init(page: *Page) EncodingStream {
+        return .{ .page = page };
     }
 
     // Transformer API.
@@ -144,7 +145,7 @@ pub const EncodingStream = struct {
     ) !void {
         state_machine: switch (self.state) {
             .idle => {
-                const stream = brotli.BrotliEncoderCreateInstance(alloc, free, @constCast(self.exec)) orelse {
+                const stream = brotli.BrotliEncoderCreateInstance(alloc, free, self.page) orelse {
                     return error.OutOfMemory;
                 };
                 // brotli defaults to its maximum quality (11), which is ~60x
@@ -172,15 +173,16 @@ pub const EncodingStream = struct {
 
 /// Does brotli decoding in streaming fashion.
 pub const DecodingStream = struct {
-    exec: *const Execution,
+    // Whose allocator brotli uses. The stream can outlive its realm.
+    page: *Page,
     state: State = .idle,
     /// Lazily initialized, valid if `state` is `active`.
     stream: *brotli.BrotliDecoderState = undefined,
 
     // Public API.
 
-    pub fn init(exec: *const Execution) DecodingStream {
-        return .{ .exec = exec };
+    pub fn init(page: *Page) DecodingStream {
+        return .{ .page = page };
     }
 
     // Transformer API.
@@ -289,7 +291,7 @@ pub const DecodingStream = struct {
     ) !void {
         state_machine: switch (self.state) {
             .idle => {
-                const stream = brotli.BrotliDecoderCreateInstance(alloc, free, @constCast(self.exec)) orelse {
+                const stream = brotli.BrotliDecoderCreateInstance(alloc, free, self.page) orelse {
                     return error.OutOfMemory;
                 };
                 self.stream = stream;
@@ -312,9 +314,9 @@ pub const DecodingStream = struct {
 const HEADER = 16;
 const alignment: std.mem.Alignment = .fromByteUnits(HEADER);
 
-fn alloc(raw_exec: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
-    const exec: *const Execution = @ptrCast(@alignCast(raw_exec));
-    const allocator = exec.page.recycling;
+fn alloc(raw_page: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
+    const page: *const Page = @ptrCast(@alignCast(raw_page));
+    const allocator = page.recycling;
 
     const total = std.math.add(usize, size, HEADER) catch return null;
     const block = allocator.alignedAlloc(u8, alignment, total) catch return null;
@@ -324,11 +326,11 @@ fn alloc(raw_exec: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
     return block.ptr + HEADER;
 }
 
-fn free(raw_exec: ?*anyopaque, maybe_address: ?*anyopaque) callconv(.c) void {
+fn free(raw_page: ?*anyopaque, maybe_address: ?*anyopaque) callconv(.c) void {
     const address = maybe_address orelse return;
 
-    const exec: *const Execution = @ptrCast(@alignCast(raw_exec));
-    const allocator = exec.page.recycling;
+    const page: *const Page = @ptrCast(@alignCast(raw_page));
+    const allocator = page.recycling;
 
     const block: [*]align(HEADER) u8 = @ptrCast(@alignCast(@as([*]u8, @ptrCast(address)) - HEADER));
     const total = std.mem.readInt(usize, block[0..@sizeOf(usize)], .native);

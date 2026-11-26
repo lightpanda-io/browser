@@ -44,7 +44,7 @@ pub const State = enum {
 };
 
 _state: State,
-_execution: *const Execution,
+_execution: js.ExecutionHandle,
 _reader: ?*ReadableStreamDefaultReader,
 _controller: *ReadableStreamDefaultController,
 /// What the stream errored with, e.g. the `e` of controller.error(e).
@@ -74,7 +74,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const 
     const strategy: QueueingStrategy = strategy_ orelse .{};
 
     const self = try exec._factory.create(ReadableStream{
-        ._execution = exec,
+        ._execution = exec.handle(),
         ._state = .readable,
         ._reader = null,
         ._controller = undefined,
@@ -86,7 +86,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const 
     if (src_) |src| {
         self._cancel_fn = src.cancel;
         self._pull_fn = src.pull;
-        try self.start(src.start);
+        try self.start(src.start, exec);
     }
 
     return self;
@@ -97,7 +97,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const 
 /// nothing, the spec still waits a microtask, but this pulls right away:
 /// Request and clone() read a stream body synchronously, so a pull-only body
 /// has to be filled by then.
-fn start(self: *ReadableStream, start_fn: ?js.Function) !void {
+fn start(self: *ReadableStream, start_fn: ?js.Function, exec: *const Execution) !void {
     // no pull while start() runs, even if it enqueues
     self._starting = true;
     const result = if (start_fn) |f| try f.callRethrow(js.Value, .{self._controller}) else null;
@@ -106,7 +106,7 @@ fn start(self: *ReadableStream, start_fn: ?js.Function) !void {
         return self.onStartFulfilled();
     }
 
-    const local = self._execution.js.local.?;
+    const local = exec.js.local.?;
     const started = if (value.isPromise()) value.toPromise() else try local.resolvePromise(value);
     const then_fn = local.newCallback(onStartFulfilled, self);
     const catch_fn = local.newCallback(onStartRejected, self);
@@ -181,6 +181,8 @@ pub const BodyChunks = enum {
 /// `error.TypeError`. The queue is only consumed once every chunk has
 /// converted, so a rejected body leaves the stream as it was.
 pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator, comptime chunks: BodyChunks) ![]const u8 {
+    // The chunks are read in the stream's realm.
+    const context = self._execution.js() orelse return error.TypeError;
     if (self._collected or self.getLocked()) {
         return error.TypeError;
     }
@@ -190,7 +192,7 @@ pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator, comptim
     }
 
     var ls: js.Local.Scope = undefined;
-    self._execution.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
     const local = &ls.local;
 
@@ -233,7 +235,9 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         return;
     }
 
-    const exec = self._execution;
+    // pull() runs in the stream's realm.
+    const exec = self._execution.get() orelse return;
+
     if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStream.callPullIfNeeded", .url = exec.url.* });
@@ -369,7 +373,7 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
     // The source's cancel returned a promise, wait for it (and then resolve
     // with undefined)
     const wait = try exec.page_arena.create(CancelWait);
-    wait.* = .{ .execution = exec, .resolver = try resolver.persist() };
+    wait.* = .{ .execution = exec.handle(), .resolver = try resolver.persist() };
     const on_fulfilled = local.newCallback(CancelWait.onFulfilled, wait);
     const on_rejected = local.newCallback(CancelWait.onRejected, wait);
     _ = try source_result.toPromise().thenAndCatch(on_fulfilled, on_rejected);
@@ -377,18 +381,20 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
 }
 
 const CancelWait = struct {
-    execution: *const Execution,
+    execution: js.ExecutionHandle,
     resolver: js.PromiseResolver.Global,
 
     fn onFulfilled(self: *CancelWait) void {
         defer self.resolver.deinit();
-        const local = self.execution.js.local.?;
+        const context = self.execution.js() orelse return;
+        const local = context.local.?;
         local.toLocal(self.resolver).resolve("ReadableStream.cancel", {});
     }
 
     fn onRejected(self: *CancelWait, reason: ?js.Value) void {
         defer self.resolver.deinit();
-        const local = self.execution.js.local.?;
+        const context = self.execution.js() orelse return;
+        const local = context.local.?;
         const resolver = local.toLocal(self.resolver);
         if (reason) |r| {
             resolver.reject("ReadableStream.cancel", r);
@@ -439,7 +445,7 @@ const ReadData = struct {
 
 /// State for an async pipe operation.
 const PipeState = struct {
-    execution: *const Execution,
+    execution: js.ExecutionHandle,
     reader: *ReadableStreamDefaultReader,
     writable: *WritableStream,
     resolver: ?js.PromiseResolver.Global,
@@ -453,16 +459,15 @@ const PipeState = struct {
         const reader = try stream.getReader(exec);
         const state = try exec.page_arena.create(PipeState);
         state.* = .{
-            .execution = exec,
+            .execution = exec.handle(),
             .reader = reader,
             .writable = writable,
             .resolver = resolver,
         };
-        try state.pumpRead();
+        try state.pumpRead(exec);
     }
 
-    fn pumpRead(state: *PipeState) !void {
-        const exec = state.execution;
+    fn pumpRead(state: *PipeState, exec: *const Execution) !void {
         const local = exec.js.local.?;
 
         // Call reader.read() which returns a Promise
@@ -478,7 +483,7 @@ const PipeState = struct {
     }
 
     fn onReadFulfilled(self: *PipeState, data_: ?ReadData) void {
-        const exec = self.execution;
+        const exec = self.execution.get() orelse return;
         const local = exec.js.local.?;
         const data = data_ orelse {
             return self.finish(local);
@@ -499,13 +504,14 @@ const PipeState = struct {
         };
 
         // Continue reading the next chunk
-        self.pumpRead() catch {
+        self.pumpRead(exec) catch {
             self.finish(local);
         };
     }
 
     fn onReadRejected(self: *PipeState) void {
-        self.finish(self.execution.js.local.?);
+        const context = self.execution.js() orelse return;
+        self.finish(context.local.?);
     }
 
     fn finish(self: *PipeState, local: *const js.Local) void {
@@ -528,7 +534,7 @@ pub fn tee(self: *ReadableStream, exec: *const Execution) ![2]*ReadableStream {
     const reader = try self.getReader(exec);
     const state = try exec.page_arena.create(TeeState);
     state.* = .{
-        .execution = exec,
+        .execution = exec.handle(),
         .source = self,
         .reader = reader,
         .branches = .{
@@ -559,7 +565,7 @@ pub fn tee(self: *ReadableStream, exec: *const Execution) ![2]*ReadableStream {
 /// that's cancelled stops receiving chunks; the source is only cancelled once
 /// both branches are, with the two reasons as the cancel reason.
 const TeeState = struct {
-    execution: *const Execution,
+    execution: js.ExecutionHandle,
     source: *ReadableStream,
     reader: *ReadableStreamDefaultReader,
     branches: [2]Branch,
@@ -582,8 +588,9 @@ const TeeState = struct {
         }
         self.reading = true;
 
-        const local = self.execution.js.local.?;
-        const read_promise = self.reader.read(self.execution) catch |err| {
+        const exec = self.execution.get() orelse return;
+        const local = exec.js.local.?;
+        const read_promise = self.reader.read(exec) catch |err| {
             log.warn(.js, "tee read", .{ .err = err });
             self.reading = false;
             return;
@@ -628,7 +635,8 @@ const TeeState = struct {
     fn onReadRejected(self: *TeeState) void {
         self.reading = false;
 
-        const local = self.execution.js.local.?;
+        const context = self.execution.js() orelse return;
+        const local = context.local.?;
         const reason: ?js.Value = if (self.source._stored_error) |stored| local.toLocal(stored) else null;
         for (&self.branches) |*branch| {
             branch.stream._controller.doError(reason) catch {};
@@ -643,11 +651,13 @@ const TeeState = struct {
             return;
         }
         const resolver = self.cancel_resolver orelse return;
-        self.execution.js.local.?.toLocal(resolver).resolve("tee cancel", {});
+        const context = self.execution.js() orelse return;
+        context.local.?.toLocal(resolver).resolve("tee cancel", {});
     }
 
     fn cancelPromise(self: *TeeState) !js.PromiseResolver {
-        const local = self.execution.js.local.?;
+        const context = self.execution.js() orelse return error.InvalidStateError;
+        const local = context.local.?;
         if (self.cancel_resolver) |r| {
             return local.toLocal(r);
         }
@@ -676,7 +686,7 @@ const TeeState = struct {
     }
 
     fn cancelSource(self: *TeeState, resolver: js.PromiseResolver) void {
-        const exec = self.execution;
+        const exec = self.execution.get() orelse return;
         const local = exec.js.local.?;
 
         const no_reason: js.Value = .{ .local = local, .handle = local.isolate.initUndefined() };

@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
+const Anchor = @import("handle.zig").Anchor;
 const WasmStreaming = @import("WasmStreaming.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
@@ -285,6 +286,8 @@ const ContextParams = struct {
     call_arena: Allocator,
     local_arena: Allocator,
     debug_name: []const u8 = "Context",
+    // For an isolated world, this is the main world of its `Frame`.
+    main_world: ?*Context = null,
 };
 
 pub fn createContext(self: *Env, frame: *Frame, params: ContextParams) !*Context {
@@ -362,6 +365,16 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     errdefer page.releaseOrigin(origin);
 
     const context = try context_arena.create(Context);
+
+    // `Anchor` is owned by `Page` and `Context` holds a pointer to it. An
+    // `Anchor` can, and is going to, outlive the `Context`.
+    const anchor = try page.arena.create(Anchor);
+    anchor.* = .{
+        .context = context,
+        .page = page,
+        .main = if (params.main_world) |main| main.anchor else anchor,
+    };
+
     context.* = .{
         .env = self,
         .global = if (comptime is_frame) .{ .frame = global } else .{ .worker = global },
@@ -370,6 +383,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .page = page,
         .isolate = isolate,
         .arena = context_arena,
+        .anchor = anchor,
         .handle = context_global,
         .templates = self.templates,
         .call_arena = params.call_arena,
@@ -1250,7 +1264,7 @@ test "Env: Worker context " {
     const worker = try @import("../webapi/Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
 
     var ls: js.Local.Scope = undefined;
-    worker._worker_scope._proto.js.localScope(&ls);
+    worker._worker_scope.?._proto.js.localScope(&ls);
     defer ls.deinit();
 
     try testing.expectEqual(true, (try ls.local.exec("typeof Node === 'undefined'", null)).isTrue());

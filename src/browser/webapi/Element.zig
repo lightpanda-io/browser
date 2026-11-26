@@ -1442,7 +1442,7 @@ fn blurFocusedArea(old: *Element, related: ?*EventTarget, frame: *Frame) !?*Even
     var el_related = related;
     while (el.is(Html.IFrame)) |iframe| {
         const window = iframe._window orelse break;
-        const child = window._frame;
+        const child = window._frame.get() orelse break;
         const inner = child.document._active_element orelse return null;
         child.document.setActiveElement(null, child);
         el = inner;

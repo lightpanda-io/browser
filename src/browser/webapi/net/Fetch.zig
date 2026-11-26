@@ -36,7 +36,7 @@ const referrer = @import("../../referrer.zig");
 
 const Fetch = @This();
 
-_exec: *const Execution,
+_exec: js.ExecutionHandle,
 _url: []const u8,
 _response: *Response,
 _owns_response: bool,
@@ -112,7 +112,7 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
 
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._url = try response._arena.dupe(u8, request._url),
         ._sink = sink,
         ._response = response,
@@ -202,7 +202,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const is_opaque = self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin;
 
     const status = transfer.responseStatus().?;
-    self._exec.page.status.noteResponse(.fetch, transfer);
+    self._exec.page().status.noteResponse(.fetch, transfer);
     if (is_opaque or Response.isNullBodyStatus(status) or (self._manual_redirect and HttpClient.isRedirectStatus(status))) {
         self._null_body = true;
     }
@@ -249,7 +249,9 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .proceed;
     }
 
-    const exec = self._exec;
+    // The transfer belongs to the `FRame` or `Worker`, which an isolated
+    // world's fetch can be left with once that world is gone.
+    const exec = self._exec.get() orelse return .abort;
     if (transfer.client.obey_cors) {
         res._type = if (transfer._cors_cross_origin) .cors else .basic;
     } else {
@@ -300,13 +302,19 @@ fn httpDoneCallback(transfer: *Transfer) !void {
         .promise => |resolver| resolver,
         .completion => |completion| {
             self._owns_response = false;
-            defer response.deinit(self._exec.page);
+            defer response.deinit(self._exec.page());
             return completion.callback(completion.ctx, .{ .done = response });
         },
     };
 
+    const context = self._exec.js() orelse {
+        // No realm left to hand the response to. `self` is in its arena.
+        const page = self._exec.page();
+        self._owns_response = false;
+        return response.deinit(page);
+    };
     var ls: js.Local.Scope = undefined;
-    self._exec.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
 
     response._signal = signal;
@@ -328,7 +336,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     });
 
     if (self._headers_done == false) {
-        self._exec.page.status.noteError(.fetch, err);
+        self._exec.page().status.noteError(.fetch, err);
     }
 
     var response = self._response;
@@ -344,7 +352,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // clear this. (defer since `self is in the response's arena).
 
     defer if (owns_response) {
-        response.deinit(self._exec.page);
+        response.deinit(self._exec.page());
     };
 
     const resolver = switch (self._sink) {
@@ -352,8 +360,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         .completion => |completion| return completion.callback(completion.ctx, .err),
     };
 
+    const context = self._exec.js() orelse return;
     var ls: js.Local.Scope = undefined;
-    self._exec.js.localScope(&ls);
+    context.localScope(&ls);
     defer ls.deinit();
 
     if (self._abort_reason) |reason| {
@@ -405,7 +414,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
         const sink = self._sink;
         var response = self._response;
         response._http_transfer = null;
-        response.deinit(self._exec.page);
+        response.deinit(self._exec.page());
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
         switch (sink) {

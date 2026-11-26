@@ -37,7 +37,7 @@ const ServiceWorkerContainer = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_frame: *Frame,
+_frame: js.FrameHandle,
 
 // One per scope this container has registered
 _registrations: std.ArrayList(*ServiceWorkerRegistration) = .empty,
@@ -54,7 +54,7 @@ const RegisterOptions = struct {
 pub fn init(frame: *Frame) !*ServiceWorkerContainer {
     const self = try frame._factory.eventTargetWithAllocator(frame.page_arena, ServiceWorkerContainer{
         ._proto = undefined,
-        ._frame = frame,
+        ._frame = frame.handle(),
     });
     return self;
 }
@@ -93,7 +93,7 @@ pub fn workerActivated(self: *ServiceWorkerContainer) void {
 }
 
 fn scheduleReady(self: *ServiceWorkerContainer) !void {
-    const frame = self._frame;
+    const frame = self._frame.get() orelse return;
 
     const arena = try frame._session.getArena(.tiny, "ServiceWorkerContainer.ready");
     errdefer arena.release();
@@ -156,7 +156,7 @@ fn track(self: *ServiceWorkerContainer, scope: *ServiceWorkerGlobalScope) !*Serv
         }
     }
 
-    const frame = self._frame;
+    const frame = self._frame.get() orelse return error.InvalidStateError;
     const registration = try ServiceWorkerRegistration.init(scope, self, &frame.js.execution);
     errdefer registration.detach();
     try self._registrations.append(frame.page_arena, registration);
@@ -229,7 +229,8 @@ pub fn getRegistrations(self: *ServiceWorkerContainer, exec: *const js.Execution
 
 // The registration with an active worker whose scope covers this frame's URL.
 fn activeRegistration(self: *ServiceWorkerContainer) ?*ServiceWorkerRegistration {
-    return self.matchScope(true, self._frame.url);
+    const frame = self._frame.get() orelse return null;
+    return self.matchScope(true, frame.url);
 }
 
 // The registration whose scope covers `client_url`, longest scope winning.
@@ -271,6 +272,7 @@ const ReadyCallback = struct {
         defer self.arena.release();
 
         const container = self.container;
+        const frame = container._frame.get() orelse return null;
         const resolver = container._ready_resolver orelse return null;
         const registration = container.activeRegistration() orelse return null;
 
@@ -279,7 +281,7 @@ const ReadyCallback = struct {
         defer resolver.release();
 
         var ls: js.Local.Scope = undefined;
-        container._frame.js.localScope(&ls);
+        frame.js.localScope(&ls);
         defer ls.deinit();
 
         ls.toLocal(resolver).resolve("ServiceWorkerContainer.ready", registration);

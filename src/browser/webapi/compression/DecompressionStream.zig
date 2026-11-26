@@ -34,7 +34,7 @@ _decompressor: compress.Decompressor,
 pub fn init(format: compress.Format, exec: *const Execution) !*DecompressionStream {
     const self = try exec._factory.create(DecompressionStream{
         ._transform = undefined,
-        ._decompressor = .init(exec, format),
+        ._decompressor = .init(exec.page, format),
     });
     self._transform = try TransformStream.initWithZigTransformer(.{ .decompressor = &self._decompressor }, exec);
     return self;

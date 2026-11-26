@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Factory = @import("../Factory.zig");
-const Scheduler = @import("../js/Scheduler.zig");
 
 const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -70,13 +69,8 @@ _event_counts: EventCounts = .{},
 _resource_buffer_size: u32 = DEFAULT_RESOURCE_BUFFER_SIZE,
 _buffer_full_pending: bool = false,
 
-// The owner's task scheduler and its main-world Execution, both set by the
-// owner once its JS context exists (Frame builds the Window, and thus this,
-// before the context) - see attach. Never taken from a caller's Execution: an
-// isolated-world or cross-frame caller's context can be destroyed while we
-// live on.
-_exec: *Execution = undefined,
-_scheduler: *Scheduler = undefined,
+/// The owner's main world, where tasks are scheduled and events fire.
+_exec: js.ExecutionHandle = undefined,
 
 // PerformanceObserver infrastructure. Lives here (rather than on the owning
 // Frame/WorkerGlobalScope) so that both contexts get observers for free.
@@ -106,8 +100,7 @@ pub fn init(factory: *Factory, arena: Allocator) !*Performance {
 }
 
 pub fn attach(self: *Performance, ctx: *js.Context) void {
-    self._exec = &ctx.execution;
-    self._scheduler = &ctx.scheduler;
+    self._exec = ctx.execution.handle();
 }
 
 pub fn asEventTarget(self: *Performance) *EventTarget {
@@ -672,15 +665,16 @@ fn hasObserverFor(self: *const Performance, kind: Entry.Type.Enum) bool {
 // The event is queued rather than fired inline: addResource runs from the
 // HTTP layer, with no JS on the stack.
 fn scheduleBufferFull(self: *Performance) !void {
+    const exec = self._exec.get() orelse return;
     if (self._buffer_full_pending) {
         return;
     }
-    if (self._exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL) == false) {
+    if (exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL) == false) {
         return;
     }
     self._buffer_full_pending = true;
 
-    return self._scheduler.add(
+    return exec._scheduler.add(
         self,
         struct {
             fn run(_self: *anyopaque) anyerror!?u32 {
@@ -703,7 +697,7 @@ fn fireBufferFull(self: *Performance) !void {
     while (secondary.items.len > 0) {
         const excess_before = secondary.items.len;
         if (self.canAddResource() == false) {
-            const exec = self._exec;
+            const exec = self._exec.get() orelse return;
             const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
             try exec.dispatch(self.asEventTarget(), event, .{
                 .context = "Performance.bufferfull",
@@ -727,12 +721,15 @@ fn fireBufferFull(self: *Performance) !void {
 }
 
 pub fn scheduleDelivery(self: *Performance) !void {
+    // The observers are notified from a task of the owner, which another frame
+    // can outlive while it keeps this object: nothing to notify then.
+    const exec = self._exec.get() orelse return;
     if (self._delivery_scheduled) {
         return;
     }
     self._delivery_scheduled = true;
 
-    return self._scheduler.add(
+    return exec._scheduler.add(
         self,
         struct {
             fn run(_self: *anyopaque) anyerror!?u32 {

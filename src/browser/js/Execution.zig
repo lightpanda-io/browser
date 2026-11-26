@@ -32,6 +32,7 @@ const Value = @import("Value.zig");
 const Function = @import("Function.zig");
 const Context = @import("Context.zig");
 const Scheduler = @import("Scheduler.zig");
+const ExecutionHandle = @import("handle.zig").ExecutionHandle;
 const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const Factory = @import("../Factory.zig");
@@ -69,6 +70,11 @@ url: *[:0]const u8,
 
 // Pointer to the charset field of the global (Page or WorkerGlobalScope).
 charset: *[]const u8,
+
+/// For an object that keeps its realm beyond the call that created it.
+pub fn handle(self: *const Execution) ExecutionHandle {
+    return .{ .anchor = self.js.anchor };
+}
 
 pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {

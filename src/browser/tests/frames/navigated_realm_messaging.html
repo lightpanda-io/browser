@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+Messaging objects of an iframe that has since navigated, kept by its parent.
+Their realm is gone: nothing can be delivered to it, and nothing comes from it.
+-->
+
+<script id=message_port type=module>
+  const state = await testing.async();
+
+  // A port of ours ends up in the iframe too, entangled with one we keep.
+  const ours = new MessageChannel();
+  const channel = await navigatedRealm('iframe', (w) => {
+    w.postMessage('port', '*', [ours.port2]);
+    return new w.MessageChannel();
+  });
+
+  let delivered = 0;
+  channel.port1.onmessage = () => delivered++;
+  channel.port2.onmessage = () => delivered++;
+  ours.port1.onmessage = () => delivered++;
+
+  // Dropped: there is nothing to deliver to.
+  channel.port1.postMessage('from a port of the realm');
+  channel.port2.postMessage({ nested: [1, 2] });
+  ours.port1.postMessage('to a port of the realm');
+  channel.port1.start();
+  channel.port2.close();
+  channel.port2.postMessage('closed');
+
+  const transferred = new MessageChannel();
+  channel.port1.postMessage('with a port', [transferred.port1]);
+
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, delivered);
+    testing.diverges('Chrome returns before serializing: the transferred port stays usable', () => {
+      // Serialized as for any message that can't be delivered: the port moved.
+      testing.expectError('DataCloneError', () => new MessageChannel().port1.postMessage('again', [transferred.port1]));
+    });
+  });
+</script>
+
+<script id=broadcast_channel type=module>
+  const state = await testing.async();
+
+  const name = 'navigated_realm_broadcast';
+  const listener = new BroadcastChannel(name);
+  let received = 0;
+  listener.onmessage = () => received++;
+
+  const channel = await navigatedRealm('iframe', (w) => new w.BroadcastChannel(name));
+
+  // Ignored: the channel went away with its realm, without being closed.
+  channel.postMessage('from a channel of the realm');
+  await new Promise((r) => setTimeout(r, 30));
+
+  channel.close();
+  channel.close();
+  let closed_error = null;
+  try {
+    channel.postMessage('closed');
+  } catch (e) {
+    closed_error = e.name;
+  }
+  listener.close();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, received);
+    testing.expectEqual('InvalidStateError', closed_error);
+  });
+</script>
+
+<script id=worker type=module>
+  const state = await testing.async();
+
+  const worker_url = new URL('../worker/echo-worker.js', location.href).href;
+  const kept = await navigatedRealm('iframe', async (w) => {
+    const worker = new w.Worker(worker_url);
+    const echo = await new Promise((r) => {
+      worker.onmessage = (e) => r(e.data.echo);
+      worker.postMessage('ping');
+    });
+    return { worker, echo };
+  });
+
+  // The worker went away with the document that started it.
+  let events = 0;
+  kept.worker.onmessage = () => events++;
+  kept.worker.onmessageerror = () => events++;
+  kept.worker.onerror = () => events++;
+  kept.worker.postMessage('ping');
+  kept.worker.postMessage({ nested: [1, 2] });
+
+  const transferred = new MessageChannel();
+  kept.worker.postMessage('with a port', [transferred.port1]);
+
+  kept.worker.terminate();
+  kept.worker.terminate();
+  kept.worker.postMessage('terminated');
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('ping', kept.echo);
+    testing.expectEqual(0, events);
+    testing.diverges('Chrome returns before serializing: the transferred port stays usable', () => {
+      testing.expectError('DataCloneError', () => new MessageChannel().port1.postMessage('again', [transferred.port1]));
+    });
+  });
+</script>
+</body>

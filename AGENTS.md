@@ -36,3 +36,5 @@ Mirror the patterns in neighboring files. In particular:
 
 - `@import` alias case follows the imported file's basename (`const Frame = @import("Frame.zig")`, `const ast = @import("ast.zig")`).
 - Prefer struct-init type inference (`.{ ... }`) where the expected type is known from the function signature or variable annotation.
+- An object that outlives the call that created it doesn't store a `*Frame`, a `*Execution` or a `*js.Context`. It stores a handle (`src/browser/js/handle.zig`): `_frame: js.FrameHandle` from `frame.handle()`, or `_exec: js.ExecutionHandle` from `exec.handle()`.
+- Decide what each use does when the handle resolves to null (throw, ignore, leave a promise pending), check it against Chrome, and add the case to `src/browser/tests/frames/navigated_realm_*.html`.

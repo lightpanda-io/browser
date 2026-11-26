@@ -27,10 +27,10 @@ const Document = @import("Document.zig");
 
 const DOMParser = @This();
 
-_frame: *Frame,
+_frame: js.FrameHandle,
 
 pub fn init(frame: *Frame) !*DOMParser {
-    return frame._factory.create(DOMParser{ ._frame = frame });
+    return frame._factory.create(DOMParser{ ._frame = frame.handle() });
 }
 
 pub fn parseFromString(
@@ -38,7 +38,8 @@ pub fn parseFromString(
     html: []const u8,
     mime_type: []const u8,
 ) !*Document {
-    const frame = self._frame;
+    // The documents it creates belong to its frame, which is gone.
+    const frame = self._frame.get() orelse return error.InvalidStateError;
     const target_mime = std.meta.stringToEnum(SupportedType, mime_type) orelse return error.TypeError;
 
     switch (target_mime) {

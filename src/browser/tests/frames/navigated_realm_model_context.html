@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content="skipped: Chrome has no document.modelContext">
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+The ModelContext of an iframe that has since navigated, kept by its parent. Its
+tools run, and its events fire, in a realm that is gone.
+-->
+
+<script id=model_context type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', async (w) => {
+    const calls = [];
+    const context = w.document.modelContext;
+    await context.registerTool({ name: 'kept', description: 'registered before', execute: () => calls.push('kept') });
+    return { context, calls };
+  });
+
+  const { context, calls } = kept;
+  const events = [];
+  context.addEventListener('toolchange', () => events.push('toolchange'));
+  context.addEventListener('toolactivated', () => events.push('toolactivated'));
+
+  const outcome = (promise) => promise.then(() => 'fulfilled', (e) => 'rejected ' + e.name);
+  const tool = { name: 'late', description: 'registered after', execute: () => calls.push('late') };
+  const results = {
+    register: await outcome(context.registerTool(tool)),
+    execute: await outcome(context.executeTool({ name: 'kept', origin: location.origin, window: window }, {})),
+    tools: (await context.getTools()).map((t) => t.name),
+  };
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('rejected InvalidStateError', results.register);
+    testing.expectEqual('rejected InvalidStateError', results.execute);
+    testing.expectEqual(['kept'], results.tools);
+    testing.expectEqual([], calls);
+    testing.expectEqual([], events);
+  });
+</script>
+</body>

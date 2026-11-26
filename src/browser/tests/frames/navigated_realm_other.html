@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+More objects of an iframe that has since navigated, kept by its parent: each
+one schedules its tasks, fires its events or settles its promises in a realm
+that is gone. Browsers disagree on what most of these calls return then; what
+matters here is that they are safe to make, and that nothing runs in the next
+document.
+-->
+
+<script id=connections type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', async (w) => {
+    const socket = new w.WebSocket('ws://127.0.0.1:9584/');
+    await new Promise((r) => { socket.onopen = r; socket.onerror = r; });
+    const source = new w.EventSource('http://127.0.0.1:9582/sse/simple');
+    return { socket, source };
+  });
+
+  const events = [];
+  for (const type of ['open', 'message', 'error', 'close']) {
+    kept.socket.addEventListener(type, () => events.push('socket ' + type));
+    kept.source.addEventListener(type, () => events.push('source ' + type));
+  }
+  try {
+    kept.socket.send('after');
+  } catch (e) {}
+  kept.socket.close();
+  kept.source.close();
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(2, kept.source.readyState);
+    testing.expectEqual([], events);
+  });
+</script>
+
+<script id=tasks_and_events type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', (w) => {
+    const calls = [];
+    const observer = new w.PerformanceObserver(() => calls.push('observer'));
+    observer.observe({ entryTypes: ['mark'] });
+    const controller = new w.AbortController();
+    const polygon = w.document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    polygon.setAttribute('points', '0,0 1,1');
+    return {
+      calls,
+      observer,
+      controller,
+      performance: w.performance,
+      point: polygon.points.getItem(0),
+      audio: new w.AudioContext(),
+      offline: new w.OfflineAudioContext(1, 128, 44100),
+      cookies: w.cookieStore,
+    };
+  });
+
+  kept.performance.mark('navigated_realm');
+  kept.controller.abort();
+  kept.point.x = 5;
+  kept.observer.disconnect();
+
+  // 'pending' when the promise hasn't settled after a few tasks.
+  const outcome = (promise) => Promise.race([
+    promise.then(() => 'fulfilled', (e) => 'rejected ' + e.name),
+    new Promise((r) => setTimeout(() => r('pending'), 30)),
+  ]);
+  // Whether these settle is up to the browser.
+  const ignore = (promise) => { promise.catch(() => {}); };
+  ignore(kept.audio.suspend());
+  ignore(kept.audio.resume());
+  ignore(kept.audio.close());
+  ignore(kept.cookies.get('navigated_realm'));
+  // These need a task of the realm.
+  const decoded = await outcome(kept.audio.decodeAudioData(new ArrayBuffer(8)));
+  const rendered = await outcome(kept.offline.startRendering());
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(1, kept.performance.getEntriesByName('navigated_realm').length);
+    testing.expectEqual(true, kept.controller.signal.aborted);
+    testing.expectEqual(5, kept.point.x);
+    testing.expectEqual([], kept.calls);
+    testing.diverges("Chrome's promises belong to the realm that is gone, and never settle", () => {
+      testing.expectEqual('rejected InvalidStateError', decoded);
+      testing.expectEqual('rejected InvalidStateError', rendered);
+    });
+  });
+</script>
+
+<script id=indexed_db type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', async (w) => {
+    const calls = [];
+    const db = await new Promise((resolve, reject) => {
+      const request = w.indexedDB.open('navigated_realm', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('store');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = reject;
+    });
+    // still open when its realm goes away
+    const transaction = db.transaction('store', 'readwrite');
+    transaction.oncomplete = () => calls.push('complete');
+    const store = transaction.objectStore('store');
+    store.put('value', 'key');
+    return { calls, db, transaction, store, range: w.IDBKeyRange.only(1) };
+  });
+
+  const calls_before = kept.calls.length;
+  const attempt = (fn) => {
+    try {
+      fn();
+    } catch (e) {}
+  };
+  attempt(() => kept.store.get('key'));
+  attempt(() => kept.transaction.abort());
+  attempt(() => kept.db.transaction('store'));
+  attempt(() => kept.db.close());
+  await new Promise((r) => setTimeout(r, 30));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(1, kept.range.lower);
+    testing.expectEqual(calls_before, kept.calls.length);
+  });
+</script>
+</body>

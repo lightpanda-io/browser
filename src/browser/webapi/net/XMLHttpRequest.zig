@@ -46,7 +46,7 @@ const XMLHttpRequest = @This();
 
 pub const Proto = XMLHttpRequestEventTarget;
 _rc: lp.RC = .{},
-_exec: *const Execution,
+_exec: js.ExecutionHandle,
 _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,
 _arena: *lp.Arena,
@@ -126,7 +126,7 @@ pub fn init(exec: *const Execution) !*XMLHttpRequest {
     const arena = try exec.getPinnedArena(.large, "XMLHttpRequest");
     errdefer arena.release();
     const self = try exec._factory.xhrEventTarget(arena.allocator(), XMLHttpRequest{
-        ._exec = exec,
+        ._exec = exec.handle(),
         ._arena = arena,
         ._proto = undefined,
         ._request_headers = try Headers.initGuarded(null, .request, exec),
@@ -170,7 +170,7 @@ fn releaseSelfRef(self: *XMLHttpRequest) void {
         self._arena.report();
         self.reportResponseData();
     }
-    self.releaseRef(self._exec.page);
+    self.releaseRef(self._exec.page());
 }
 
 // Like _arena.report(), for the body we hold outside the arena.
@@ -229,6 +229,9 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !vo
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
+    // https://xhr.spec.whatwg.org/#the-open()-method step 1: if the document
+    // of the request's global isn't fully active, throw an InvalidStateError.
+    const exec = self._exec.get() orelse return error.InvalidStateError;
     // Abort any in-progress request, _send_flag unset as this should not fire
     // any events.
     self._send_flag = false;
@@ -240,7 +243,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
 
     // Reset internal state. _override_mime intentionally survives open()
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
-    self.clearResponse(self._exec.page);
+    self.clearResponse(exec.page);
     self._response_xml = null;
     self.freeResponseData();
     self._response_status = 0;
@@ -258,7 +261,6 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
         return error.InvalidAccessError;
     }
 
-    const exec = self._exec;
     self._method = try parseMethod(method_);
     self._url = try URL.resolve(self._arena.allocator(), exec.base(), url, .{ .encoding = exec.charset.* });
     try self.stateChanged(.opened, exec);
@@ -312,6 +314,9 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "XMLHttpRequest.send", .{ .url = self._url });
     }
+    // As in Chrome, nothing is fetched for a document that is gone, whatever
+    // the state of the request.
+    const exec = self._exec.get() orelse return error.NetworkError;
     if (self._ready_state != .opened or self._send_flag) {
         return error.InvalidStateError;
     }
@@ -336,8 +341,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             }
         }
     }
-
-    const exec = self._exec;
 
     self._send_flag = true;
     self._send_id +%= 1;
@@ -482,7 +485,7 @@ fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
     if (self._upload) |upload| {
         return upload;
     }
-    const upload = try self._exec._factory.xhrEventTarget(
+    const upload = try self._exec.page().factory.xhrEventTarget(
         self._arena.allocator(),
         XMLHttpRequestUpload{ ._proto = undefined, ._xhr = self },
     );
@@ -493,9 +496,10 @@ fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
 // https://xhr.spec.whatwg.org/#upload-listener-flag
 fn hasUploadListeners(self: *XMLHttpRequest) bool {
     const upload = self._upload orelse return false;
+    const exec = self._exec.get() orelse return false;
     const target = upload.asEventTarget();
     inline for (.{ "loadstart", "progress", "abort", "error", "load", "timeout", "loadend" }) |typ| {
-        if (self._exec.hasDirectListeners(target, typ)) {
+        if (exec.hasDirectListeners(target, typ)) {
             return true;
         }
     }
@@ -775,7 +779,9 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         });
     }
 
-    const exec = self._exec;
+    // The transfer belongs to the `Frame` or `Worker`, which an isolated
+    // world's request can be left with once that world is gone.
+    const exec = self._exec.get() orelse return .abort;
 
     var ls: js.Local.Scope = undefined;
     exec.js.localScope(&ls);
@@ -812,7 +818,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     try self.applyResponseHeaders(transfer.responseHeaders(), transfer._cors_cross_origin, !transfer.req.credentialsAllowed());
 
     self._response_status = transfer.responseStatus().?;
-    self._exec.page.status.noteResponse(.xhr, transfer);
+    exec.page.status.noteResponse(.xhr, transfer);
     if (transfer.statusText()) |st| {
         self._response_status_text = try self._arena.dupe(u8, st);
     }
@@ -828,13 +834,19 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
+    const exec = self._exec.get() orelse {
+        self._http_transfer = null;
+        self.releaseSelfRef();
+        return;
+    };
+
     self.freeResponseData();
     self._response_data = transfer.takeBody();
     if (self._response_data.len() > 0) {
         try self._proto.dispatch(.progress, .{
             .total = transfer.getContentLength() orelse 0,
             .loaded = self._response_data.len(),
-        }, self._exec);
+        }, exec);
 
         if (transfer.isAborted()) {
             // The progress handler called abort()/open() or tore the page
@@ -858,8 +870,6 @@ fn httpDoneCallback(transfer: *Transfer) !void {
     // object. It isn't safe to keep it around.
     self._http_transfer = null;
 
-    const exec = self._exec;
-
     try self.stateChanged(.done, exec);
 
     const loaded = self._response_data.len();
@@ -878,7 +888,7 @@ fn httpDoneCallback(transfer: *Transfer) !void {
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
     if (self._response_status == 0) {
-        self._exec.page.status.noteError(.xhr, err);
+        self._exec.page().status.noteError(.xhr, err);
     }
     // handleError can execute JS, which could .send() again: clear this now.
     self._http_transfer = null;
@@ -915,9 +925,9 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
     const is_timeout = err == error.OperationTimedout;
 
     const new_state: ReadyState = if (is_abort) .unsent else .done;
-    if (new_state != self._ready_state) {
-        const exec = self._exec;
-
+    // No events once the request's realm is gone.
+    const live = if (new_state != self._ready_state) self._exec.get() else null;
+    if (live) |exec| {
         try self.stateChanged(new_state, exec);
         // https://xhr.spec.whatwg.org/#request-error-steps: an unfinished
         // upload gets the error first.
@@ -1116,7 +1126,7 @@ test "WebApi: worker XHR listeners are dropped when the XHR is freed" {
     try testing.waitForFrame();
 
     const worker = try @import("../Worker.zig").init("http://localhost:9582/src/browser/tests/testing.js", null, frame);
-    const ctx = worker._worker_scope._proto.js;
+    const ctx = worker._worker_scope.?._proto.js;
 
     {
         var ls: js.Local.Scope = undefined;

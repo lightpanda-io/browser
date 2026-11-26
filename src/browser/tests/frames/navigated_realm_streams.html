@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script src="support/navigated_realm.js"></script>
+
+<!--
+Streams of an iframe that has since navigated, kept by its parent. A stream
+queues its chunks and settles its reads in the realm it was created in, which
+is gone.
+-->
+
+<script>
+  // 'pending' when the promise hasn't settled after a few tasks.
+  function outcome(promise) {
+    return Promise.race([
+      promise.then(() => 'fulfilled', (e) => 'rejected ' + e.name),
+      new Promise((r) => setTimeout(() => r('pending'), 30)),
+    ]);
+  }
+</script>
+
+<script id=readable_stream type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', (w) => {
+    const kept = { pulls: 0 };
+    kept.stream = new w.ReadableStream({ start(c) { kept.controller = c; } });
+    kept.reader = kept.stream.getReader();
+    kept.pulled = new w.ReadableStream({
+      start(c) { kept.pulled_controller = c; },
+      pull() { kept.pulls++; },
+    }, { highWaterMark: 0 });
+    return kept;
+  });
+
+  // Like Chrome, none of these throws, and the reads stay pending.
+  kept.controller.enqueue('chunk');
+  kept.controller.enqueue(new Uint8Array([1, 2, 3]));
+  const read = await outcome(kept.reader.read());
+  kept.controller.close();
+  kept.controller.error(new Error('ignored'));
+  const closed = await outcome(kept.reader.closed);
+
+  const pulls = kept.pulls;
+  const pulled_read = await outcome(kept.pulled.getReader().read());
+  kept.pulled_controller.enqueue('chunk');
+
+  kept.reader.releaseLock();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('pending', read);
+    testing.expectEqual('pending', closed);
+    testing.expectEqual('pending', pulled_read);
+    // pull() is a function of the realm that is gone.
+    testing.expectEqual(0, pulls);
+    testing.expectEqual(0, kept.pulls);
+  });
+</script>
+
+<script id=transform_streams type=module>
+  const state = await testing.async();
+
+  const kept = await navigatedRealm('iframe', (w) => {
+    const kept = { transformed: 0 };
+    kept.transform = new w.TransformStream({ transform(chunk, c) { kept.transformed++; c.enqueue(chunk); } });
+    kept.decoder = new w.TextDecoderStream();
+    kept.compression = new w.CompressionStream('gzip');
+    kept.decompression = new w.DecompressionStream('gzip');
+    kept.encoder = new w.TextEncoderStream();
+    return kept;
+  });
+
+  const results = {};
+  for (const [name, chunk] of [
+    ['transform', 'chunk'],
+    ['decoder', new Uint8Array([104, 105])],
+    ['compression', new Uint8Array([1, 2, 3])],
+    ['decompression', new Uint8Array([31, 139, 8, 0])],
+    ['encoder', 'chunk'],
+  ]) {
+    const writer = kept[name].writable.getWriter();
+    const reader = kept[name].readable.getReader();
+    results[name] = {
+      write: await outcome(writer.write(chunk)),
+      read: await outcome(reader.read()),
+      close: await outcome(writer.close()),
+    };
+  }
+
+  state.resolve();
+  await state.done(() => {
+    const names = Object.keys(results);
+    testing.expectEqual(0, kept.transformed);
+    // Nothing comes out of the readable side.
+    testing.expectEqual(names.map(() => 'pending'), names.map((name) => results[name].read));
+    testing.diverges("Chrome's promises belong to the realm that is gone, and never settle", () => {
+      // The stream can't transform anymore, and says so.
+      const rejected = names.map(() => 'rejected InvalidStateError');
+      testing.expectEqual(rejected, names.map((name) => results[name].write));
+      testing.expectEqual(rejected, names.map((name) => results[name].close));
+    });
+  });
+</script>
+</body>
