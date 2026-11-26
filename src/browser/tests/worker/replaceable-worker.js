@@ -1,4 +1,4 @@
-// `console` and `self` are [Replaceable] on WorkerGlobalScope: assignment must
+// `console`, `self` and `origin` are [Replaceable] on WorkerGlobalScope: assignment must
 // replace the value even in strict mode, rather than throwing through the
 // getter-only accessor. Capture the global in a local binding first, since
 // `self` is itself replaceable (reassigning it would break global lookups).
@@ -19,6 +19,10 @@
     results.self_replaced = g.self === "REPLACED";
     g.self = prevSelf;
     results.self_restored = g.self === prevSelf;
+
+    results.origin = g.origin;
+    g.origin = "REPLACED";
+    results.origin_replaced = g.origin === "REPLACED";
 
     g.postMessage({ ok: true, results });
   } catch (e) {

@@ -144,7 +144,6 @@ pub const JsApi = struct {
     };
 
     const reflect = Element.Reflect(Style);
-    pub const nonce = reflect.string("nonce");
 
     pub const blocking = bridge.accessor(Style.getBlocking, Style.setBlocking, .{ .ce_reactions = true });
     pub const media = reflect.string("media");

@@ -230,6 +230,8 @@
       testing.expectEqual(true, data.results.console_restored);
       testing.expectEqual(true, data.results.self_replaced);
       testing.expectEqual(true, data.results.self_restored);
+      testing.expectEqual(location.origin, data.results.origin);
+      testing.expectEqual(true, data.results.origin_replaced);
     });
   }
 </script>

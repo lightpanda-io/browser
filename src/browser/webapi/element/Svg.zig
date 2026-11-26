@@ -192,6 +192,14 @@ pub const JsApi = struct {
         return self.asElement().getDataset(frame);
     }
 
+    pub const nonce = bridge.accessor(_nonce, _setNonce, .{ .ce_reactions = true });
+    fn _nonce(self: *Svg) []const u8 {
+        return self.asElement().getAttributeSafe(comptime .wrap("nonce")) orelse "";
+    }
+    fn _setNonce(self: *Svg, value: []const u8, frame: *Frame) !void {
+        try self.asElement().setAttributeSafe(comptime .wrap("nonce"), .wrap(value), frame);
+    }
+
     pub const ownerSVGElement = bridge.accessor(Svg.getOwnerSvgElement, null, .{});
     // closest thing we can provide
     pub const viewportElement = bridge.accessor(Svg.getOwnerSvgElement, null, .{});
