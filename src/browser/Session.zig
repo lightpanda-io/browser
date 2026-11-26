@@ -841,6 +841,9 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     const frame_id = frame._frame_id;
     const reuse_window = frame.window;
+    // The browsing context's name survives a navigation (it lives in the Page
+    // arena), but Frame.init resets the window.
+    const saved_name = reuse_window._name;
     const page = frame.page;
     frame.deinit();
     frame.* = undefined;
@@ -866,6 +869,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
     }
 
     frame.iframe = iframe;
+    frame.window._name = saved_name;
     // If we transition from was_delaying to !starts_delaying, we could potentially
     // call `parent._pending_loads -= 1;` but it's hard to reason through the
     // edge cases. So instead we carry it over, at worse delaying the parent's load

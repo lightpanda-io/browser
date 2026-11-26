@@ -158,7 +158,6 @@ pub const Build = struct {
     /// Setting src or srcdoc reloads the frame even if the value didn't
     /// change; src is ignored while srcdoc is present.
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
-        if (name.eql(comptime .wrap("name"))) return syncName(element, frame);
         if (reprocesses(element, name)) try reload(element, frame);
     }
 
@@ -174,16 +173,7 @@ pub const Build = struct {
 
     /// Removing srcdoc falls back to src, removing src to about:blank.
     pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
-        if (name.eql(comptime .wrap("name"))) return syncName(element, frame);
         if (reprocesses(element, name)) try reload(element, frame);
-    }
-
-    /// The name attribute is the browsing context's name, which is what the
-    /// frame sees as window.name and what window[name] looks up.
-    fn syncName(element: *Element, frame: *Frame) !void {
-        const window = element.as(IFrame)._window orelse return;
-        const owner = element.ownerFrame(frame) orelse return;
-        try window.setName(element.getName() orelse "", owner);
     }
 
     fn reprocesses(element: *Element, name: String) bool {
