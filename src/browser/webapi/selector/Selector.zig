@@ -391,6 +391,11 @@ pub const PseudoClass = union(enum) {
     any_link,
     target,
 
+    // A shadow host, from a sheet in its shadow tree. Sheets aren't scoped to
+    // a tree, so it matches nothing; parsed because `:root, :host` (Tailwind)
+    // would otherwise lose its :root too.
+    host,
+
     // Tree structural
     root,
     scope,

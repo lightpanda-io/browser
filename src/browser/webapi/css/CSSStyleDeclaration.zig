@@ -95,7 +95,9 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32, frame: *const Frame) [
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
     const normalized = normalizePropertyName(frame.local_arena, property_name);
     if (lookupId(normalized, frame)) |id| {
-        return self.getKnownPropertyValue(id, frame);
+        const value = self.getKnownPropertyValue(id, frame);
+        // A custom property's empty value is stored as whitespace
+        return if (properties.knownName(id) == null) std.mem.trim(u8, value, &std.ascii.whitespace) else value;
     }
     if (self._owner != .computed or isCustomProperty(normalized) == false) {
         return "";
@@ -107,7 +109,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const owner = element.ownerFrame(frame) orelse return "";
     const style_manager = &owner._style_manager;
     const id = style_manager.customPropertyId(element, normalized) orelse return "";
-    return style_manager.customPropertyValue(element, id) orelse "";
+    return std.mem.trim(u8, style_manager.customPropertyValue(element, id) orelse "", &std.ascii.whitespace);
 }
 
 pub fn getKnownPropertyValue(self: *const CSSStyleDeclaration, id: properties.Id, frame: *Frame) []const u8 {
@@ -1526,7 +1528,8 @@ fn getDefaultColor(element: *const Element) ?[]const u8 {
 fn formatEntry(entry: *const Entry, writer: *std.Io.Writer, frame: *const Frame) !void {
     try writer.writeAll(entry.name(&frame.page.css_custom_names));
     try writer.writeAll(": ");
-    try writer.writeAll(entry.value());
+    // nothing for a custom property's empty value, stored as whitespace
+    try writer.writeAll(std.mem.trim(u8, entry.value(), &std.ascii.whitespace));
     try formatDeclarationEnd(entry._important, writer);
 }
 

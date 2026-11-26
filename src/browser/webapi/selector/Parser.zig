@@ -206,8 +206,8 @@ fn compoundNeverMatches(compound: Selector.Compound) bool {
         switch (part) {
             .never => return true,
             .pseudo_class => |pseudo| switch (pseudo) {
-                // No pointer, no keyboard, no history
-                .hover, .active, .focus_visible, .visited => return true,
+                // No pointer, no keyboard, no history, no tree-scoped sheets
+                .hover, .active, .focus_visible, .visited, .host => return true,
                 // One argument has to match. Not :not(): it matches when
                 // its arguments don't.
                 .is, .where, .has => |list| {
@@ -766,6 +766,7 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
         4 => switch (@as(u32, @bitCast(name[0..4].*))) {
             asUint("root") => return .root,
             asUint("link") => return .link,
+            asUint("host") => return .host,
             else => {},
         },
         5 => switch (@as(u40, @bitCast(name[0..5].*))) {
@@ -2305,6 +2306,7 @@ test "Selector: Parser flags a selector no element can match" {
         .{ ".a:active", true },
         .{ ":focus-visible", true },
         .{ "a:visited", true },
+        .{ ":host", true },
         // in any compound
         .{ ".menu:hover .item", true },
         .{ ".a:hover > .b", true },
