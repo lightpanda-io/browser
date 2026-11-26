@@ -207,6 +207,7 @@ pub const CacheGetRequest = struct {
 pub const CachePutRequest = struct {
     url: [:0]const u8,
     content_type: []const u8,
+    private: bool,
 
     status: u16,
     stored_at: u64,
@@ -423,7 +424,7 @@ fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u6
     return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
-fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: bool) !?CachePutRequest {
+fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, private_cache: bool) !?CachePutRequest {
     const url = candidate.url;
     const status = candidate.status;
     const response: ResponseHeaders = .parse(candidate.headers);
@@ -436,14 +437,24 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
         return null;
     }
 
-    if (response.has_set_cookie and set_cookie == false) {
-        log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
-        return null;
+    var private: bool = false;
+
+    if (response.has_set_cookie) {
+        if (private_cache) {
+            private = true;
+        } else {
+            log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
+            return null;
+        }
     }
 
     if (response.has_authorization) {
-        log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
-        return null;
+        if (private_cache) {
+            private = true;
+        } else {
+            log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
+            return null;
+        }
     }
 
     if (response.vary) |v| if (std.mem.eql(u8, v, "*")) {
@@ -458,16 +469,29 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
         if (directives.no_store or directives.private) {
             break :blk null;
         }
+
+        if (directives.no_store) {
+            break :blk null;
+        }
+
+        if (directives.private) {
+            if (private_cache) {
+                private = true;
+            } else {
+                break :blk null;
+            }
+        }
+
         const timestamp = candidate.timestamp;
         if (explicitFreshness(timestamp, directives, response.expires, response.date)) |cc| {
-            if (cc.max_age == 0 and cc.must_revalidate == false) {
+            if (cc.max_age == 0 and !cc.must_revalidate) {
                 // Already stale on arrival, with nothing to revalidate it against.
                 break :blk null;
             }
             break :blk cc;
         }
 
-        if (heuristicallyCacheable(status) == false and directives.public == false) {
+        if (!heuristicallyCacheable(status) and !directives.public) {
             // Need a cacheable status and a public cache to use heuristic caching
             break :blk null;
         }
@@ -495,11 +519,12 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
     return .{
         .url = try arena.dupeSentinel(u8, url, 0),
         .content_type = if (candidate.content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
+        .private = if (private_cache) private else false,
         .status = status,
         .stored_at = candidate.timestamp,
         .age_at_store = if (response.age) |a| parseDeltaSeconds(a) orelse 0 else 0,
         .cache_control = cc,
-        .headers = if (set_cookie) try withoutSetCookie(arena, candidate.headers) else candidate.headers,
+        .headers = if (private_cache) try withoutSetCookie(arena, candidate.headers) else candidate.headers,
         .request_headers = candidate.request_headers,
         .etag = if (response.etag) |e| try arena.dupe(u8, e) else null,
         .last_modified = if (response.last_modified) |lm| try arena.dupe(u8, lm) else null,

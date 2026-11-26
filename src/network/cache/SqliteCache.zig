@@ -622,6 +622,7 @@ test "SqliteCache: basic put and get" {
     const req = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -654,6 +655,7 @@ test "SqliteCache: get expiration" {
     const req = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 900,
@@ -692,6 +694,7 @@ test "SqliteCache: get expiration (without validators)" {
     const req = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 900,
@@ -726,6 +729,7 @@ test "SqliteCache: put override" {
         const req = CachePutRequest{
             .url = "https://example.com",
             .content_type = "text/html",
+            .private = false,
             .status = 200,
             .stored_at = 5000,
             .age_at_store = 0,
@@ -748,6 +752,7 @@ test "SqliteCache: put override" {
         const req = CachePutRequest{
             .url = "https://example.com",
             .content_type = "text/html",
+            .private = false,
             .status = 200,
             .stored_at = 10000,
             .age_at_store = 0,
@@ -772,6 +777,7 @@ fn putVary(cache: *SqliteCache, now: u64, vary: []const u8, request_headers: []c
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -878,6 +884,7 @@ test "SqliteCache: clear removes all entries" {
     try cache.put(.{
         .url = "https://example.com/a",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -889,6 +896,7 @@ test "SqliteCache: clear removes all entries" {
     try cache.put(.{
         .url = "https://example.com/b",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -946,6 +954,7 @@ test "SqliteCache: put after clear works" {
     const req = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -981,6 +990,7 @@ test "SqliteCache: evict removes entry" {
     const req = CachePutRequest{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1015,6 +1025,7 @@ test "SqliteCache: renew refreshes expiry" {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1055,6 +1066,7 @@ test "SqliteCache: renew preserves body" {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1091,6 +1103,7 @@ test "SqliteCache: script cache is kept by renew and cleared by put" {
     const req: CachePutRequest = .{
         .url = "https://example.com/a.js",
         .content_type = "text/javascript",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1132,6 +1145,7 @@ test "SqliteCache: renew merges the 304's headers into the stored ones" {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "application/json",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1190,6 +1204,7 @@ test "SqliteCache: renew recomputes the vary digest" {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1240,6 +1255,7 @@ test "SqliteCache: maintenance purges expired entries without validators" {
     try cache.put(.{
         .url = "https://example.com/expired",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = 5000,
         .age_at_store = 0,
@@ -1252,6 +1268,7 @@ test "SqliteCache: maintenance purges expired entries without validators" {
     try cache.put(.{
         .url = "https://example.com/revalidate",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = 5000,
         .age_at_store = 0,
@@ -1265,6 +1282,7 @@ test "SqliteCache: maintenance purges expired entries without validators" {
     try cache.put(.{
         .url = "https://example.com/fresh",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = 6900,
         .age_at_store = 0,
@@ -1329,6 +1347,7 @@ test "SqliteCache: evicts oldest entries over the limit" {
         try cache.put(.{
             .url = url,
             .content_type = "text/html",
+            .private = false,
             .status = 200,
             .stored_at = now + i,
             .age_at_store = 0,
@@ -1375,6 +1394,7 @@ test "SqliteCache: starts over from an unreadable database" {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1424,6 +1444,7 @@ test "SqliteCache: starts over from another schema version" {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
@@ -1447,6 +1468,7 @@ fn putCorruptible(cache: *SqliteCache, now: u64) !void {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
+        .private = false,
         .status = 200,
         .stored_at = now,
         .age_at_store = 0,
