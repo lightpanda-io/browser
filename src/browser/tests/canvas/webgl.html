@@ -100,3 +100,23 @@
   testing.expectEqual('WebGL 2.0 (Lightpanda no-op)', gl2.getParameter(gl2.VERSION));
 }
 </script>
+
+<script id=worker type=module>
+{
+  const state = await testing.async();
+  const worker = new Worker('./webgl-worker.js');
+  worker.onmessage = (e) => {
+    if (e.data.ready) {
+      worker.postMessage('go');
+      return;
+    }
+    state.resolve(e.data);
+  };
+  await state.done((data) => {
+    testing.expectTrue(data.context);
+    testing.expectTrue(data.canvas);
+    testing.expectEqual(8, data.width);
+    testing.expectTrue(data.buffer);
+  });
+}
+</script>
