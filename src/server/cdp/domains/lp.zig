@@ -187,6 +187,7 @@ fn dump(cmd: anytype) !void {
 
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
+    defer frame.resetLocalArena();
 
     const root = blk: {
         if (params.backendNodeId) |id| {
@@ -203,14 +204,18 @@ fn dump(cmd: anytype) !void {
 
     switch (params.format) {
         .html, .markdown => {
-            var aw: std.Io.Writer.Allocating = .init(cmd.arena);
-            defer aw.deinit();
-            if (params.format == .markdown) {
-                try markdown.dump(state, .{ .max_bytes = params.maxBytes }, &aw.writer, frame);
-            } else {
-                try lp.dump.render(state, .{ .max_bytes = params.maxBytes, .with_frames = params.withFrames }, &aw.writer, frame);
-            }
-            return cmd.sendResult(.{ .format = params.format, .content = aw.written() }, .{});
+            var failure: ?anyerror = null;
+            const content = TextDump{
+                .state = state,
+                .frame = frame,
+                .failure = &failure,
+                .max_bytes = params.maxBytes,
+                .with_frames = params.withFrames,
+                .markdown = params.format == .markdown,
+            };
+            cmd.sendResult(.{ .format = params.format, .content = content }, .{}) catch |err| {
+                return failure orelse err;
+            };
         },
         .png => {
             if (params.maxBytes != null) {
@@ -230,6 +235,37 @@ fn dump(cmd: anytype) !void {
     }
 }
 
+// Renders straight into the reply
+const TextDump = struct {
+    markdown: bool,
+    max_bytes: ?u32,
+    with_frames: bool,
+    frame: *lp.Frame,
+    failure: *?anyerror,
+    state: lp.RenderTree.State,
+
+    pub fn jsonStringify(self: *const TextDump, jws: *std.json.Stringify) std.Io.Writer.Error!void {
+        try jws.beginWriteRaw();
+        try jws.writer.writeByte('"');
+        var buf: [4096]u8 = undefined;
+        var escaped = lp.JsonEscapingWriter.init(jws.writer, &buf);
+        self.render(&escaped.writer) catch |err| {
+            self.failure.* = err;
+            return error.WriteFailed;
+        };
+        try escaped.writer.flush();
+        try jws.writer.writeByte('"');
+        jws.endWriteRaw();
+    }
+
+    fn render(self: *const TextDump, writer: *std.Io.Writer) !void {
+        if (self.markdown) {
+            return markdown.dump(self.state, .{ .max_bytes = self.max_bytes }, writer, self.frame);
+        }
+        return lp.dump.render(self.state, .{ .max_bytes = self.max_bytes, .with_frames = self.with_frames }, writer, self.frame);
+    }
+};
+
 // Deprecated: LP.dump with format "markdown". Kept for existing callers.
 fn getMarkdown(cmd: anytype) !void {
     const Params = struct {
@@ -239,6 +275,7 @@ fn getMarkdown(cmd: anytype) !void {
 
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
+    defer frame.resetLocalArena();
 
     const dom_node = if (params.nodeId) |nodeId|
         (target.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom

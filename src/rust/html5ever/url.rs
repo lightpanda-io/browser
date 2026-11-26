@@ -700,32 +700,77 @@ pub unsafe extern "C" fn url_resolve_with_encoding(
             return EMPTY_OWNED_STRING;
         }
     };
+    owned_href(
+        resolve_with_encoding(base.as_ref(), slice, encoding_slice),
+        err,
+    )
+}
+
+/// url_resolve_with_encoding against a base parsed once by url_parse, for
+/// callers resolving many URLs against the same base.
+#[no_mangle]
+pub unsafe extern "C" fn url_resolve_parsed_with_encoding(
+    base: *const Url,
+    input_ptr: *const c_uchar,
+    input_len: usize,
+    enc_ptr: *const c_uchar,
+    enc_len: usize,
+    err: *mut i32,
+) -> OwnedString {
+    let base = unsafe { &*base };
+    let slice = match str_from(input_ptr, input_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    let encoding_slice = match str_from(enc_ptr, enc_len) {
+        Some(s) => s,
+        None => {
+            *err = -1;
+            return EMPTY_OWNED_STRING;
+        }
+    };
+    owned_href(
+        resolve_with_encoding(Some(base), slice, encoding_slice),
+        err,
+    )
+}
+
+fn resolve_with_encoding(
+    base: Option<&Url>,
+    slice: &str,
+    encoding_slice: &str,
+) -> Result<Url, url::ParseError> {
     // Per the URL spec, queries use the document encoding's *output encoding*.
     let encoding = Encoding::for_label(encoding_slice.as_bytes())
         .map(|encoding| encoding.output_encoding())
         .filter(|&encoding| encoding != encoding_rs::UTF_8);
 
-    let result = match encoding {
+    match encoding {
         Some(encoding) => Url::options()
-            .base_url(base.as_ref())
+            .base_url(base)
             .encoding_override(Some(&move |s| encode_query_ncr(encoding, s)))
             .parse(slice)
             .map(|mut url| {
-                if let Some(base) = &base {
+                if let Some(base) = base {
                     fix_drive_letter_join(base, slice, &mut url);
                 }
                 url
             }),
         // Fallback to default.
-        None => match &base {
+        None => match base {
             Some(base) => base.join(slice).map(|mut url| {
                 fix_drive_letter_join(base, slice, &mut url);
                 url
             }),
             None => Url::parse(slice),
         },
-    };
+    }
+}
 
+unsafe fn owned_href(result: Result<Url, url::ParseError>, err: *mut i32) -> OwnedString {
     match result {
         Ok(url) => {
             *err = 0;

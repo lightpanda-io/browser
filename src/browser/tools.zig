@@ -1070,6 +1070,8 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     const page = try ensurePage(session, registry, args.url, args.timeout);
+    // Resolved hrefs land in local_arena, and no JS call returns to reset it.
+    defer page.resetLocalArena();
 
     if (args.alternate) {
         // The alternate stands for the whole page, like `fetch --markdown-alternate`.
@@ -1136,6 +1138,7 @@ const HtmlParams = struct {
 fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(HtmlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
+    defer page.resetLocalArena();
 
     const target = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
     const state = lp.RenderTree.resolve(arena, target, args.strip, page) catch return ToolError.OutOfMemory;

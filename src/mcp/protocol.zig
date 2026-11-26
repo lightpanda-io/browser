@@ -238,40 +238,6 @@ pub fn StructuredCallToolResult(comptime Content: type, comptime Structured: typ
     };
 }
 
-pub const JsonEscapingWriter = struct {
-    inner_writer: *std.Io.Writer,
-    writer: std.Io.Writer,
-
-    pub fn init(inner_writer: *std.Io.Writer) JsonEscapingWriter {
-        return .{
-            .inner_writer = inner_writer,
-            .writer = .{
-                .vtable = &vtable,
-                .buffer = &.{},
-            },
-        };
-    }
-
-    const vtable = std.Io.Writer.VTable{
-        .drain = drain,
-    };
-
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        const self: *JsonEscapingWriter = @alignCast(@fieldParentPtr("writer", w));
-        var total: usize = 0;
-        for (data[0 .. data.len - 1]) |slice| {
-            std.json.Stringify.encodeJsonStringChars(slice, .{}, self.inner_writer) catch return error.WriteFailed;
-            total += slice.len;
-        }
-        const pattern = data[data.len - 1];
-        for (0..splat) |_| {
-            std.json.Stringify.encodeJsonStringChars(pattern, .{}, self.inner_writer) catch return error.WriteFailed;
-            total += pattern.len;
-        }
-        return total;
-    }
-};
-
 const testing = @import("../testing.zig");
 
 test "MCP.protocol - request parsing" {
@@ -358,19 +324,6 @@ test "MCP.protocol - error formatting" {
     try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &aw.writer);
 
     try testing.expectString("{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}", aw.written());
-}
-
-test "MCP.protocol - JsonEscapingWriter" {
-    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    defer aw.deinit();
-
-    var escaping_writer = JsonEscapingWriter.init(&aw.writer);
-
-    // test newlines and quotes
-    try escaping_writer.writer.writeAll("hello\n\"world\"");
-
-    // the writer outputs escaped string chars without surrounding quotes
-    try testing.expectString("hello\\n\\\"world\\\"", aw.written());
 }
 
 test "MCP.protocol - Tool serialization" {

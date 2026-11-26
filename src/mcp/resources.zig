@@ -49,9 +49,10 @@ const ResourceStreamingResult = struct {
         format: Format,
 
         pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
+            defer self.frame.resetLocalArena();
             try jw.beginWriteRaw();
             try jw.writer.writeByte('"');
-            var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+            var escaped = lp.JsonEscapingWriter.init(jw.writer, &.{});
             switch (self.format) {
                 .html => lp.dump.root(self.frame.document, .{}, &escaped.writer, self.frame) catch |err| {
                     log.err(.mcp, "html dump failed", .{ .err = err });

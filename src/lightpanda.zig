@@ -45,6 +45,7 @@ pub const LimitedWriter = @import("LimitedWriter.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const crash_handler = @import("crash_handler.zig");
+pub const JsonEscapingWriter = @import("JsonEscapingWriter.zig");
 
 // for `zig build test-server`
 pub const test_routes = @import("test_routes.zig");
@@ -447,6 +448,7 @@ fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, erro
 
 fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, errors: []?anyerror, alternates: []const bool) !void {
     const writer = opts.writer orelse return;
+    defer writer.flush() catch {};
 
     if (opts.json) {
         // A single url keeps the original bare-object output. Multiple urls are

@@ -226,7 +226,8 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .json = opts.json,
             };
 
-            var writer = std.Io.File.stdout().writerStreaming(lp.io, &.{});
+            var buf: [64 * 1024]u8 = undefined;
+            var writer = std.Io.File.stdout().writerStreaming(lp.io, &buf);
             if (opts.dump != null or opts.json) {
                 fetch_opts.writer = &writer.interface;
             }

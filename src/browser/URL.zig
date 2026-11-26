@@ -62,6 +62,81 @@ pub fn resolveNavigation(allocator: Allocator, url: []const u8, options: Resolve
     };
 }
 
+/// A base parsed once, for resolving many URLs against it. Can be used to avoid
+///  the  reparsing that `resolve` would do.
+pub const Base = struct {
+    url: *U.Url,
+    encoding: []const u8,
+    // The base's href without its fragment, owned by `url`.
+    document: []const u8,
+
+    /// Null when `base` doesn't parse.
+    pub fn init(base: [:0]const u8, encoding: []const u8) ?Base {
+        var err: i32 = 0;
+        const url = U.url_parse(base.ptr, base.len, &err) orelse return null;
+        var ptr: [*]const u8 = undefined;
+        var len: usize = 0;
+        U.url_to_string(url, &ptr, &len);
+        const href = ptr[0..len];
+        return .{
+            .url = url,
+            .encoding = encoding,
+            .document = href[0 .. std.mem.findScalar(u8, href, '#') orelse len],
+        };
+    }
+
+    pub fn deinit(self: Base) void {
+        U.url_free(self.url);
+    }
+
+    pub fn resolve(self: Base, allocator: Allocator, path: []const u8) ![:0]const u8 {
+        if (path.len > 0 and path[0] == '#') {
+            // Some pages have _a lot_ of in-page links. These don't need a parser
+            return self.withFragment(allocator, path[1..]);
+        }
+
+        var err: i32 = 0;
+        const href = U.url_resolve_parsed_with_encoding(self.url, path.ptr, path.len, self.encoding.ptr, self.encoding.len, &err);
+        if (err != 0) {
+            return error.TypeError;
+        }
+        defer href.deinit();
+        return allocator.dupeSentinel(u8, href.slice(), 0);
+    }
+
+    fn withFragment(self: Base, allocator: Allocator, raw: []const u8) ![:0]const u8 {
+        const fragment = std.mem.trimEnd(u8, raw, &c0_or_space);
+        var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, self.document.len + fragment.len + 2);
+        const w = &aw.writer;
+        try w.writeAll(self.document);
+        try w.writeByte('#');
+        var start: usize = 0;
+        for (fragment, 0..) |c, i| {
+            const drop = c == '\t' or c == '\n' or c == '\r';
+            const encode = switch (c) {
+                0...0x20, '"', '<', '>', '`', 0x7F...0xFF => true,
+                else => false,
+            };
+            if (!drop and !encode) {
+                continue;
+            }
+            try w.writeAll(fragment[start..i]);
+            if (!drop) {
+                try w.print("%{X:0>2}", .{c});
+            }
+            start = i + 1;
+        }
+        try w.writeAll(fragment[start..]);
+        return aw.toOwnedSliceSentinel(0);
+    }
+
+    const c0_or_space: [0x21]u8 = blk: {
+        var chars: [0x21]u8 = undefined;
+        for (&chars, 0..) |*c, i| c.* = i;
+        break :blk chars;
+    };
+};
+
 pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
     if (maybe_base) |base| {
         return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
@@ -550,6 +625,43 @@ fn parseAuthority(raw: []const u8) ?AuthorityInfo {
 }
 
 const testing = @import("../testing.zig");
+test "URL: Base.resolve matches resolve" {
+    const bases = [_][:0]const u8{
+        "https://example.com/a/b?q=1",
+        "https://example.com/a/b?q=1#old",
+        "https://example.com",
+        "about:blank",
+        "data:text/html,hi",
+        "file:///C:/x/y.html",
+    };
+    const paths = [_][]const u8{
+        "#",
+        "#frag",
+        "#a b\"c<d>e`f",
+        "#tab\there\nand\rnew",
+        "#trailing \t\n ",
+        "#caf\u{e9}-\u{1f600}",
+        "#%20already#hash?q",
+        "#\x01\x7f",
+        "../c?x=1#y",
+        "/abs",
+        "https://other.test/p#f",
+        "?only=query",
+        "",
+    };
+    for (bases) |base_str| {
+        const base = Base.init(base_str, "UTF-8").?;
+        defer base.deinit();
+        for (paths) |path| {
+            const expected = resolve(testing.arena_allocator, base_str, path, .{ .encoding = "UTF-8" }) catch |err| {
+                try testing.expectError(err, base.resolve(testing.arena_allocator, path));
+                continue;
+            };
+            try testing.expectString(expected, try base.resolve(testing.arena_allocator, path));
+        }
+    }
+}
+
 test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(true, isCompleteHTTPUrl("http://example.com/about"));
     try testing.expectEqual(true, isCompleteHTTPUrl("HttP://example.com/about"));
