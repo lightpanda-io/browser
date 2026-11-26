@@ -196,7 +196,7 @@ fn isIdent(token: Tokenizer.Token, comptime word: []const u8) bool {
 
 /// `text` when it is a single identifier; font-format() and font-tech() take
 /// neither quoted strings nor lists.
-fn singleIdent(text: []const u8) ?[]const u8 {
+pub fn singleIdent(text: []const u8) ?[]const u8 {
     var tokenizer: Tokenizer = .{ .input = text };
     const name = switch (tokenizer.next() orelse return null) {
         .ident => |name| name,

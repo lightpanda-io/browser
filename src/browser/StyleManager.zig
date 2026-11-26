@@ -27,6 +27,7 @@ const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const Tokenizer = @import("css/Tokenizer.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
+const ContainerQuery = @import("css/ContainerQuery.zig");
 const supports = @import("css/supports.zig");
 const Animation = @import("css/Animation.zig");
 const properties = @import("css/properties.zig");
@@ -66,6 +67,7 @@ touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
 flow: Group(Flow) = .{},
 grid: Group(Grid) = .{},
+container: Group(Container) = .{},
 
 layout_memo: LayoutMemo = .{},
 
@@ -112,6 +114,18 @@ animation_rules: std.enums.EnumArray(Animation.Property, LazyRules) = .initFill(
 
 // The @keyframes names. An animation-name without keyframes runs nothing.
 keyframes: std.StringHashMapUnmanaged(void) = .empty,
+
+// A rule's `container` is an index + 1 here, 0 for none
+container_rules: std.ArrayList(ContainerRule) = .empty,
+
+current_container: u16 = 0,
+
+// Containers whose query is being evaluated: reaching one again is a cycle
+querying: std.ArrayList(*Element) = .empty,
+
+// Each container's answer to each query, valid for one layoutVersion
+query_results: std.AutoHashMapUnmanaged(struct { *Element, *const ContainerQuery.Query }, bool) = .empty,
+query_results_version: usize = 0,
 
 // Whether a sheet's text says "keyframes", until the next sheetModified().
 keyframes_mentioned: ?bool = null,
@@ -399,6 +413,7 @@ fn addStoredRules(self: *StyleManager, build_arena: Allocator, store: *const Rul
             .media => try self.applyMediaRule(build_arena, entry, depth, layer, nest),
             .supports => try self.applySupportsRule(build_arena, entry, depth, layer, nest),
             .layer => try self.applyLayerRule(build_arena, entry, depth, layer, nest),
+            .container => try self.applyContainerRule(build_arena, entry, depth, layer, nest),
             .keyframes => try self.addKeyframes(entry.text()),
             // The others (`@font-face`, …) hold nothing the cascade reads.
             else => {},
@@ -473,6 +488,21 @@ fn applyLayerRule(self: *StyleManager, build_arena: Allocator, entry: *const Rul
         try self.registerLayerPath(build_arena, layer, prelude);
 
     try self.applyGroupRules(build_arena, entry, children, depth + 1, id, nest);
+}
+
+/// An invalid prelude drops its rules.
+fn applyContainerRule(self: *StyleManager, build_arena: Allocator, entry: *const RuleStore.Entry, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    const children = entry._children orelse return;
+    const arena = self.arena.allocator();
+    const queries = try ContainerQuery.parseList(arena, CssParser.atRulePrelude(entry.text())) orelse return;
+    if (self.container_rules.items.len >= std.math.maxInt(u16)) {
+        return;
+    }
+    try self.container_rules.append(arena, .{ .parent = self.current_container, .queries = queries });
+    const outer = self.current_container;
+    self.current_container = @intCast(self.container_rules.items.len);
+    defer self.current_container = outer;
+    try self.applyGroupRules(build_arena, entry, children, depth + 1, layer, nest);
 }
 
 /// The rules of a grouping rule that applies. One nested in a style rule
@@ -725,15 +755,15 @@ fn addSelectorRules(
             if (gop.found_existing == false) {
                 gop.value_ptr.* = .{};
             }
-            try gop.value_ptr.append(arena, selector_text, declaration.value, if (declaration.important) important_priority else priority);
+            try gop.value_ptr.append(arena, selector_text, declaration.value, if (declaration.important) important_priority else priority, self.current_container);
         }
         for (std.enums.values(Animation.Property)) |property| {
             const rules = self.animation_rules.getPtr(property);
             if (lazy.animation.normal.get(property)) |value| {
-                try rules.append(arena, selector_text, value, priority);
+                try rules.append(arena, selector_text, value, priority, self.current_container);
             }
             if (lazy.animation.important.get(property)) |value| {
-                try rules.append(arena, selector_text, value, important_priority);
+                try rules.append(arena, selector_text, value, important_priority, self.current_container);
             }
         }
     }
@@ -778,6 +808,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
                     .priority = p,
                     .parent_needs = parent_needs,
                     .ancestor_needs = ancestor_needs,
+                    .container = self.current_container,
                 });
             }
         }
@@ -1275,6 +1306,7 @@ pub fn detachedChanged(self: *StyleManager, node: *Node) bool {
     // Nothing here bumps a version it could be checked against
     self.line_resume = null;
     self.origin_memo = null;
+    self.query_results.clearRetainingCapacity();
     if (self.dirty) {
         return true;
     }
@@ -1461,6 +1493,9 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         // the rebuild resets every memo
         return true;
     }
+    if (self.queriesContainers()) {
+        return false;
+    }
     var reach: ?ClassReach = null;
     var moves: BoxReach = .none;
     var subjects: ClassSubjects = .{};
@@ -1632,6 +1667,9 @@ pub fn focusChanged(self: *StyleManager, old: ?*Element, new: ?*Element) bool {
         // the rebuild resets every memo
         return true;
     }
+    if (self.queriesContainers()) {
+        return false;
+    }
     const focus = self.focus_reach;
     const within = self.focus_within_reach;
     if (focus == null and within == null) {
@@ -1725,7 +1763,7 @@ pub const TreeChange = enum { inserted, removed };
 /// memos are empty. Once a script has read styles or boxes mid-parse, each
 /// insert drops what it can change, like a script's own insert.
 pub fn parserInserted(self: *StyleManager, parent: *Node, child: *Node) bool {
-    if (self.dirty) {
+    if (self.dirty or self.queriesContainers()) {
         return false;
     }
     // The elements with something to keep, near enough
@@ -1768,6 +1806,9 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         // doesn't matter, a rebuild is needed anyways.
         self.layout_bumps += 1;
         return true;
+    }
+    if (self.queriesContainers()) {
+        return false;
     }
 
     if (parent._type == .document) {
@@ -2359,7 +2400,7 @@ fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) b
 
 /// The memos an inline write can invalidate on its own, one per Group. Plus
 /// the layout memos comes from several groups.
-const Memo = enum { visibility, geometry, touch_action, text, flow, grid, layout, heights };
+const Memo = enum { visibility, geometry, touch_action, text, flow, grid, container, layout, heights };
 const Memos = std.EnumSet(Memo);
 
 comptime {
@@ -2376,7 +2417,7 @@ pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) 
     if (el.asNode().isConnected() == false) {
         return self.detachedChanged(el.asNode());
     }
-    if (self.dirty or self.reads_style_attribute) {
+    if (self.dirty or self.reads_style_attribute or self.queriesContainers()) {
         return false;
     }
     // z-index orders boxes, it doesn't move them
@@ -2390,7 +2431,7 @@ pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) 
 /// scoped: the caller reports a full style change.
 pub fn styleAttributeChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[]const u8) bool {
     self.assertOwns(el);
-    if (self.dirty or self.reads_style_attribute) {
+    if (self.dirty or self.reads_style_attribute or self.queriesContainers()) {
         return false;
     }
     var reach: Memos = .empty;
@@ -2463,7 +2504,7 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos, moves_box: 
                     // Entries hold the element's own values. el1.style.width =
                     // '100px' might change the bounding rect of its parent or
                     // children, but not their styles.
-                    .geometry, .text, .grid => _ = group.memo.remove(el),
+                    .geometry, .text, .grid, .container => _ = group.memo.remove(el),
                     // Entries hold resolved values: el's reach its descendants
                     .visibility, .touch_action, .flow => self.dropInherited(&group.memo, el.asNode()),
                     .layout, .heights => unreachable,
@@ -2513,6 +2554,15 @@ fn knownId(name: []const u8) ?properties.Id {
 /// Every box is sized against the viewport, so nothing laid out is kept.
 pub fn viewportChanged(self: *StyleManager) void {
     self.layout_bumps += 1;
+    if (self.queriesContainers()) {
+        Frame.change.rulesChanged(self.frame);
+    }
+}
+
+/// A resize can change what an @container rule matches anywhere below the
+/// box, which the scoped invalidations don't follow.
+fn queriesContainers(self: *const StyleManager) bool {
+    return self.container_rules.items.len != 0;
 }
 
 /// The version the layout memos are valid for.
@@ -2774,6 +2824,10 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     try self.lazy_rules.ensureTotalCapacity(arena, lazy_rules_count);
     self.animation_rules = .initFill(.{});
     self.keyframes = .empty;
+    self.container_rules = .empty;
+    self.current_container = 0;
+    self.querying = .empty;
+    self.query_results = .empty;
     self.attribute_names = .empty;
     try self.attribute_names.ensureTotalCapacity(arena, attribute_names_count);
 
@@ -3665,6 +3719,90 @@ fn gridProps(self: *StyleManager, el: *Element) Grid.Computed {
     return self.grid.ownProps(self.arena.allocator(), el, self.frame);
 }
 
+pub fn sizeContainment(self: *StyleManager, el: *Element) Container.Kind {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .normal;
+    if (self.container.hasRules() == false and el._flags.has_inline_style == false) {
+        return .normal;
+    }
+    return self.container.ownProp(self.arena.allocator(), el, "kind", self.frame);
+}
+
+/// Callers have run rebuildIfDirty.
+fn containerRuleMatches(self: *StyleManager, el: *Element, index: u16) bool {
+    var current = index;
+    while (current != 0) {
+        const rule = self.container_rules.items[current - 1];
+        if (self.anyQueryHolds(el, rule.queries) == false) {
+            return false;
+        }
+        current = rule.parent;
+    }
+    return true;
+}
+
+fn anyQueryHolds(self: *StyleManager, el: *Element, queries: []const ContainerQuery.Query) bool {
+    for (queries) |*query| {
+        const container = self.findContainer(el, query.*) orelse continue;
+        if (query.condition.len == 0 or self.queryHolds(container, query)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn findContainer(self: *StyleManager, el: *Element, query: ContainerQuery.Query) ?*Element {
+    var current = el.asNode().flatTreeParentElement(self.frame);
+    while (current) |ancestor| : (current = ancestor.asNode().flatTreeParentElement(self.frame)) {
+        const props = self.container.ownProps(self.arena.allocator(), ancestor, self.frame);
+        if (props.kind.contains(query.axes) == false) {
+            continue;
+        }
+        if (query.name) |name| {
+            if (props.named.contains(name) == false) {
+                continue;
+            }
+        }
+        return ancestor;
+    }
+    return null;
+}
+
+/// Sizing `container` cascades other elements, whose queries containment
+/// keeps from reaching it again. A cycle anyway fails the query.
+fn queryHolds(self: *StyleManager, container: *Element, query: *const ContainerQuery.Query) bool {
+    if (self.query_results_version != self.layoutVersion()) {
+        self.query_results.clearRetainingCapacity();
+        self.query_results_version = self.layoutVersion();
+    }
+    if (self.query_results.get(.{ container, query })) |holds| {
+        return holds;
+    }
+    if (std.mem.findScalar(*Element, self.querying.items, container) != null) {
+        return false;
+    }
+    const arena = self.arena.allocator();
+    self.querying.append(arena, container) catch return false;
+    defer _ = self.querying.pop();
+    // Without a box the query is unknown, which fails even under `not`
+    if (self.visibilityProps(container).isHidden(.{}) or self.generatesBox(container) == false) {
+        return false;
+    }
+
+    const layout = @import("layout.zig");
+    const viewport = self.frame.page.getViewport();
+    const holds = ContainerQuery.matches(query.condition, .{
+        .width = if (query.axes.width) layout.innerWidth(container, self.frame) else 0,
+        .height = if (query.axes.height) layout.innerHeight(container, self.frame) else 0,
+        .viewport_width = @floatFromInt(viewport.width),
+        .viewport_height = @floatFromInt(viewport.height),
+        .font_size = self.computedFontSize(container),
+        .root_font_size = self.computedFontSize(self.frame.document.getDocumentElement()),
+    });
+    self.query_results.put(arena, .{ container, query }, holds) catch {};
+    return holds;
+}
+
 /// Whether `el`'s margins apply: not without a box, and not on a table's
 /// cell, row or row group (CSS 2 §8.3), which the table places. Out of the
 /// flow those are blocks.
@@ -4299,6 +4437,8 @@ fn Group(comptime Spec: type) type {
 
             // What the selector asks of the subject's ancestors, 0 for nothing
             ancestor_needs: AncestorFilter.Bits,
+
+            container: u16,
         };
 
         const RuleList = std.MultiArrayList(Rule);
@@ -4511,7 +4651,9 @@ fn Group(comptime Spec: type) type {
         /// element is cascaded once per memo version however deep the tree.
         fn inheritedProps(self: *Self, allocator: Allocator, el: *Element, frame: *Frame) Computed {
             const memo = self.freshMemo(frame);
-            self.path.clearRetainingCapacity();
+            // Reentrant: a container query sizes its container mid-cascade
+            const base = self.path.items.len;
+            defer self.path.shrinkRetainingCapacity(base);
             var above: Computed = .{};
             var current: ?*Element = el;
             while (current) |elem| : (current = elem.asNode().flatTreeParentElement(frame)) {
@@ -4531,12 +4673,13 @@ fn Group(comptime Spec: type) type {
 
             // The walk stopped at a memoized ancestor, whose tree is el's,
             // or at the root of el's tree.
-            if (current == null and self.path.items.len != 0 and self.detached == false) {
-                self.detached = self.path.items[self.path.items.len - 1].el.asNode().isConnected() == false;
+            const path = self.path.items[base..];
+            if (current == null and path.len != 0 and self.detached == false) {
+                self.detached = path[path.len - 1].el.asNode().isConnected() == false;
             }
-            self.fills += self.path.items.len;
+            self.fills += path.len;
             var storing = true;
-            var it = std.mem.reverseIterator(self.path.items);
+            var it = std.mem.reverseIterator(path);
             while (it.next()) |step| {
                 above = .resolve(step.own, above);
                 if (storing) {
@@ -4657,7 +4800,7 @@ fn Group(comptime Spec: type) type {
 
         fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, has: *ElementHas, frame: *Frame) void {
             const nth = frame._style_manager.nthCache();
-            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector), rules.items(.parent_needs), rules.items(.ancestor_needs)) |priority, *rule, selector, parent_needs, ancestor_needs| {
+            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector), rules.items(.parent_needs), rules.items(.ancestor_needs), rules.items(.container)) |priority, *rule, selector, parent_needs, ancestor_needs, container| {
                 if (parent_needs != 0) {
                     const parent = has.parent orelse blk: {
                         const parent = KeyBits.ofParent(el);
@@ -4696,6 +4839,9 @@ fn Group(comptime Spec: type) type {
                     if (matched == false) {
                         count(.matches);
                         if (matchesSelector(el, selector, nth, frame) == false) {
+                            continue :rules;
+                        }
+                        if (container != 0 and frame._style_manager.containerRuleMatches(el, container) == false) {
                             continue :rules;
                         }
                         matched = true;
@@ -6918,6 +7064,137 @@ pub const Position = enum(u3) {
     }
 };
 
+pub const Container = struct {
+    pub const Declared = struct {
+        // A shorthand comes before its longhands, so a later longhand wins
+        const names = [_][]const u8{ "container", "container-type", "container-name" };
+
+        kind: ?Kind = null,
+        named: ?Names = null,
+
+        /// Whether a declaration of `id` is kept; true for an untracked id.
+        pub fn accepts(id: properties.Id, value: []const u8) bool {
+            switch (id) {
+                .container, .@"container-type", .@"container-name" => {},
+                else => return true,
+            }
+            if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, value, &std.ascii.whitespace), "inherit")) {
+                return true;
+            }
+            var declared: Declared = .{};
+            declared.apply(id, value);
+            return declared.kind != null or declared.named != null;
+        }
+
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            // Not inherited and no UA rule sets them, so all but inherit
+            // (which this memo of own values can't follow) mean initial
+            const initial = for ([_][]const u8{ "initial", "unset", "revert", "revert-layer" }) |keyword| {
+                if (std.ascii.eqlIgnoreCase(trimmed, keyword)) break true;
+            } else false;
+            switch (id) {
+                .container => {
+                    if (initial) {
+                        self.* = .{ .kind = .normal, .named = .{} };
+                        return;
+                    }
+                    const slash = std.mem.findScalar(u8, trimmed, '/');
+                    const names_text = if (slash) |i| trimmed[0..i] else trimmed;
+                    const kind: Kind = if (slash) |i| Kind.parse(trimmed[i + 1 ..]) orelse return else .normal;
+                    self.named = Names.parse(names_text) orelse return;
+                    self.kind = kind;
+                },
+                .@"container-type" => {
+                    self.kind = if (initial) .normal else Kind.parse(trimmed) orelse return;
+                },
+                .@"container-name" => {
+                    self.named = if (initial) .{} else Names.parse(trimmed) orelse return;
+                },
+                else => {},
+            }
+        }
+    };
+
+    const Computed = struct {
+        kind: Kind = .normal,
+        named: Names = .{},
+    };
+
+    pub const Kind = enum(u2) {
+        normal,
+        inline_size,
+        size,
+
+        fn parse(value: []const u8) ?Kind {
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            if (std.ascii.eqlIgnoreCase(trimmed, "normal")) {
+                return .normal;
+            }
+            var kind: ?Kind = null;
+            var scroll_state = false;
+            var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
+            while (it.next()) |token| {
+                if (std.ascii.eqlIgnoreCase(token, "scroll-state")) {
+                    if (scroll_state) return null;
+                    scroll_state = true;
+                    continue;
+                }
+                const size: Kind = if (std.ascii.eqlIgnoreCase(token, "size"))
+                    .size
+                else if (std.ascii.eqlIgnoreCase(token, "inline-size"))
+                    .inline_size
+                else
+                    return null;
+                if (kind != null) return null;
+                kind = size;
+            }
+            return kind orelse if (scroll_state) .normal else null;
+        }
+
+        fn contains(self: Kind, axes: ContainerQuery.Axes) bool {
+            return switch (self) {
+                .normal => axes.width == false and axes.height == false,
+                .inline_size => axes.height == false,
+                .size => true,
+            };
+        }
+    };
+
+    /// By hash: a computed value can't hold slices of its declarations.
+    pub const Names = struct {
+        hashes: [4]u32 = @splat(0),
+        len: u8 = 0,
+
+        fn parse(value: []const u8) ?Names {
+            var names: Names = .{};
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            if (std.ascii.eqlIgnoreCase(trimmed, "none")) {
+                return names;
+            }
+            var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
+            while (it.next()) |name| {
+                if (supports.singleIdent(name) == null or ContainerQuery.isContainerName(name) == false) {
+                    return null;
+                }
+                if (names.len < names.hashes.len) {
+                    names.hashes[names.len] = hash(name);
+                    names.len += 1;
+                }
+            }
+            return if (names.len == 0) null else names;
+        }
+
+        fn contains(self: Names, name: []const u8) bool {
+            return std.mem.findScalar(u32, self.hashes[0..self.len], hash(name)) != null;
+        }
+
+        fn hash(name: []const u8) u32 {
+            return @truncate(std.hash.Wyhash.hash(0, name));
+        }
+    };
+};
+
 /// Where a box sits: its position and whether it floats.
 const Flow = struct {
     const Declared = struct {
@@ -7187,7 +7464,7 @@ const Grid = struct {
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names ++ Grid.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names ++ Grid.Declared.names ++ Container.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
@@ -7195,6 +7472,7 @@ const Declarations = struct {
     text: Text.Declared = .{},
     flow: Flow.Declared = .{},
     grid: Grid.Declared = .{},
+    container: Container.Declared = .{},
 
     fn apply(self: *Declarations, id: properties.Id, value: []const u8) void {
         inline for (group_fields) |field| {
@@ -7237,13 +7515,14 @@ const LazyRules = struct {
     rules: std.ArrayList(LazyRule) = .empty,
     parsed: ?[]const ParsedRule = null, // lazily parsed
 
-    fn append(self: *LazyRules, arena: Allocator, selector_text: []const u8, value: []const u8, priority: u64) !void {
+    fn append(self: *LazyRules, arena: Allocator, selector_text: []const u8, value: []const u8, priority: u64, container: u16) !void {
         // An appended rule joins rules that may already be parsed
         self.parsed = null;
         try self.rules.append(arena, .{
             .value = value,
             .priority = priority,
             .selector_text = selector_text,
+            .container = container,
         });
     }
 
@@ -7254,10 +7533,16 @@ const LazyRules = struct {
     }
 };
 
+const ContainerRule = struct {
+    parent: u16,
+    queries: []const ContainerQuery.Query,
+};
+
 const LazyRule = struct {
     selector_text: []const u8,
     value: []const u8,
     priority: u64,
+    container: u16,
 };
 
 /// Some frameworks define hundreds+ of custom properties, 99% of which are
@@ -7266,6 +7551,7 @@ const ParsedRule = struct {
     selector: Selector.Selector,
     value: []const u8,
     priority: u64, // packed the same way as a group Rule.priority
+    container: u16,
 };
 
 /// A lazy declaration on its way from a rule block into lazy_rules.
@@ -7896,6 +8182,9 @@ fn lazyWinner(self: *StyleManager, el: *Element, id: properties.Id, rules: []con
         if (matchesSelector(el, rule.selector, nth, self.frame) == false) {
             continue;
         }
+        if (rule.container != 0 and self.containerRuleMatches(el, rule.container) == false) {
+            continue;
+        }
         winner = .{ .value = rule.value, .layer = layer, .priority = rule.priority };
         priority = rule.priority;
     }
@@ -7940,6 +8229,7 @@ fn parsedRules(self: *StyleManager, maybe_property: ?*LazyRules) ![]const Parsed
                 .selector = selector,
                 .value = rule.value,
                 .priority = rule.priority | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT),
+                .container = rule.container,
             });
         }
     }

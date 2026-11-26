@@ -665,6 +665,9 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, id: properties.Id, value: []const
         // An invalid value leaves the declaration as it was
         return false;
     }
+    if (color.usesSubstitution(value) == false and StyleManager.Container.Declared.accepts(id, value) == false) {
+        return false;
+    }
 
     // Normalize the value for canonical serialization
     const normalized_value = blk: {

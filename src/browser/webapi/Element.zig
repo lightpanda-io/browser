@@ -1702,6 +1702,13 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }, .explicit = true };
     }
 
+    // An empty box, which a size-contained one is whatever it holds
+    if (self.ownerFrame(frame)) |owner| {
+        const kind = owner._style_manager.sizeContainment(self);
+        if (kind == .size or (axis == .width and kind == .inline_size)) {
+            return .{ .value = 0 };
+        }
+    }
     return .{ .value = 5.0 };
 }
 

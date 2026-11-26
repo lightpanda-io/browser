@@ -623,6 +623,11 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
     if (style_manager.getCachedLayout(self, kind)) |width| {
         return width;
     }
+    // Sized as if empty, so its descendants' container queries can't size it
+    if (mode != .scrollable and style_manager.sizeContainment(self) != .normal) {
+        style_manager.setCacheLayout(self, kind, 0);
+        return 0;
+    }
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
@@ -1134,6 +1139,12 @@ pub fn boxHeight(self: *Element, owner: *Frame) f64 {
     if (insetHeight(self, edges, owner)) |height| {
         // Not cached: it follows its containing block's height, which no
         // write to that block reaches
+        return height;
+    }
+    if (style_manager.sizeContainment(self) == .size) {
+        // Not cached as the content's height: scrollHeight reads that
+        const height = clampHeight(self, @max(own.value, edges.padding), edges, owner);
+        style_manager.setCacheLayout(self, .box_height, height);
         return height;
     }
     const content = cached.content orelse measureContentHeight(self, owner);
