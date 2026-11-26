@@ -1041,12 +1041,17 @@ const PrivateSymbols = struct {
     child_nodes: Private,
     crypto_key_algorithm: Private,
     crypto_key_usages: Private,
+    // Set on a WebGL object (WebGLBuffer, …) once bound, and once deleted
+    webgl_bound: Private,
+    webgl_deleted: Private,
 
     fn init(isolate: *v8.Isolate) PrivateSymbols {
         return .{
             .child_nodes = Private.init(isolate, "child_nodes"),
             .crypto_key_algorithm = Private.init(isolate, "crypto_key_algorithm"),
             .crypto_key_usages = Private.init(isolate, "crypto_key_usages"),
+            .webgl_bound = Private.init(isolate, "webgl_bound"),
+            .webgl_deleted = Private.init(isolate, "webgl_deleted"),
         };
     }
 
@@ -1054,6 +1059,8 @@ const PrivateSymbols = struct {
         self.child_nodes.deinit();
         self.crypto_key_algorithm.deinit();
         self.crypto_key_usages.deinit();
+        self.webgl_bound.deinit();
+        self.webgl_deleted.deinit();
     }
 };
 

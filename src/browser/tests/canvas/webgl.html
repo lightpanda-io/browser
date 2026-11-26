@@ -66,13 +66,13 @@
 
   const buffer = gl.createBuffer();
   testing.expectTrue(buffer instanceof WebGLBuffer);
-  testing.expectTrue(gl.isBuffer(buffer));
   testing.expectFalse(buffer === gl.createBuffer());
   buffer.tag = 'mesh';
   testing.expectEqual('mesh', buffer.tag);
   testing.expectEqual('[object WebGLBuffer]', Object.prototype.toString.call(buffer));
   testing.expectFalse(gl.isBuffer(null));
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  testing.expectTrue(gl.isBuffer(buffer));
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(6), gl.STATIC_DRAW);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 
@@ -98,6 +98,91 @@
 
   const gl2 = document.createElement('canvas').getContext('webgl2');
   testing.expectEqual('WebGL 2.0 (Lightpanda no-op)', gl2.getParameter(gl2.VERSION));
+}
+</script>
+
+<script id=initial_state>
+{
+  const gl = document.createElement('canvas').getContext('webgl2');
+  testing.expectEqual(true, gl.getParameter(gl.DEPTH_WRITEMASK));
+  testing.expectEqual(true, gl.getParameter(gl.DITHER));
+  testing.expectEqual(false, gl.getParameter(gl.BLEND));
+  testing.expectEqual(gl.LESS, gl.getParameter(gl.DEPTH_FUNC));
+  testing.expectEqual(gl.CCW, gl.getParameter(gl.FRONT_FACE));
+  testing.expectEqual(gl.BACK, gl.getParameter(gl.CULL_FACE_MODE));
+  testing.expectEqual(gl.TEXTURE0, gl.getParameter(gl.ACTIVE_TEXTURE));
+  testing.expectEqual(gl.FUNC_ADD, gl.getParameter(gl.BLEND_EQUATION_RGB));
+  testing.expectEqual(gl.ALWAYS, gl.getParameter(gl.STENCIL_FUNC));
+  testing.expectEqual(4294967295, gl.getParameter(gl.STENCIL_WRITEMASK));
+  testing.expectEqual(gl.BACK, gl.getParameter(gl.DRAW_BUFFER0));
+  testing.expectEqual(false, gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL));
+}
+</script>
+
+<script id=capabilities>
+{
+  const gl = document.createElement('canvas').getContext('webgl');
+  testing.expectFalse(gl.isEnabled(gl.DEPTH_TEST));
+  gl.enable(gl.DEPTH_TEST);
+  testing.expectTrue(gl.isEnabled(gl.DEPTH_TEST));
+  testing.expectEqual(true, gl.getParameter(gl.DEPTH_TEST));
+  gl.disable(gl.DEPTH_TEST);
+  testing.expectFalse(gl.isEnabled(gl.DEPTH_TEST));
+
+  testing.expectTrue(gl.isEnabled(gl.DITHER));
+  gl.disable(gl.DITHER);
+  testing.expectFalse(gl.isEnabled(gl.DITHER));
+
+  // Per context
+  testing.expectTrue(document.createElement('canvas').getContext('webgl').isEnabled(gl.DITHER));
+}
+</script>
+
+<script id=object_lifetime>
+{
+  const gl = document.createElement('canvas').getContext('webgl2');
+
+  // As in GL, a buffer exists once bound, until deleted
+  const buffer = gl.createBuffer();
+  testing.expectFalse(gl.isBuffer(buffer));
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  testing.expectTrue(gl.isBuffer(buffer));
+  gl.deleteBuffer(null);
+  testing.expectTrue(gl.isBuffer(buffer));
+  gl.deleteBuffer(buffer);
+  testing.expectFalse(gl.isBuffer(buffer));
+  testing.expectFalse(gl.isBuffer(null));
+
+  const texture = gl.createTexture();
+  testing.expectError('TypeError', () => gl.isTexture(buffer));
+  testing.expectError('TypeError', () => gl.isBuffer({}));
+  testing.expectError('TypeError', () => gl.deleteTexture(buffer));
+  testing.expectError('TypeError', () => gl.bindTexture(gl.TEXTURE_2D, buffer));
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  testing.expectTrue(gl.isTexture(texture));
+
+  const vao = gl.createVertexArray();
+  testing.expectFalse(gl.isVertexArray(vao));
+  gl.bindVertexArray(vao);
+  testing.expectTrue(gl.isVertexArray(vao));
+  gl.bindVertexArray(null);
+  gl.deleteVertexArray(vao);
+  testing.expectFalse(gl.isVertexArray(vao));
+
+  const query = gl.createQuery();
+  testing.expectFalse(gl.isQuery(query));
+  gl.beginQuery(gl.ANY_SAMPLES_PASSED, query);
+  testing.expectTrue(gl.isQuery(query));
+  gl.endQuery(gl.ANY_SAMPLES_PASSED);
+
+  // These exist from creation
+  testing.expectTrue(gl.isSampler(gl.createSampler()));
+  const shader = gl.createShader(gl.VERTEX_SHADER);
+  testing.expectTrue(gl.isShader(shader));
+  testing.expectEqual(false, gl.getShaderParameter(shader, gl.DELETE_STATUS));
+  gl.deleteShader(shader);
+  testing.expectFalse(gl.isShader(shader));
+  testing.expectEqual(null, gl.getShaderParameter(shader, gl.DELETE_STATUS));
 }
 </script>
 

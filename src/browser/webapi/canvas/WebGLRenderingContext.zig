@@ -27,6 +27,7 @@ const js = lp.js;
 const WebGLRenderingContext = @This();
 
 _canvas: webgl.Owner,
+_enabled: webgl.Caps = webgl.default_caps,
 
 pub fn registerTypes() []const type {
     return &([_]type{WebGLRenderingContext} ++ webgl.object_types);
@@ -351,10 +352,10 @@ pub const JsApi = struct {
     pub const activeTexture = bridge.function(M.noop, .{ .noop = true });
     pub const attachShader = bridge.function(M.noop, .{ .noop = true });
     pub const bindAttribLocation = bridge.function(M.noop, .{ .noop = true });
-    pub const bindBuffer = bridge.function(M.noop, .{ .noop = true });
-    pub const bindFramebuffer = bridge.function(M.noop, .{ .noop = true });
-    pub const bindRenderbuffer = bridge.function(M.noop, .{ .noop = true });
-    pub const bindTexture = bridge.function(M.noop, .{ .noop = true });
+    pub const bindBuffer = bridge.function(M.bind(webgl.WebGLBuffer, .one), .{});
+    pub const bindFramebuffer = bridge.function(M.bind(webgl.WebGLFramebuffer, .one), .{});
+    pub const bindRenderbuffer = bridge.function(M.bind(webgl.WebGLRenderbuffer, .one), .{});
+    pub const bindTexture = bridge.function(M.bind(webgl.WebGLTexture, .one), .{});
     pub const blendColor = bridge.function(M.noop, .{ .noop = true });
     pub const blendEquation = bridge.function(M.noop, .{ .noop = true });
     pub const blendEquationSeparate = bridge.function(M.noop, .{ .noop = true });
@@ -380,22 +381,22 @@ pub const JsApi = struct {
     pub const createShader = bridge.function(M.create(webgl.WebGLShader), .{});
     pub const createTexture = bridge.function(M.create(webgl.WebGLTexture), .{});
     pub const cullFace = bridge.function(M.noop, .{ .noop = true });
-    pub const deleteBuffer = bridge.function(M.noop, .{ .noop = true });
-    pub const deleteFramebuffer = bridge.function(M.noop, .{ .noop = true });
-    pub const deleteProgram = bridge.function(M.noop, .{ .noop = true });
-    pub const deleteRenderbuffer = bridge.function(M.noop, .{ .noop = true });
-    pub const deleteShader = bridge.function(M.noop, .{ .noop = true });
-    pub const deleteTexture = bridge.function(M.noop, .{ .noop = true });
+    pub const deleteBuffer = bridge.function(M.delete(webgl.WebGLBuffer), .{});
+    pub const deleteFramebuffer = bridge.function(M.delete(webgl.WebGLFramebuffer), .{});
+    pub const deleteProgram = bridge.function(M.delete(webgl.WebGLProgram), .{});
+    pub const deleteRenderbuffer = bridge.function(M.delete(webgl.WebGLRenderbuffer), .{});
+    pub const deleteShader = bridge.function(M.delete(webgl.WebGLShader), .{});
+    pub const deleteTexture = bridge.function(M.delete(webgl.WebGLTexture), .{});
     pub const depthFunc = bridge.function(M.noop, .{ .noop = true });
     pub const depthMask = bridge.function(M.noop, .{ .noop = true });
     pub const depthRange = bridge.function(M.noop, .{ .noop = true });
     pub const detachShader = bridge.function(M.noop, .{ .noop = true });
-    pub const disable = bridge.function(M.noop, .{ .noop = true });
+    pub const disable = bridge.function(M.disable, .{});
     pub const disableVertexAttribArray = bridge.function(M.noop, .{ .noop = true });
     pub const drawArrays = bridge.function(M.noop, .{ .noop = true });
     pub const drawElements = bridge.function(M.noop, .{ .noop = true });
     pub const drawingBufferStorage = bridge.function(M.noop, .{ .noop = true });
-    pub const enable = bridge.function(M.noop, .{ .noop = true });
+    pub const enable = bridge.function(M.enable, .{});
     pub const enableVertexAttribArray = bridge.function(M.noop, .{ .noop = true });
     pub const finish = bridge.function(M.noop, .{ .noop = true });
     pub const flush = bridge.function(M.noop, .{ .noop = true });
@@ -427,14 +428,14 @@ pub const JsApi = struct {
     pub const getVertexAttrib = bridge.function(M.getVertexAttrib, .{});
     pub const getVertexAttribOffset = bridge.function(M.zero, .{});
     pub const hint = bridge.function(M.noop, .{ .noop = true });
-    pub const isBuffer = bridge.function(M.isObject, .{});
+    pub const isBuffer = bridge.function(M.isLive(webgl.WebGLBuffer), .{});
     pub const isContextLost = bridge.function(M.no, .{});
-    pub const isEnabled = bridge.function(M.no, .{});
-    pub const isFramebuffer = bridge.function(M.isObject, .{});
-    pub const isProgram = bridge.function(M.isObject, .{});
-    pub const isRenderbuffer = bridge.function(M.isObject, .{});
-    pub const isShader = bridge.function(M.isObject, .{});
-    pub const isTexture = bridge.function(M.isObject, .{});
+    pub const isEnabled = bridge.function(M.isEnabled, .{});
+    pub const isFramebuffer = bridge.function(M.isLive(webgl.WebGLFramebuffer), .{});
+    pub const isProgram = bridge.function(M.isLive(webgl.WebGLProgram), .{});
+    pub const isRenderbuffer = bridge.function(M.isLive(webgl.WebGLRenderbuffer), .{});
+    pub const isShader = bridge.function(M.isLive(webgl.WebGLShader), .{});
+    pub const isTexture = bridge.function(M.isLive(webgl.WebGLTexture), .{});
     pub const lineWidth = bridge.function(M.noop, .{ .noop = true });
     pub const linkProgram = bridge.function(M.noop, .{ .noop = true });
     pub const pixelStorei = bridge.function(M.noop, .{ .noop = true });
