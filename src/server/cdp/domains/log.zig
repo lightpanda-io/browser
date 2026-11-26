@@ -149,7 +149,7 @@ fn isCancellation(err: anyerror) bool {
 
 // Chrome's net error for a transfer error. libcurl folds some of Chrome's
 // causes into one code: CouldntConnect is also an unreachable host.
-fn netError(err: anyerror) []const u8 {
+pub fn netError(err: anyerror) []const u8 {
     return switch (err) {
         error.CouldntConnect => "net::ERR_CONNECTION_REFUSED",
         error.CouldntResolveHost => "net::ERR_NAME_NOT_RESOLVED",
