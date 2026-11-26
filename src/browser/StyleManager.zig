@@ -3053,7 +3053,7 @@ pub fn ownTextTransform(self: *StyleManager, el: *Element) TextTransform {
     self.rebuildIfDirty() catch return .inherit;
     // Most pages declare no text-transform: skip the cascade and the memo.
     if (!self.text.hasRules() and !el._flags.has_inline_style) {
-        return .inherit;
+        return TextTransform.uaDefault(el.getTag()) orelse .inherit;
     }
     return self.text.ownProps(self.arena.allocator(), el, self.frame).text_transform;
 }
@@ -5585,16 +5585,16 @@ const Box = enum(u3) {
     }
 };
 
-/// The case-changing part of `text-transform`. innerText applies `uppercase`
-/// and `lowercase`; `capitalize` is a computed value only, and `full-width`,
-/// `full-size-kana` and `math-auto` are accepted but not applied. `.inherit` is both the
-/// `inherit`/`unset` keywords and "nothing declared": text-transform inherits.
+/// The case-changing part of `text-transform`. Used by innerText.
+/// `full-width`, `full-size-kana` and `math-auto` are accepted but not
+/// applied.
 pub const TextTransform = enum(u3) {
-    inherit,
+    inherit, // also means it wasn't set
     none,
     capitalize,
     uppercase,
     lowercase,
+    math_auto, // for getComputedStyle only
 
     // Null for an invalid value, which drops the declaration.
     fn parse(value: []const u8) ?TextTransform {
@@ -5605,21 +5605,39 @@ pub const TextTransform = enum(u3) {
         if (std.ascii.eqlIgnoreCase(trimmed, "initial") or std.ascii.eqlIgnoreCase(trimmed, "none")) {
             return .none;
         }
+        // Only valid on its own.
+        if (std.ascii.eqlIgnoreCase(trimmed, "math-auto")) {
+            return .math_auto;
+        }
 
-        // At most one case keyword, alongside any of the non-case ones.
+        // `[ <case> || full-width || full-size-kana ]`: each at most once.
         var result: ?TextTransform = null;
+        var full_width = false;
+        var full_size_kana = false;
         var any = false;
         var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
         while (it.next()) |token| {
             any = true;
+            const seen = if (std.ascii.eqlIgnoreCase(token, "full-width"))
+                &full_width
+            else if (std.ascii.eqlIgnoreCase(token, "full-size-kana"))
+                &full_size_kana
+            else
+                null;
+            if (seen) |flag| {
+                if (flag.*) {
+                    return null;
+                }
+                flag.* = true;
+                continue;
+            }
+
             const case: TextTransform = if (std.ascii.eqlIgnoreCase(token, "uppercase"))
                 .uppercase
             else if (std.ascii.eqlIgnoreCase(token, "lowercase"))
                 .lowercase
             else if (std.ascii.eqlIgnoreCase(token, "capitalize"))
                 .capitalize
-            else if (std.ascii.eqlIgnoreCase(token, "full-width") or std.ascii.eqlIgnoreCase(token, "full-size-kana") or std.ascii.eqlIgnoreCase(token, "math-auto"))
-                continue
             else
                 return null;
             if (result != null) {
@@ -5633,10 +5651,18 @@ pub const TextTransform = enum(u3) {
         return result orelse .none;
     }
 
+    fn uaDefault(tag: Tag) ?TextTransform {
+        return switch (tag) {
+            .button, .input, .select, .textarea => .none,
+            else => null,
+        };
+    }
+
     /// The computed-value keyword, as getComputedStyle reports it.
     pub fn keyword(self: TextTransform) []const u8 {
         return switch (self) {
             .inherit, .none => "none",
+            .math_auto => "math-auto",
             else => @tagName(self),
         };
     }
@@ -6876,7 +6902,13 @@ const Text = struct {
     };
 
     pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
-        const ua = WhiteSpace.uaDefault(el.getTag()) orelse return;
+        const tag = el.getTag();
+        if (priorities.get(.text_transform) == 0) {
+            if (TextTransform.uaDefault(tag)) |ua| {
+                p.text_transform = ua;
+            }
+        }
+        const ua = WhiteSpace.uaDefault(tag) orelse return;
         if (priorities.get(.white_space_collapse) == 0) {
             p.white_space_collapse = ua.collapse;
         }
@@ -8121,16 +8153,20 @@ test "StyleManager: text-transform without rules skips the memo" {
 
     const div = try frame.window._document.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(),
-        \\<p style="text-transform: uppercase"><b><i></i></b></p>
+        \\<p style="text-transform: uppercase"><b><i></i></b><button></button></p>
     );
     const p = div.asNode().firstChild().?.as(Element);
     const b = p.asNode().firstChild().?.as(Element);
     const i = b.asNode().firstChild().?.as(Element);
+    const button = b.asNode().nextSibling().?.as(Element);
 
     // Inherited from the inline declaration; only <p> needs the cascade.
     try testing.expectEqual(TextTransform.uppercase, sm.textTransform(i));
     try testing.expectEqual(1, sm.text.memo.count());
     try testing.expectEqual(TextTransform.none, sm.textTransform(div));
+    // The UA default still applies without the cascade.
+    try testing.expectEqual(TextTransform.none, sm.textTransform(button));
+    try testing.expectEqual(1, sm.text.memo.count());
 }
 
 test "StyleManager: computeSpecificity: element selector" {

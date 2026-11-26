@@ -732,6 +732,10 @@ const InnerTextState = struct {
     // text-transform of the element whose text is being written
     transform: TextTransform = .none,
 
+    // The output so far ends inside a word, so `capitalize` leaves the next
+    // letter as is.
+    in_word: bool = false,
+
     // A row of the current table has been written, so the next one is
     // preceded by a newline. Kept per table rather than per row group, so the
     // rows of <thead>, <tbody> and <tfoot> are separated from each other too.
@@ -756,6 +760,7 @@ const InnerTextState = struct {
         // A block boundary trims the whitespace on either side of it.
         self.pre_w = false;
         self.trim_left = true;
+        self.in_word = false;
     }
 
     // Emit a literal separator (table cell tab / row newline).
@@ -765,6 +770,7 @@ const InnerTextState = struct {
         self.wrote_any = true;
         self.pre_w = false;
         self.trim_left = true;
+        self.in_word = false;
     }
 };
 
@@ -874,12 +880,18 @@ fn handleChildElement(
         state.wrote_any = true;
         state.pre_w = false;
         state.trim_left = true;
+        state.in_word = false;
         return;
     }
 
     const display = innerTextDisplay(he, tag);
     switch (display) {
-        .skip, .replaced => return,
+        .skip => return,
+        .replaced => {
+            // `foo<img>bar` capitalizes to "FooBar"
+            state.in_word = false;
+            return;
+        },
         else => {},
     }
 
@@ -972,11 +984,11 @@ fn isAllAsciiWhitespace(s: []const u8) bool {
 }
 
 fn writeText(c: *Node.CData, state: *InnerTextState) !void {
-    // `capitalize` is recognized (getComputedStyle reports it) but not
-    // applied: it needs word-boundary tracking across text runs.
-    if (state.transform != .uppercase and state.transform != .lowercase) {
-        return writeRenderedText(c, state);
+    switch (state.transform) {
+        .none, .inherit, .math_auto => return writeRenderedText(c, state),
+        .capitalize, .uppercase, .lowercase => {},
     }
+    const in_word = state.in_word;
 
     // Every case mapping we apply keeps the UTF-8 length, so the text is
     // rendered to a scratch buffer and mapped in place.
@@ -989,7 +1001,7 @@ fn writeText(c: *Node.CData, state: *InnerTextState) !void {
     try rendered;
 
     const text = scratch.written();
-    applyTextTransform(text, state.transform);
+    applyTextTransform(text, state.transform, in_word);
     try out.writeAll(text);
 }
 
@@ -1004,6 +1016,7 @@ fn writeRenderedText(c: *Node.CData, state: *InnerTextState) !void {
         try state.flushBreaks();
         if (state.pre_w) {
             try writer.writeByte(' ');
+            state.in_word = false;
         }
         // Preserve whitespace verbatim, normalising CR / CRLF to LF.
         var i: usize = 0;
@@ -1021,25 +1034,32 @@ fn writeRenderedText(c: *Node.CData, state: *InnerTextState) !void {
         state.wrote_any = true;
         state.pre_w = false;
         state.trim_left = false;
+        state.in_word = endsInWord(s, state.in_word);
         return;
     }
 
     if (isAllAsciiWhitespace(s)) {
         state.pre_w = state.wrote_any and state.trim_left == false;
+        state.in_word = false;
         return;
     }
 
     try state.flushBreaks();
     if (state.pre_w) {
         try writer.writeByte(' ');
+        state.in_word = false;
     }
     state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
     state.wrote_any = true;
     state.trim_left = state.pre_w;
+    // A trailing space is pending, so the word has ended.
+    state.in_word = state.pre_w == false and endsInWord(s, state.in_word);
 }
 
-// Maps `text` in place for `uppercase` / `lowercase`.
-fn applyTextTransform(text: []u8, transform: TextTransform) void {
+// Maps `text` in place. For `capitalize`, `in_word_before` says whether the
+// output before `text` ends inside a word.
+fn applyTextTransform(text: []u8, transform: TextTransform, in_word_before: bool) void {
+    var in_word = in_word_before;
     var i: usize = 0;
     while (i < text.len) {
         const len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
@@ -1050,16 +1070,81 @@ fn applyTextTransform(text: []u8, transform: TextTransform) void {
             i += 1;
             continue;
         };
-        const mapped = switch (transform) {
-            .uppercase => upperCodepoint(cp),
-            .lowercase => lowerCodepoint(cp),
-            else => cp,
-        };
+        var mapped = cp;
+        switch (transform) {
+            .uppercase => mapped = upperCodepoint(cp),
+            .lowercase => mapped = lowerCodepoint(cp),
+            .capitalize => switch (wordClass(cp)) {
+                .word => {
+                    if (in_word == false) {
+                        mapped = titleCodepoint(cp);
+                    }
+                    in_word = true;
+                },
+                .other => in_word = false,
+                .mid => {},
+            },
+            .none, .inherit, .math_auto => {},
+        }
         if (mapped != cp) {
             _ = std.unicode.utf8Encode(mapped, text[i..][0..len]) catch unreachable;
         }
         i += len;
     }
+}
+
+// Whether `text` ends inside a word, given whether the output before it did.
+fn endsInWord(text: []const u8, in_word_before: bool) bool {
+    var end = text.len;
+    while (end > 0) {
+        var start = end - 1;
+        while (start > 0 and text[start] & 0xC0 == 0x80) {
+            start -= 1;
+        }
+        const cp = std.unicode.utf8Decode(text[start..end]) catch return false;
+        switch (wordClass(cp)) {
+            .word => return true,
+            .other => return false,
+            .mid => end = start,
+        }
+    }
+    return in_word_before;
+}
+
+const WordClass = enum {
+    // starts or continues a word: letters, digits and `_` ("2nd", "_foo"
+    // and "state_of" are each one word)
+    word,
+    // continues a word but doesn't start one: apostrophes, middle dot, soft
+    // hyphen, ZWNJ / ZWJ and combining marks ("it's", but "'Quoted'")
+    mid,
+    // ends a word: whitespace, NBSP, ZWSP, other punctuation and symbols
+    other,
+};
+
+// Word boundaries for `capitalize`. Uses the same logic as Chrome.
+fn wordClass(cp: u21) WordClass {
+    return switch (cp) {
+        'a'...'z', 'A'...'Z', '0'...'9', '_', 0xAA, 0xB5, 0xBA => .word,
+        '\'', 0xAD, 0xB7, 0x300...0x36F, 0x200C, 0x200D, 0x2019 => .mid,
+        else => switch (cp) {
+            // the rest of ASCII and Latin-1 punctuation, × and ÷, general
+            // and CJK punctuation, CJK ideographs, kana and Hangul
+            0...0xBF, 0xD7, 0xF7, 0x2000...0x206F, 0x2E80...0x9FFF, 0xAC00...0xD7AF, 0xF900...0xFAFF => .other,
+            else => .word,
+        },
+    };
+}
+
+// `capitalize` puts a word's first letter in titlecase.
+fn titleCodepoint(cp: u21) u21 {
+    return switch (cp) {
+        0x1C6 => 0x1C5,
+        0x1C9 => 0x1C8,
+        0x1CC => 0x1CB,
+        0x1F3 => 0x1F2,
+        else => upperCodepoint(cp),
+    };
 }
 
 // Simple case mappings that keep the UTF-8 length: Latin-1, Latin
