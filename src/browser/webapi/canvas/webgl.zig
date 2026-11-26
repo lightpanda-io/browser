@@ -20,8 +20,8 @@
 //! succeeds and draws nothing: shaders compile, programs link, framebuffers
 //! are complete. Renderers that have no fallback for a null context (Skia,
 //! for Compose for Web) then run, and their accessibility trees carry the
-//! page's content. The methods that return nothing are generated into
-//! WebGLRenderingContext.zig and WebGL2RenderingContext.zig as noops; the
+//! page's content. WebGLRenderingContext.zig and WebGL2RenderingContext.zig
+//! list every IDL member, with the methods that return nothing as noops; the
 //! ones that return a value are here.
 
 const std = @import("std");
