@@ -92,3 +92,64 @@ pub inline fn urlGetPort(url: *const Url) ?u16 {
     if (result < 0) return null;
     return @intCast(result);
 }
+
+// The URL record's components. Each borrows into the Url's buffer, so it's
+// valid until the Url is freed or changed. Null is the record's null: no
+// host, no query, ...
+
+pub fn urlGetScheme(url: *const Url) []const u8 {
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    url_get_scheme(url, &out, &len);
+    return out[0..len];
+}
+
+pub fn urlGetUsername(url: *const Url) []const u8 {
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    url_get_username(url, &out, &len);
+    return out[0..len];
+}
+
+pub fn urlGetPassword(url: *const Url) ?[]const u8 {
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    if (url_get_password(url, &out, &len) != 0) {
+        return null;
+    }
+    return out[0..len];
+}
+
+pub fn urlGetHostname(url: *const Url) ?[]const u8 {
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    if (url_get_hostname(url, &out, &len) != 0) {
+        return null;
+    }
+    return out[0..len];
+}
+
+pub fn urlGetPath(url: *const Url) []const u8 {
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    url_get_path(url, &out, &len);
+    return out[0..len];
+}
+
+pub fn urlGetQuery(url: *const Url) ?[]const u8 {
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    if (url_get_query(url, &out, &len) != 0) {
+        return null;
+    }
+    return out[0..len];
+}
+
+pub fn urlGetFragment(url: *const Url) ?[]const u8 {
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    if (url_get_fragment(url, &out, &len) != 0) {
+        return null;
+    }
+    return out[0..len];
+}

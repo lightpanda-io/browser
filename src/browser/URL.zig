@@ -345,6 +345,32 @@ pub fn isSameOrigin(url: []const u8, origin: []const u8) bool {
     return std.mem.eql(u8, effectivePort(url_proto, getPort(url)), effectivePort(origin_proto, getPort(origin)));
 }
 
+// https://url.spec.whatwg.org/#special-scheme
+// Schemes are lowercase, without the ":".
+pub const special_schemes = [_][]const u8{ "http", "https", "ws", "wss", "ftp", "file" };
+
+pub fn isSpecialScheme(scheme: []const u8) bool {
+    for (special_schemes) |s| {
+        if (std.mem.eql(u8, s, scheme)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const default_ports = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "http", "80" },
+    .{ "https", "443" },
+    .{ "ws", "80" },
+    .{ "wss", "443" },
+    .{ "ftp", "21" },
+});
+
+// https://url.spec.whatwg.org/#default-port
+pub fn defaultPort(scheme: []const u8) ?[]const u8 {
+    return default_ports.get(scheme);
+}
+
 fn effectivePort(protocol: []const u8, port: []const u8) []const u8 {
     if (port.len > 0) return port;
     if (std.mem.eql(u8, protocol, "https:")) return "443";

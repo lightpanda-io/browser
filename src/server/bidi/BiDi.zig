@@ -93,6 +93,9 @@ execute_pending: std.ArrayList(*execute.Pending) = .empty,
 // script.addPreloadScript registrations, run in each new document
 preload_scripts: std.ArrayList(script.PreloadScript) = .empty,
 
+// network.addIntercept registrations: the spec's intercept map.
+intercepts: std.ArrayList(@import("network.zig").Intercept) = .empty,
+
 // The HTTP session's timeouts. BiDi has no equivalent.
 timeouts: Timeouts = .{},
 
