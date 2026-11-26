@@ -1043,10 +1043,8 @@ pub const Script = struct {
 
         lp.metrics.script_errors.incr();
 
-        // Report before caughtOrError: reading the exception's stack drops
-        // the frames reportError needs for the error's location.
-        if (try_catch.exceptionValue()) |exc| {
-            frame.window.reportError(exc, frame) catch |err| {
+        if (try_catch.thrown()) |thrown| {
+            frame.window.reportException(thrown, frame) catch |err| {
                 log.debug(.js, "eval script report error", .{ .url = url, .err = err });
             };
         }

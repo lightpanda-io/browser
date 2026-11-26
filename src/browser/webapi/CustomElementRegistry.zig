@@ -246,8 +246,8 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
         }
         log.debug(.js, "custom element upgrade", .{ .name = definition.name, .err = err });
         upgradeFailed(custom);
-        if (try_catch.exceptionValue()) |exc| {
-            frame.window.reportError(exc, frame) catch {};
+        if (try_catch.thrown()) |thrown| {
+            frame.window.reportException(thrown, frame) catch {};
         }
         return error.CustomElementUpgradeFailed;
     };

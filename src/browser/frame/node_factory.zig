@@ -1203,9 +1203,9 @@ fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_na
     const object = ls.toLocal(definition.constructor).newInstanceThrow() catch |err| {
         if (err != error.ExecutionTerminated) {
             log.debug(.js, "custom element constructor", .{ .name = name, .err = err, .type = frame._type, .url = frame.url });
-            if (try_catch.exceptionValue()) |exc| {
+            if (try_catch.thrown()) |thrown| {
                 // Spec: report the exception
-                frame.window.reportError(exc, frame) catch {};
+                frame.window.reportException(thrown, frame) catch {};
             }
         }
         return err;

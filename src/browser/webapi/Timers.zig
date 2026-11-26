@@ -256,9 +256,9 @@ const ScheduleCallback = struct {
 
         local.toLocal(self.cb).callRethrow(void, args) catch |err| {
             if (err == error.JsException or err == error.TryCatchRethrow) {
-                if (try_catch.exceptionValue()) |exc| {
-                    // reportError also counts the error on the page.
-                    self.exec.reportError(exc) catch |report_err| {
+                if (try_catch.thrown()) |thrown| {
+                    // reportException also counts the error on the page.
+                    self.exec.reportException(thrown) catch |report_err| {
                         log.debug(.js, context ++ " report error", .{ .name = self.name, .err = report_err });
                     };
                     return;

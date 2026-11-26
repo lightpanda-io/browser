@@ -29,6 +29,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Value = @import("Value.zig");
+const Thrown = @import("Thrown.zig");
 const Function = @import("Function.zig");
 const Context = @import("Context.zig");
 const Scheduler = @import("Scheduler.zig");
@@ -179,8 +180,8 @@ pub fn dispatch(
     return self.js.global.dispatch(target, event, opts);
 }
 
-pub fn reportError(self: *const Execution, err: Value) !void {
-    return self.js.global.reportError(err);
+pub fn reportException(self: *const Execution, thrown: Thrown) !void {
+    return self.js.global.reportException(thrown);
 }
 
 pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8) bool {

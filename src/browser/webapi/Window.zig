@@ -497,13 +497,19 @@ fn cancelIdleCallback(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
-// https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
-// When `location.muted` (set by V8 from the originating script's opaque
-// origin — see js.Local.compileWithCache's `muted` param), the page only
-// ever sees "Script error." with no location/stack/error object, same as
-// other browsers. Our own logging and the CDP notification still get the
-// real details.
+// JS's reportError(e), and any exception without a throw site to read: the
+// location comes from the value (see js.Thrown.errorLocation).
 pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
+    return self.reportException(.{ .value = err }, frame);
+}
+
+// HTML's "report an exception".
+// https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+// When muted, the page only sees "Script error.", with no location or error
+// object. Our log and the CDP notification still get the real details.
+pub fn reportException(self: *Window, thrown: js.Thrown, frame: *Frame) !void {
+    const err = thrown.value;
+
     // Per spec's "in error reporting mode": an exception thrown while an
     // error is being reported (e.g. by an "error" listener) is not reported
     // again, which would otherwise recurse without bound.
@@ -523,7 +529,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     frame.page.recordJsError(error.JsException);
     frame.page.status.noteException(message);
 
-    const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
+    const location = thrown.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
 
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error")) {
@@ -569,9 +575,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     });
 
     if (!event._prevent_default) {
-        // Logged from err/location, not error_event: for a muted script the
-        // event's fields are sanitized to "Script error.", but our own log
-        // and the CDP notification should still show the real details.
+        // From err and location, not error_event, which may be muted.
         log.warn(.page_error, "uncaught exception", .{
             .message = message,
             .url = location.url,

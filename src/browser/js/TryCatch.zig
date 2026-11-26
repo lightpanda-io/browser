@@ -45,10 +45,17 @@ pub fn rethrow(self: *TryCatch) void {
     _ = v8.v8__TryCatch__ReThrow(&self.handle);
 }
 
-// The raw caught exception value, e.g. to report it to a global's onerror.
+// The raw caught exception value.
 pub fn exceptionValue(self: *const TryCatch) ?js.Value {
     const handle = v8.v8__TryCatch__Exception(&self.handle) orelse return null;
     return .{ .local = self.local, .handle = handle };
+}
+
+// The caught exception with the message V8 captured where it was thrown, to
+// report it to a global's onerror (see js.Thrown).
+pub fn thrown(self: *const TryCatch) ?js.Thrown {
+    const value = self.exceptionValue() orelse return null;
+    return .{ .value = value, .message = v8.v8__TryCatch__Message(&self.handle) };
 }
 
 pub fn caught(self: *const TryCatch, allocator: Allocator) ?Caught {

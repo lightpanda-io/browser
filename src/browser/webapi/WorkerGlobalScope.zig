@@ -428,13 +428,21 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     ls.local.runMacrotasks();
 }
 
+// See Window.reportError.
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
-    // See Window.reportError: an exception thrown while reporting isn't reported.
+    return self.reportException(.{ .value = err });
+}
+
+// See Window.reportException.
+pub fn reportException(self: *WorkerGlobalScope, thrown: JS.Thrown) !void {
+    const err = thrown.value;
+
+    // See Window.reportException: an exception thrown while reporting isn't reported.
     if (self._reporting_error) {
         return;
     }
 
-    // See Window.reportError: keeps the call_arena alive while reporting.
+    // See Window.reportException: keeps the call_arena alive while reporting.
     const call_depth = self.js.call_depth;
     self.js.call_depth = call_depth + 1;
     defer self.js.call_depth = call_depth;
@@ -445,7 +453,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     self._reporting_error = true;
     defer self._reporting_error = false;
 
-    const location = err.errorLocation(err.local.call_arena) catch JS.Value.ErrorLocation{};
+    const location = thrown.errorLocation(err.local.call_arena) catch JS.Value.ErrorLocation{};
 
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
