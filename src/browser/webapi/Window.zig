@@ -932,7 +932,7 @@ pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Fram
     self._scroll_pos.x = new_x;
     self._scroll_pos.y = new_y;
     self._scroll_pos.state = .scroll;
-    Frame.observers.intersectionScrolled(self._frame);
+    Frame.observers.intersectionScrolled(target);
 
     // We dispatch scroll event asynchronously after 10ms. So we can throttle
     // them.
