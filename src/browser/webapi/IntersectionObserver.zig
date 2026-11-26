@@ -347,7 +347,7 @@ fn calculateIntersection(self: *const IntersectionObserver, target: *Element, fr
     const target_rect = moved(target.boundingClientRectValuesForVisible(frame), scrolledBy(target, owner));
     // What's left of the target as it's mapped towards the root (null once
     // nothing is), and how far it moved from the target's own client space.
-    var visible: ?Rect = target_rect;
+    var visible: ?Rect = clipByAncestors(target, self._root, owner, target_rect);
     var offset: Point = .{};
 
     const root_bounds: Rect = blk: {
@@ -413,6 +413,64 @@ fn notIntersecting(target_rect: Rect, root_bounds: Rect) IntersectionData {
 }
 
 const Point = struct { x: f64 = 0, y: f64 = 0 };
+
+// What's left of the target once each ancestor that clips its overflow (hidden,
+// clip, auto, scroll) has cut it, on the axes it clips; null once nothing is.
+// Without this a scroll box's items all count as on screen, and a site that
+// prefetches its visible links (Next.js) fetches every link in a long sidebar.
+// https://w3c.github.io/IntersectionObserver/#compute-the-intersection
+//
+// The walk stops below an explicit root (root_bounds clips there) and at html
+// and body, whose overflow applies to the viewport. A position: fixed box
+// escapes every ancestor, and an absolutely positioned one the static
+// ancestors between it and the box it is positioned in. Ancestors clip with
+// their border box rather than their padding box.
+fn clipByAncestors(target: *Element, root: ?*Element, owner: *Frame, rect: Rect) ?Rect {
+    const style_manager = &owner._style_manager;
+    var visible = rect;
+    var skips_static = false;
+    var el = target;
+    while (true) {
+        switch (style_manager.position(el)) {
+            .fixed => return visible,
+            .absolute => skips_static = true,
+            else => {},
+        }
+        const parent = el.parentElement() orelse return visible;
+        if (parent == root) {
+            return visible;
+        }
+        switch (parent.getTag()) {
+            .html, .body => return visible,
+            else => {},
+        }
+        el = parent;
+        if (skips_static) {
+            if (style_manager.position(parent) == .static) {
+                continue;
+            }
+            skips_static = false;
+        }
+        const clips_x = style_manager.clipsOverflowX(parent);
+        const clips_y = style_manager.clipsOverflowY(parent);
+        if (!clips_x and !clips_y) {
+            continue;
+        }
+        const box = moved(parent.boundingClientRectValuesForVisible(owner), scrolledBy(parent, owner));
+        visible = intersect(visible, clipOn(box, clips_x, clips_y)) orelse return null;
+    }
+}
+
+// box along the axes that clip, unbounded along the others
+fn clipOn(box: Rect, x: bool, y: bool) Rect {
+    const far = std.math.floatMax(f64) / 4;
+    return .{
+        .x = if (x) box.x else -far,
+        .y = if (y) box.y else -far,
+        .width = if (x) box.width else 2 * far,
+        .height = if (y) box.height else 2 * far,
+    };
+}
 
 fn moved(rect: Rect, by: Point) Rect {
     return .{ .x = rect.x - by.x, .y = rect.y - by.y, .width = rect.width, .height = rect.height };

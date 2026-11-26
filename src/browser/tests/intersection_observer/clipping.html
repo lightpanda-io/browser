@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<style>
+  body { margin: 0; }
+  .box { height: 100px; }
+  .box > div { height: 40px; }
+</style>
+
+<!-- Each box is 100px tall and holds 20 items of 40px: items 0 and 1 are inside,
+     item 2 is cut in half, items 3 to 19 are past the bottom edge. -->
+<div id="auto" class="box" style="overflow: auto"></div>
+<div id="hidden" class="box" style="overflow: hidden"></div>
+<div id="scrolled" class="box" style="overflow: auto"></div>
+<div id="visible" class="box"></div>
+
+<div id="static_clip" style="overflow: hidden; height: 20px">
+  <div id="escapes" style="position: absolute; top: 600px; height: 10px"></div>
+</div>
+<div id="positioned_clip" style="position: relative; overflow: hidden; height: 20px">
+  <div id="clipped" style="position: absolute; top: 300px; height: 10px"></div>
+</div>
+<div id="fixed_clip" style="overflow: hidden; height: 20px">
+  <div id="fixed" style="position: fixed; top: 700px; height: 10px"></div>
+</div>
+
+<script>
+  for (const id of ['auto', 'hidden', 'scrolled', 'visible']) {
+    const box = document.getElementById(id);
+    for (let i = 0; i < 20; i++) {
+      const item = box.appendChild(document.createElement('div'));
+      item.dataset.i = i;
+    }
+  }
+
+  // Observes every element matched by selector, waits for the first report,
+  // returns the entries by target.
+  async function observeAll(selector) {
+    const entries = new Map();
+    const observer = new IntersectionObserver((list) => {
+      for (const entry of list) entries.set(entry.target, entry);
+    });
+    for (const el of document.querySelectorAll(selector)) observer.observe(el);
+    await testing.nextFrame();
+    observer.disconnect();
+    return entries;
+  }
+
+  function intersecting(entries, id) {
+    return [...document.getElementById(id).children]
+      .filter((item) => entries.get(item).isIntersecting)
+      .map((item) => Number(item.dataset.i));
+  }
+</script>
+
+<script id=clipped_by_scroll_box type=module>
+  const state = await testing.async();
+  const entries = await observeAll('#auto > div, #hidden > div, #visible > div');
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([0, 1, 2], intersecting(entries, 'auto'));
+    testing.expectEqual([0, 1, 2], intersecting(entries, 'hidden'));
+    // without a clipping ancestor every item is in the viewport
+    testing.expectEqual(20, intersecting(entries, 'visible').length);
+
+    const half = entries.get(document.querySelector('#auto > div:nth-child(3)'));
+    testing.expectEqual(0.5, half.intersectionRatio);
+    testing.expectEqual(20, half.intersectionRect.height);
+  });
+</script>
+
+<script id=scrolled_box type=module>
+  const state = await testing.async();
+  document.getElementById('scrolled').scrollTop = 200;
+  const entries = await observeAll('#scrolled > div');
+  state.resolve();
+  await state.done(() => {
+    // Scrolled by 200px: items 5 and 6 inside, 7 cut in half. Item 4 ends on
+    // the box's top edge: an edge-adjacent target counts, with zero area.
+    testing.expectEqual([4, 5, 6, 7], intersecting(entries, 'scrolled'));
+    const edge = entries.get(document.querySelector('#scrolled > div:nth-child(5)'));
+    testing.expectEqual(0, edge.intersectionRatio);
+  });
+</script>
+
+<script id=positioned_descendants type=module>
+  const state = await testing.async();
+  const entries = await observeAll('#escapes, #clipped, #fixed');
+  state.resolve();
+  await state.done(() => {
+    // positioned against the viewport, so the static clipping parent doesn't cut it
+    testing.expectEqual(true, entries.get(document.getElementById('escapes')).isIntersecting);
+    // positioned in its clipping parent, below its 20px
+    testing.expectEqual(false, entries.get(document.getElementById('clipped')).isIntersecting);
+    // fixed boxes escape every ancestor
+    testing.expectEqual(true, entries.get(document.getElementById('fixed')).isIntersecting);
+  });
+</script>
