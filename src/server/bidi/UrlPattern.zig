@@ -158,24 +158,52 @@ fn dupeComponent(allocator: std.mem.Allocator, component: ?[]const u8) !?[]const
     return try allocator.dupe(u8, value);
 }
 
-// The spec's "match URL pattern". `url` is a serialized url, like a
-// request's url.
-pub fn matches(self: *const UrlPattern, url: [:0]const u8) bool {
+// A url split into the components a pattern compares. Split it once and
+// match it against every pattern of every intercept.
+pub const Components = struct {
+    // The scheme, without the ":".
+    protocol: []const u8,
+    hostname: []const u8,
+    // "" for the scheme's default port, null when the scheme has none.
+    port: ?[]const u8,
+    pathname: []const u8,
+    // The query, without the "?".
+    search: []const u8,
+
+    // `url` is a serialized url, like a request's: the serializer already
+    // normalized it, and removed a default port.
+    pub fn init(url: [:0]const u8) Components {
+        const protocol = URL.getProtocol(url);
+        const scheme = protocol[0..protocol.len -| 1];
+        const port = URL.getPort(url);
+        const search = URL.getSearch(url);
+        return .{
+            .protocol = scheme,
+            .hostname = URL.getHostname(url),
+            .port = if (port.len > 0) port else if (URL.defaultPort(scheme) != null) "" else null,
+            .pathname = URL.getPathname(url),
+            .search = if (search.len > 0) search[1..] else "",
+        };
+    }
+};
+
+// The spec's "match URL pattern".
+pub fn matches(self: *const UrlPattern, url: *const Components) bool {
     if (self.protocol) |protocol| {
-        if (!std.mem.eql(u8, protocol, schemeOf(url))) return false;
+        if (!std.mem.eql(u8, protocol, url.protocol)) return false;
     }
     if (self.hostname) |hostname| {
-        if (!std.mem.eql(u8, hostname, URL.getHostname(url))) return false;
+        if (!std.mem.eql(u8, hostname, url.hostname)) return false;
     }
     if (self.port) |port| {
-        const url_port = portOf(url) orelse return false;
+        const url_port = url.port orelse return false;
         if (!std.mem.eql(u8, port, url_port)) return false;
     }
     if (self.pathname) |pathname| {
-        if (!std.mem.eql(u8, pathname, URL.getPathname(url))) return false;
+        if (!std.mem.eql(u8, pathname, url.pathname)) return false;
     }
     if (self.search) |search| {
-        if (!std.mem.eql(u8, search, query(url))) return false;
+        if (!std.mem.eql(u8, search, url.search)) return false;
     }
     return true;
 }
@@ -256,31 +284,14 @@ fn unescapeNonEmpty(arena: std.mem.Allocator, pattern: []const u8) ![]const u8 {
     return unescape(arena, pattern);
 }
 
-fn schemeOf(url: []const u8) []const u8 {
-    const protocol = URL.getProtocol(url);
-    return protocol[0..protocol.len -| 1];
-}
-
-// The query without its "?"; "" when there's none.
-fn query(url: [:0]const u8) []const u8 {
-    const search = URL.getSearch(url);
-    return if (search.len > 0) search[1..] else "";
-}
-
-// The url's port as the spec compares it: "" for the scheme's default port.
-// The serializer already removed a default port from the url.
-fn portOf(url: [:0]const u8) ?[]const u8 {
-    const port = URL.getPort(url);
-    if (port.len > 0) {
-        return port;
-    }
-    return if (URL.defaultPort(schemeOf(url)) != null) "" else null;
-}
-
 const testing = @import("../../testing.zig");
 
 fn testParse(input: Input) !UrlPattern {
     return parse(testing.arena_allocator, input);
+}
+
+fn testMatches(pattern: UrlPattern, url: [:0]const u8) bool {
+    return pattern.matches(&.init(url));
 }
 
 fn expectPattern(expected: UrlPattern, input: Input) !void {
@@ -416,15 +427,15 @@ test "bidi.UrlPattern: dupe outlives the parse arena" {
         break :blk try parsed.dupe(testing.arena_allocator);
     };
 
-    try testing.expect(pattern.matches("http://127.0.0.1:9582/a?b=1"));
-    try testing.expect(!pattern.matches("http://127.0.0.1:9582/a"));
+    try testing.expect(testMatches(pattern, "http://127.0.0.1:9582/a?b=1"));
+    try testing.expect(!testMatches(pattern, "http://127.0.0.1:9582/a"));
 }
 
 test "bidi.UrlPattern: matches" {
     const url = "http://127.0.0.1:9582/a/b?q=1";
 
     const any = try testParse(.{ .type = .pattern });
-    try testing.expect(any.matches(url));
+    try testing.expect(testMatches(any, url));
 
     const match = [_]Input{
         .{ .type = .pattern, .protocol = "http" },
@@ -437,7 +448,7 @@ test "bidi.UrlPattern: matches" {
         .{ .type = .string, .pattern = url ++ "#frag" },
     };
     for (match) |input| {
-        try testing.expect((try testParse(input)).matches(url));
+        try testing.expect(testMatches(try testParse(input), url));
     }
 
     const no_match = [_]Input{
@@ -450,20 +461,20 @@ test "bidi.UrlPattern: matches" {
         .{ .type = .string, .pattern = "http://127.0.0.1:9582/a/b" },
     };
     for (no_match) |input| {
-        try testing.expect(!(try testParse(input)).matches(url));
+        try testing.expect(!testMatches(try testParse(input), url));
     }
 
     // The default port, in the pattern or in the url, is "".
     const default_port = try testParse(.{ .type = .pattern, .port = "443", .protocol = "https" });
-    try testing.expect(default_port.matches("https://example.com/"));
-    try testing.expect(!default_port.matches("https://example.com:8443/"));
+    try testing.expect(testMatches(default_port, "https://example.com/"));
+    try testing.expect(!testMatches(default_port, "https://example.com:8443/"));
 
     // No query and an empty query are the same.
     const empty_search = try testParse(.{ .type = .pattern, .search = "" });
-    try testing.expect(empty_search.matches("http://example.com/"));
-    try testing.expect(empty_search.matches("http://example.com/?"));
+    try testing.expect(testMatches(empty_search, "http://example.com/"));
+    try testing.expect(testMatches(empty_search, "http://example.com/?"));
 
     // IPv6.
     const ipv6 = try testParse(.{ .type = .pattern, .hostname = "[::1]" });
-    try testing.expect(ipv6.matches("http://[::1]:8080/"));
+    try testing.expect(testMatches(ipv6, "http://[::1]:8080/"));
 }

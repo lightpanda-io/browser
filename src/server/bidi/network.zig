@@ -67,8 +67,9 @@ pub const Intercept = struct {
     url_patterns: []const UrlPattern,
 
     // The spec's "get the network intercepts", for one intercept.
-    // `context` is the request's top-level context, `url` its url.
-    fn matches(self: *const Intercept, phase: InterceptPhase, context: ?[]const u8, url: [:0]const u8) bool {
+    // `context` is the request's top-level context, `url` its url, split
+    // once for all the intercepts.
+    fn matches(self: *const Intercept, phase: InterceptPhase, context: ?[]const u8, url: *const UrlPattern.Components) bool {
         if (self.context) |*id| {
             const c = context orelse return false;
             if (!std.mem.eql(u8, id, c)) return false;
@@ -924,7 +925,7 @@ test "bidi.network: addIntercept errors" {
 test "bidi.network: Intercept.matches" {
     const arena = testing.arena;
     const context = "11111111-1111-4111-8111-111111111111";
-    const url = "http://127.0.0.1:9582/a";
+    const url: UrlPattern.Components = .init("http://127.0.0.1:9582/a");
 
     const patterns = [_]UrlPattern{
         try UrlPattern.parse(arena, .{ .type = .pattern, .pathname = "/a" }),
@@ -937,20 +938,20 @@ test "bidi.network: Intercept.matches" {
         .url_patterns = &patterns,
     };
 
-    try testing.expect(intercept.matches(.beforeRequestSent, context, url));
+    try testing.expect(intercept.matches(.beforeRequestSent, context, &url));
     // Another phase.
-    try testing.expect(!intercept.matches(.responseStarted, context, url));
+    try testing.expect(!intercept.matches(.responseStarted, context, &url));
     // Another context, or no context (a request with no top-level context).
-    try testing.expect(!intercept.matches(.beforeRequestSent, "22222222-2222-4222-8222-222222222222", url));
-    try testing.expect(!intercept.matches(.beforeRequestSent, null, url));
+    try testing.expect(!intercept.matches(.beforeRequestSent, "22222222-2222-4222-8222-222222222222", &url));
+    try testing.expect(!intercept.matches(.beforeRequestSent, null, &url));
     // One pattern is enough.
-    try testing.expect(intercept.matches(.beforeRequestSent, context, "http://localhost:9582/b"));
-    try testing.expect(!intercept.matches(.beforeRequestSent, context, "http://127.0.0.1:9582/b"));
+    try testing.expect(intercept.matches(.beforeRequestSent, context, &.init("http://localhost:9582/b")));
+    try testing.expect(!intercept.matches(.beforeRequestSent, context, &.init("http://127.0.0.1:9582/b")));
 
     // No context and no patterns: every request in the phase.
     intercept.context = null;
     intercept.url_patterns = &.{};
-    try testing.expect(intercept.matches(.beforeRequestSent, null, "http://example.com/"));
+    try testing.expect(intercept.matches(.beforeRequestSent, null, &.init("http://example.com/")));
 }
 
 test "bidi.network: unknown command" {
