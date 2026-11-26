@@ -192,6 +192,13 @@ fn resolveMargin(self: *Element, margin: StyleManager.Percent, owner: *Frame) f6
     return margin.of(containingBlockWidth(self, owner));
 }
 
+/// The box's top and bottom margins (see StyleManager.blockMargins). Like a
+/// left or right one, a percentage is of the containing block's width.
+pub fn blockMargins(self: *Element, owner: *Frame) [2]f64 {
+    const top, const bottom = owner._style_manager.blockMargins(self);
+    return .{ resolveMargin(self, top, owner), resolveMargin(self, bottom, owner) };
+}
+
 // A block narrower than its containing block: an auto left margin takes the
 // room left over, or half of it when the right one is auto too (centred). A
 // flex row shares its free space among its items' auto margins instead (see
@@ -896,7 +903,12 @@ pub const Anchor = struct {
             resolveInset(s, base, axis, owner)
         else
             containingSize(base, axis, owner) - resolveInset(end.?, base, axis, owner) - boxSize(el, axis, owner);
-        if (axis == .horizontal) {
+        if (axis == .vertical) {
+            // Its margin box is what the inset places. An auto margin is 0:
+            // it doesn't centre between both insets.
+            const top, const bottom = blockMargins(el, owner);
+            offset += if (start == null) -bottom else top;
+        } else {
             // Its margin box is what the inset places
             if (start == null) {
                 offset -= marginOn(el, .right, owner);
@@ -979,9 +991,9 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     const start = contentStart(parent, .height, owner);
     var flow: Flow = .of(parent, owner);
     if (flow.mode == .row) {
-        // A row's children all sit at its content's top (see Flow.at):
-        // nothing to stack, so nothing to cache.
-        return start;
+        // A row's children all sit at its content's top, below their own
+        // top margin (see Flow.at): nothing to stack, so nothing to cache.
+        return start + blockMargins(self, owner)[0];
     }
 
     var next = parent.asNode().flatFirstChild(owner);
@@ -996,6 +1008,7 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     if (resume_point) |point| {
         // From cached offsets, which include the padding
         flow.offset = point.offset - start;
+        flow.pend(point.margin);
         next = point.next;
         position = point.position;
         // The siblings replayed up to there keep the offsets they have
@@ -1030,6 +1043,7 @@ const ResumePoint = struct {
     next: ?*Node, // the first sibling to place
     position: u32, // its index among the parent's element children
     offset: f64, // Flow.offset there, the line empty
+    margin: f64 = 0, // the bottom margin of the block it's below (see Flow.pend)
 };
 
 // The nearest sibling before self whose cached offset gives the flow's state
@@ -1048,25 +1062,31 @@ fn resumePoint(self: *Element, parent: *Element, gap: f64, owner: *Frame) ?Resum
     }
 
     // A line-level box sits at its line's top whatever the line's height, so
-    // the sibling right before it that isn't a block is enough: Flow.at puts
-    // that one at the line's top too.
+    // the line-level sibling right before it is enough: Flow.at puts that one
+    // at the line's top too, below its top margin. One the flow doesn't place
+    // isn't: it sits above the margin the block before it left (Flow.at).
     var adjacent = style_manager.flowRole(self) != .block;
     var previous = self_node.previousSibling();
     while (previous) |node| : (previous = node.previousSibling()) {
         const el = node.is(Element) orelse continue;
-        if (style_manager.flowRole(el) != .block) {
-            if (adjacent) {
-                if (style_manager.getCachedPlacement(el, parent)) |placement| {
-                    return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset };
+        switch (style_manager.flowRole(el)) {
+            .none, .out_of_flow => continue,
+            .line => {
+                if (adjacent) {
+                    if (style_manager.getCachedPlacement(el, parent)) |placement| {
+                        return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset - blockMargins(el, owner)[0] };
+                    }
+                    adjacent = false;
                 }
-                adjacent = false;
-            }
-            continue;
+                continue;
+            },
+            .block => {},
         }
         adjacent = false;
-        // A block ends its line: the next box goes right below it
+        // A block ends its line: the next box goes right below it, and its
+        // bottom margin
         const placement = style_manager.getCachedPlacement(el, parent) orelse continue;
-        return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset + boxHeight(el, owner) + gap };
+        return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset + boxHeight(el, owner) + gap, .margin = blockMargins(el, owner)[1] };
     }
     return null;
 }
@@ -1145,12 +1165,13 @@ pub fn boxHeight(self: *Element, owner: *Frame) f64 {
 
 // The height of a box that spans between its vertical insets (see
 // StyleManager.heightInsets): what they leave of its containing block.
-// Vertical margins aren't taken out, as Anchor doesn't place by them either.
+// Its margins are taken out: Anchor places its margin box.
 fn insetHeight(self: *Element, edges: Edges, owner: *Frame) ?f64 {
     const style_manager = &owner._style_manager;
     const top, const bottom = style_manager.heightInsets(self) orelse return null;
     const base = style_manager.containingBlock(self);
-    const spanned = containingSize(base, .vertical, owner) - resolveInset(top, base, .vertical, owner) - resolveInset(bottom, base, .vertical, owner);
+    const margin_top, const margin_bottom = blockMargins(self, owner);
+    const spanned = containingSize(base, .vertical, owner) - resolveInset(top, base, .vertical, owner) - resolveInset(bottom, base, .vertical, owner) - margin_top - margin_bottom;
     return clampHeight(self, @max(spanned, edges.padding), edges, owner);
 }
 
@@ -1228,6 +1249,10 @@ fn measureContentHeight(self: *Element, owner: *Frame) f64 {
             }
         }
         if (wrap) |*w| {
+            if (flow.margin.size() != 0 and isAllWhitespace(text.ownData()) == false) {
+                // A line below a block: past its bottom margin
+                flow.settle();
+            }
             w.add(text.ownData());
             continue;
         }
@@ -1240,6 +1265,7 @@ fn measureContentHeight(self: *Element, owner: *Frame) f64 {
         if (isAllWhitespace(text.ownData())) {
             continue;
         }
+        flow.settle();
         const at_box = wraps_at_box orelse blk: {
             const wraps = style_manager.wrapsOwnText(self);
             wraps_at_box = wraps;
@@ -1282,8 +1308,32 @@ const Flow = struct {
     gap: f64 = 0,
     // Whether the last box stacked left its gap, with nothing after it yet
     trailing_gap: bool = false,
+    // The bottom margin of the block stacked last, not yet below it: it
+    // collapses with the margin that meets it next. Always empty while the
+    // line has something on it.
+    margin: Collapsed = .{},
+    // Whether stacked boxes' margins collapse: not in a flex column or a grid
+    collapses: bool = true,
     // The grid cell at() found, for advance() past the same item
     cell: ?struct { el: *Element, cell: GridCell } = null,
+    // The margins at() read, for advance() past the same box
+    margins: ?struct { el: *Element, top: f64, bottom: f64 } = null,
+
+    // Margins that meet collapse into one: the largest positive one less the
+    // largest negative one's size (CSS 2 §8.3.1). Parent and child margins
+    // don't: a child's stay inside its parent, as if it had padding.
+    const Collapsed = struct {
+        positive: f64 = 0,
+        negative: f64 = 0,
+
+        fn with(self: Collapsed, margin: f64) Collapsed {
+            return .{ .positive = @max(self.positive, margin), .negative = @min(self.negative, margin) };
+        }
+
+        fn size(self: Collapsed) f64 {
+            return self.positive + self.negative;
+        }
+    };
 
     // StyleManager.ChildFlow, with a wrapping grid's column count
     const Mode = union(enum) {
@@ -1295,29 +1345,65 @@ const Flow = struct {
     fn of(parent: *Element, owner: *Frame) Flow {
         const style_manager = &owner._style_manager;
         return switch (style_manager.childFlow(parent)) {
-            .block => .{ .mode = .block, .gap = style_manager.gap(parent, .height) },
+            .block => .{ .mode = .block, .gap = style_manager.gap(parent, .height), .collapses = style_manager.collapsesMargins(parent) },
             .row => .{ .mode = .row },
             .grid => .{ .mode = .{ .grid = gridTrackCount(parent, owner) }, .gap = style_manager.gap(parent, .height) },
         };
     }
 
-    // The content's height so far: the last box's gap has nothing below it
+    // The content's height so far: the last box's gap has nothing below it,
+    // its margin does
     fn height(self: *const Flow) f64 {
-        const total = self.offset + self.line;
-        return if (self.trailing_gap and self.line == 0) total - self.gap else total;
+        const total = self.offset + self.line + self.margin.size();
+        return @max(0, if (self.trailing_gap and self.line == 0) total - self.gap else total);
     }
 
-    // Where el goes, from the parent's top. Its own height only moves what
-    // comes after it.
+    // A bottom margin left below a box the walk resumes after (see
+    // ResumePoint)
+    fn pend(self: *Flow, margin: f64) void {
+        if (self.collapses) {
+            self.margin = self.margin.with(margin);
+        } else {
+            self.offset += margin;
+        }
+    }
+
+    // Something on a line: the margin left above it no longer collapses
+    fn settle(self: *Flow) void {
+        self.offset += self.margin.size();
+        self.margin = .{};
+    }
+
+    fn marginsOf(self: *Flow, el: *Element, owner: *Frame) [2]f64 {
+        if (self.margins) |m| {
+            if (m.el == el) {
+                return .{ m.top, m.bottom };
+            }
+        }
+        const top, const bottom = blockMargins(el, owner);
+        self.margins = .{ .el = el, .top = top, .bottom = bottom };
+        return .{ top, bottom };
+    }
+
+    // Where el goes, from the parent's top: below its top margin. Its own
+    // height only moves what comes after it.
     fn at(self: *Flow, el: *Element, role: StyleManager.FlowRole, owner: *Frame) f64 {
+        if (role == .none) {
+            return self.offset;
+        }
         switch (self.mode) {
-            .row => return self.offset,
-            .block => {
-                if (role != .block) {
-                    return self.offset;
-                }
-                // A block ends the line and starts below it
-                return self.offset + self.line;
+            .row => return self.offset + self.marginsOf(el, owner)[0],
+            .block => switch (role) {
+                .none => unreachable,
+                // Where it would be, without moving anything
+                .out_of_flow => return self.offset + self.margin.with(self.marginsOf(el, owner)[0]).size(),
+                .line => {
+                    self.settle();
+                    return self.offset + self.marginsOf(el, owner)[0];
+                },
+                // A block ends the line and starts below it, its top margin
+                // collapsed with the one left above it
+                .block => return self.offset + self.line + self.margin.with(self.marginsOf(el, owner)[0]).size(),
             },
             .grid => |tracks| {
                 if (role == .none or role == .out_of_flow) {
@@ -1337,11 +1423,23 @@ const Flow = struct {
         }
         const box_height = boxHeight(el, owner);
         switch (self.mode) {
-            .row => {},
-            .block => if (role == .block) {
-                self.offset += self.line + box_height + self.gap;
-                self.line = 0;
-                self.trailing_gap = true;
+            .row => {
+                const top, const bottom = self.marginsOf(el, owner);
+                self.line = @max(self.line, top + box_height + bottom);
+                return;
+            },
+            .block => {
+                const top, const bottom = self.marginsOf(el, owner);
+                if (role == .block) {
+                    self.offset += self.line + self.margin.with(top).size() + box_height + self.gap;
+                    self.margin = .{};
+                    self.pend(bottom);
+                    self.line = 0;
+                    self.trailing_gap = true;
+                    return;
+                }
+                self.settle();
+                self.line = @max(self.line, top + box_height + bottom);
                 return;
             },
             .grid => |tracks| {

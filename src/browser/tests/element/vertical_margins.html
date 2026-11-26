@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<style>
+  /* The padding keeps the children's margins inside (Chrome would collapse
+     a first or last child's margin through the parent) */
+  .vmWrap { width: 400px; padding: 1px 0; }
+  .vmBox { height: 10px; }
+  .vmGap20 { margin-bottom: 20px; }
+  .vmTop { margin-top: 2rem; }
+</style>
+
+<body>
+
+<script id="siblings">
+{
+  const wrap = document.createElement('div');
+  wrap.className = 'vmWrap';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const between = (a, b) => rect(b).top - rect(a).bottom;
+  const pair = (a, b) => {
+    wrap.innerHTML = `<div id="vm-a" class="vmBox" style="${a}"></div><div id="vm-b" class="vmBox" style="${b}"></div>`;
+    return between('vm-a', 'vm-b');
+  };
+
+  // Adjacent margins collapse: the larger positive one wins
+  testing.expectEqual(20, pair('margin-bottom: 20px', 'margin-top: 10px'));
+  testing.expectEqual(30, pair('margin-bottom: 20px', 'margin-top: 30px'));
+  // A negative one is subtracted from the positive one; two negative ones,
+  // the most negative
+  testing.expectEqual(15, pair('margin-bottom: 20px', 'margin-top: -5px'));
+  testing.expectEqual(-10, pair('margin-bottom: -5px', 'margin-top: -10px'));
+  // Shorthands and the logical names
+  testing.expectEqual(15, pair('margin: 15px 0', 'margin: 5px 0'));
+  testing.expectEqual(25, pair('margin-block: 5px 25px', 'margin-block: 10px'));
+  testing.expectEqual(12, pair('margin-block-end: 12px', 'margin-block-start: 3px'));
+  // auto is 0
+  testing.expectEqual(0, pair('margin-bottom: auto', 'margin: auto'));
+  // A percentage is of the containing block's width, even vertically
+  testing.expectEqual(40, pair('', 'margin-top: 10%'));
+
+  // From a sheet, in a relative unit
+  wrap.innerHTML = '<div id="vm-a" class="vmBox vmGap20"></div><div id="vm-b" class="vmBox vmTop"></div>';
+  testing.expectEqual(32, between('vm-a', 'vm-b'));
+
+  // Something the flow doesn't place doesn't separate them
+  wrap.innerHTML = '<div id="vm-a" class="vmBox vmGap20"></div><script><\/script><div style="display: none"></div><div style="position: absolute"></div><div id="vm-b" class="vmBox" style="margin-top: 5px"></div>';
+  testing.expectEqual(20, between('vm-a', 'vm-b'));
+
+  // A first child's top margin and a last child's bottom one stay inside a
+  // parent with padding
+  wrap.innerHTML = '<div id="vm-a" class="vmBox" style="margin-top: 7px"></div><div id="vm-b" class="vmBox" style="margin-bottom: 9px"></div>';
+  testing.expectEqual(8, rect('vm-a').top - wrap.getBoundingClientRect().top);
+  testing.expectEqual(10, wrap.getBoundingClientRect().bottom - rect('vm-b').bottom);
+  testing.expectEqual(38, wrap.offsetHeight);
+
+  wrap.remove();
+}
+</script>
+
+<script id="negativeBottom">
+{
+  // A negative bottom margin as tall as the box: what follows overlaps it
+  const wrap = document.createElement('div');
+  wrap.className = 'vmWrap';
+  wrap.innerHTML = '<div id="vm-tall" style="height: 300px; margin-bottom: -300px"></div><div id="vm-next" class="vmBox"></div>';
+  document.body.appendChild(wrap);
+  testing.expectEqual($('#vm-tall').getBoundingClientRect().top, $('#vm-next').getBoundingClientRect().top);
+  testing.expectEqual(12, wrap.offsetHeight);
+  wrap.remove();
+}
+</script>
+
+<script id="readOrder">
+{
+  // The same offsets, whichever box is read first (cached offsets resume
+  // the walk below a box, with its margin still to collapse)
+  const wrap = document.createElement('div');
+  wrap.className = 'vmWrap';
+  const html = '<div id="vm-1" class="vmBox" style="margin-bottom: 20px"></div>' +
+    '<div id="vm-2" class="vmBox" style="margin: 10px 0 30px"></div>' +
+    '<span id="vm-3">text</span>' +
+    '<div id="vm-4" class="vmBox" style="margin-top: 40px"></div>' +
+    '<div id="vm-5" class="vmBox" style="margin-top: 5px"></div>';
+  document.body.appendChild(wrap);
+  const tops = (order) => {
+    wrap.innerHTML = html;
+    const top = wrap.getBoundingClientRect().top;
+    const result = {};
+    for (const i of order) {
+      result[i] = $('#vm-' + i).getBoundingClientRect().top - top;
+    }
+    return [1, 2, 4, 5].map((i) => result[i]);
+  };
+  const forward = tops([1, 2, 3, 4, 5]);
+  testing.expectEqual([1, 31, forward[2], forward[2] + 15], forward);
+  testing.expectEqual(forward, tops([5, 4, 3, 2, 1]));
+  testing.expectEqual(forward, tops([2, 5, 1, 4, 3]));
+  wrap.remove();
+}
+</script>
+
+<script id="writes">
+{
+  const wrap = document.createElement('div');
+  wrap.className = 'vmWrap';
+  wrap.innerHTML = '<div id="vm-a" class="vmBox"></div><div id="vm-b" class="vmBox"></div><div id="vm-c" class="vmBox"></div>';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const between = (a, b) => rect(b).top - rect(a).bottom;
+  testing.expectEqual(0, between('vm-a', 'vm-b'));
+
+  // An inline write moves the box and what follows
+  $('#vm-b').style.marginTop = '12px';
+  testing.expectEqual(12, between('vm-a', 'vm-b'));
+  testing.expectEqual(0, between('vm-b', 'vm-c'));
+  $('#vm-a').style.marginBottom = '20px';
+  testing.expectEqual(20, between('vm-a', 'vm-b'));
+  $('#vm-b').style.margin = '0';
+  testing.expectEqual(20, between('vm-a', 'vm-b'));
+  // A class change (the inline margin would win over it)
+  $('#vm-b').style.margin = '';
+  $('#vm-b').className = 'vmBox vmTop';
+  testing.expectEqual(32, between('vm-a', 'vm-b'));
+  $('#vm-b').className = 'vmBox';
+  testing.expectEqual(20, between('vm-a', 'vm-b'));
+  wrap.remove();
+}
+</script>
+
+<script id="inline">
+{
+  // A plain inline box's vertical margins don't move its line
+  const wrap = document.createElement('div');
+  wrap.className = 'vmWrap';
+  wrap.innerHTML = '<div id="vm-a" class="vmBox"></div><span id="vm-span" style="margin: 50px 0">text</span>';
+  document.body.appendChild(wrap);
+  const plain = wrap.offsetHeight;
+  $('#vm-span').style.margin = '0';
+  testing.expectEqual(plain, wrap.offsetHeight);
+  wrap.remove();
+}
+</script>
+
+<script id="flex">
+{
+  const wrap = document.createElement('div');
+  wrap.className = 'vmWrap';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // A flex column's items' margins don't collapse
+  wrap.innerHTML = '<div id="vm-col" style="display: flex; flex-direction: column"><div id="vm-a" class="vmBox" style="margin-bottom: 20px"></div><div id="vm-b" class="vmBox" style="margin-top: 10px"></div></div>';
+  testing.expectEqual(30, rect('vm-b').top - rect('vm-a').bottom);
+  testing.expectEqual(50, $('#vm-col').offsetHeight);
+
+  // A row's item sits below its top margin; the row is as tall as its
+  // tallest item's margin box
+  wrap.innerHTML = '<div id="vm-row" style="display: flex; align-items: flex-start"><div id="vm-a" class="vmBox" style="width: 50px; margin-top: 15px; margin-bottom: 5px"></div><div id="vm-b" class="vmBox" style="width: 50px"></div></div>';
+  testing.expectEqual(15, rect('vm-a').top - rect('vm-row').top);
+  testing.expectEqual(0, rect('vm-b').top - rect('vm-row').top);
+  testing.expectEqual(30, $('#vm-row').offsetHeight);
+  wrap.remove();
+}
+</script>
+
+<script id="positioned">
+{
+  const wrap = document.createElement('div');
+  wrap.className = 'vmWrap';
+  wrap.style.cssText = 'position: relative; height: 200px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const top = () => wrap.getBoundingClientRect().top;
+
+  // The inset places the margin box
+  wrap.innerHTML = '<div id="vm-abs" style="position: absolute; top: 10px; margin-top: 5px; height: 10px"></div>';
+  testing.expectEqual(15, rect('vm-abs').top - top());
+  wrap.innerHTML = '<div id="vm-abs" style="position: absolute; bottom: 10px; margin-bottom: 5px; height: 10px"></div>';
+  testing.expectEqual(202 - 15, rect('vm-abs').bottom - top());
+  // Between both insets, the margins are taken from its height
+  wrap.innerHTML = '<div id="vm-abs" style="position: absolute; top: 0; bottom: 0; margin: 20px 0 30px"></div>';
+  testing.expectEqual(20, rect('vm-abs').top - top());
+  testing.expectEqual(202 - 50, rect('vm-abs').height);
+  wrap.remove();
+}
+</script>

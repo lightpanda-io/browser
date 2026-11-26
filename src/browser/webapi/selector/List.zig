@@ -299,15 +299,24 @@ fn findIdSelector(selector: *const Selector.Selector) ?IdAnchor {
 
 pub fn matches(node: *Node, selector: Selector.Selector, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const el = node.is(Node.Element) orelse return false;
+    return matchSides(el, selector, scope, nth, frame) == .both;
+}
 
+/// `matches`, telling where it failed: the rightmost compound, or what's
+/// left of it, which depends on the element alone and not on that compound.
+pub const Sides = enum { both, subject_failed, left_failed };
+
+pub fn matchSides(el: *Node.Element, selector: Selector.Selector, scope: *Node, nth: ?*NthCache, frame: *Frame) Sides {
     if (!matchesCompound(el, selector.rightmost(), scope, nth, frame)) {
-        return false;
+        return .subject_failed;
     }
     if (selector.segments().len == 0) {
-        return true;
+        return .both;
     }
-
-    return matchSegments(node, selector, selector.segments().len - 1, null, scope, nth, frame);
+    if (matchSegments(el.asNode(), selector, selector.segments().len - 1, null, scope, nth, frame)) {
+        return .both;
+    }
+    return .left_failed;
 }
 
 // Match segments backward, with support for backtracking on subsequent_sibling
