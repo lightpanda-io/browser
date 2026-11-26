@@ -42,7 +42,7 @@ const IntersectionObserver = @This();
 _rc: lp.RC = .{},
 _arena: *lp.Arena,
 _callback: js.Function.Global,
-_observing: std.ArrayList(Observation) = .empty,
+_observing: std.AutoArrayHashMapUnmanaged(*Element, Observation) = .empty,
 _root: ?*Element = null,
 /// The `root` option as given (an Element or the Document), for the getter;
 /// `_root` is the element intersections are computed against.
@@ -59,9 +59,8 @@ _track_visibility: bool = false,
 // these are RC'd (by us, and v8)
 _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .empty,
 
-// A target and what it was last reported as
+// What a target was last reported as
 const Observation = struct {
-    target: *Element,
     threshold_index: i32 = -1, // first check is always reported
     is_intersecting: bool = false,
 };
@@ -242,40 +241,36 @@ pub fn acquireRef(self: *IntersectionObserver) void {
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
-    for (self._observing.items) |observation| {
-        if (observation.target == target) {
-            return;
-        }
+    const gop = try self._observing.getOrPut(self._arena.allocator(), target);
+    if (gop.found_existing) {
+        return;
     }
-
-    try self._observing.append(self._arena.allocator(), .{ .target = target });
-    if (self._observing.items.len == 1) {
+    gop.value_ptr.* = .{};
+    if (self._observing.count() == 1) {
         try Frame.observers.registerIntersectionObserver(frame, self);
     }
     Frame.observers.scheduleIntersectionChecks(frame);
 }
 
 fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
-    const original_length = self._observing.items.len;
-    for (self._observing.items, 0..) |observation, i| {
-        if (observation.target == target) {
-            _ = self._observing.swapRemove(i);
+    // swapRemove reorders the remaining targets, so entries can be delivered
+    // out of observe() order after an unobserve (orderedRemove is O(n)).
+    if (self._observing.swapRemove(target) == false) {
+        return;
+    }
 
-            // Remove any pending entries for this target.
-            var j: usize = 0;
-            while (j < self._pending_entries.items.len) {
-                if (self._pending_entries.items[j]._target == target) {
-                    const entry = self._pending_entries.swapRemove(j);
-                    entry.releaseRef(frame.page);
-                } else {
-                    j += 1;
-                }
-            }
-            break;
+    // Remove any pending entries for this target.
+    var i: usize = 0;
+    while (i < self._pending_entries.items.len) {
+        if (self._pending_entries.items[i]._target == target) {
+            const entry = self._pending_entries.swapRemove(i);
+            entry.releaseRef(frame.page);
+        } else {
+            i += 1;
         }
     }
 
-    if (original_length > 0 and self._observing.items.len == 0) {
+    if (self._observing.count() == 0) {
         Frame.observers.unregisterIntersectionObserver(frame, self);
     }
 }
@@ -288,7 +283,7 @@ pub fn reset(self: *IntersectionObserver, page: *Page) void {
 }
 
 pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
-    const registered = self._observing.items.len > 0;
+    const registered = self._observing.count() > 0;
     self.reset(frame.page);
     if (registered) {
         Frame.observers.unregisterIntersectionObserver(frame, self);
@@ -491,8 +486,7 @@ fn thresholdIndex(self: *const IntersectionObserver, data: IntersectionData) i32
     return @intCast(self._threshold.len);
 }
 
-fn checkIntersection(self: *IntersectionObserver, observation: *Observation, frame: *Frame) !void {
-    const target = observation.target;
+fn checkIntersection(self: *IntersectionObserver, target: *Element, observation: *Observation, frame: *Frame) !void {
     if (target.ownerFrame(frame) == null) {
         // A frameless document (DOMParser, createHTMLDocument) isn't rendered:
         // nothing is reported until the target is adopted into one that is.
@@ -540,12 +534,13 @@ pub fn reportsNewTargetIntersecting(self: *const IntersectionObserver) bool {
 }
 
 pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {
-    if (self._observing.items.len == 0) {
+    if (self._observing.count() == 0) {
         return;
     }
 
-    for (self._observing.items) |*observation| {
-        try self.checkIntersection(observation, frame);
+    // Nothing here runs JS, so no observe/unobserve can move these slices.
+    for (self._observing.keys(), self._observing.values()) |target, *observation| {
+        try self.checkIntersection(target, observation, frame);
     }
 
     if (self._pending_entries.items.len > 0) {
