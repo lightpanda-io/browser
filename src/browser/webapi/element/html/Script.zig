@@ -112,7 +112,6 @@ pub const JsApi = struct {
     pub const @"defer" = reflect.boolean("defer");
     pub const async = bridge.accessor(Script.getAsync, Script.setAsync, .{ .ce_reactions = true });
     pub const @"type" = reflect.string("type");
-    pub const nonce = reflect.string("nonce");
     pub const charset = reflect.string("charset");
     pub const noModule = reflect.boolean("nomodule");
     pub const supports = bridge.function(Script.supports, .{ .static = true });

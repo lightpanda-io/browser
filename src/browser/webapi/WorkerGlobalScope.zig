@@ -303,6 +303,14 @@ fn setConsole(self: *WorkerGlobalScope, value: JS.Value) void {
     self.replaceGlobalProperty(value, "console");
 }
 
+fn getOrigin(self: *const WorkerGlobalScope) []const u8 {
+    return self.origin orelse "null";
+}
+
+fn setOrigin(self: *WorkerGlobalScope, value: JS.Value) void {
+    self.replaceGlobalProperty(value, "origin");
+}
+
 fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
 }
@@ -564,6 +572,7 @@ pub const JsApi = struct {
     }.wrap, null, .{});
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
+    pub const origin = bridge.accessor(WorkerGlobalScope.getOrigin, WorkerGlobalScope.setOrigin, .{});
     pub const indexedDB = bridge.accessor(WorkerGlobalScope.getIndexedDB, null, .{});
     pub const caches = bridge.accessor(WorkerGlobalScope.getCaches, null, .{});
 

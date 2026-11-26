@@ -177,7 +177,6 @@ pub const JsApi = struct {
     };
 
     const reflect = Element.Reflect(Link);
-    pub const nonce = reflect.string("nonce");
 
     pub const as = reflect.enumerated("as", &.{ "fetch", "audio", "document", "embed", "font", "image", "manifest", "object", "report", "script", "sharedworker", "style", "track", "video", "worker", "xslt" }, .{});
     pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{ .ce_reactions = true });

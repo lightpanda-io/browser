@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body>
+
+<script id=parsed nonce="abc">
+{
+  const script = document.getElementById('parsed');
+  testing.expectEqual('abc', script.nonce);
+  testing.expectEqual('abc', script.getAttribute('nonce'));
+}
+</script>
+
+<script id=namespaces>
+{
+  const ns = {
+    html: 'http://www.w3.org/1999/xhtml',
+    svg: 'http://www.w3.org/2000/svg',
+    mathml: 'http://www.w3.org/1998/Math/MathML',
+  };
+  for (const [namespace, name] of [['html', 'div'], ['html', 'style'], ['svg', 'script'], ['svg', 'svg'], ['mathml', 'mrow']]) {
+    const el = document.createElementNS(ns[namespace], name);
+    testing.expectEqual('', el.nonce);
+
+    el.setAttribute('nonce', 'x');
+    testing.expectEqual('x', el.nonce);
+
+    el.nonce = 'y';
+    testing.expectEqual('y', el.nonce);
+    testing.expectEqual('y', el.cloneNode().nonce);
+    testing.diverges("Chrome keeps the nonce in an internal slot: the IDL setter leaves the attribute alone", () => {
+      testing.expectEqual('y', el.getAttribute('nonce'));
+    });
+
+    el.removeAttribute('nonce');
+    testing.expectEqual('', el.nonce);
+  }
+}
+</script>
