@@ -680,7 +680,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
         .arraybuffer => .{ .arraybuffer = .{ .values = data } },
         .blob => blk: {
             const content_type = self._override_mime_raw orelse self._response_mime_raw orelse "text/xml";
-            const blob = try Blob.initFromBytes(data, content_type, exec);
+            const blob = try Blob.initFromContentType(data, content_type, exec);
             blob.acquireRef();
             break :blk .{ .blob = blob };
         },
