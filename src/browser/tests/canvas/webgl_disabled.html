@@ -16,11 +16,11 @@
 }
 </script>
 
-<script id=no_new_globals>
+<script id=interfaces_stay>
 {
-  testing.expectEqual('undefined', typeof WebGL2RenderingContext);
-  testing.expectEqual('undefined', typeof WebGLBuffer);
-  testing.expectEqual('undefined', typeof WebGLVertexArrayObject);
+  // Like Chrome and Firefox with WebGL off: the interfaces exist, getContext is null
   testing.expectEqual('function', typeof WebGLRenderingContext);
+  testing.expectEqual('function', typeof WebGL2RenderingContext);
+  testing.expectEqual('function', typeof WebGLBuffer);
 }
 </script>

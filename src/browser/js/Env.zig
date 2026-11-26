@@ -37,7 +37,6 @@ const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 const SharedWorkerGlobalScope = @import("../webapi/SharedWorkerGlobalScope.zig");
 const ServiceWorkerGlobalScope = @import("../webapi/ServiceWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
-const webgl = @import("../webapi/canvas/webgl.zig");
 
 const v8 = js.v8;
 const log = lp.log;
@@ -344,9 +343,6 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     if (global._session.experimental_features.serviceworker == false) {
         self.hideServiceWorker(is_frame, v8_context, global_obj);
     }
-    if (global._session.experimental_features.webgl == false) {
-        self.hideWebGL(v8_context, global_obj);
-    }
 
     // Store our TAO inside the internal field of the global object. This
     // maps the v8::Object -> Zig instance.
@@ -454,23 +450,9 @@ pub fn hideSecureContextInterfaces(self: *const Env, v8_context: *const v8.Conte
     self.deletePrototypeMember(v8_context, global_obj, "navigator", "clipboard");
 }
 
-// WebGL2RenderingContext and the WebGL object interfaces, which only the
-// webgl experimental feature hands out. Without it a page sees what it saw
-// before they existed, and an uncaught ReferenceError on
-// WebGL2RenderingContext still counts as a WebGL use (see PageStatus).
-pub fn hideWebGL(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
-    for (&self.disabled_api_names.webgl, webgl.global_names) |*eternal, name| {
-        self.deleteGlobalName(v8_context, global_obj, eternalString(eternal, self.isolate.handle), name);
-    }
-}
-
 fn deleteGlobal(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, comptime name: []const u8) void {
-    self.deleteGlobalName(v8_context, global_obj, self.disabled_api_names.get(self.isolate.handle, name), name);
-}
-
-fn deleteGlobalName(_: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, key: *const v8.String, name: []const u8) void {
     var deleted: v8.MaybeBool = undefined;
-    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(key), &deleted);
+    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, name)), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
         log.warn(.js, "API not hidden", .{ .interface = "global", .member = name });
     }
@@ -1024,7 +1006,6 @@ const DisabledApiNames = struct {
     payment_method_change_event: v8.Eternal,
     clipboard: v8.Eternal,
     clipboard_interface: v8.Eternal,
-    webgl: [webgl.global_names.len]v8.Eternal,
 
     fn init(isolate: *v8.Isolate) DisabledApiNames {
         var self: DisabledApiNames = undefined;
@@ -1040,9 +1021,6 @@ const DisabledApiNames = struct {
         intern(isolate, &self.payment_method_change_event, "PaymentMethodChangeEvent");
         intern(isolate, &self.clipboard, "clipboard");
         intern(isolate, &self.clipboard_interface, "Clipboard");
-        inline for (webgl.global_names, &self.webgl) |name, *out| {
-            intern(isolate, out, name);
-        }
         return self;
     }
 
@@ -1052,13 +1030,10 @@ const DisabledApiNames = struct {
     }
 
     fn get(self: *const DisabledApiNames, isolate: *v8.Isolate, comptime field: []const u8) *const v8.String {
-        return eternalString(&@field(self, field), isolate);
+        const eternal = &@field(self, field);
+        return @ptrCast(@alignCast(v8.v8__Eternal__Get(@constCast(eternal), isolate).?));
     }
 };
-
-fn eternalString(eternal: *const v8.Eternal, isolate: *v8.Isolate) *const v8.String {
-    return @ptrCast(@alignCast(v8.v8__Eternal__Get(@constCast(eternal), isolate).?));
-}
 
 const PrivateSymbols = struct {
     const Private = @import("Private.zig");

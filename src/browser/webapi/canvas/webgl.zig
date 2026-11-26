@@ -51,16 +51,6 @@ pub const object_types = [_]type{
     WebGLSampler, WebGLSync,        WebGLTransformFeedback, WebGLVertexArrayObject,
 };
 
-/// Globals the flag adds: Env.hideWebGL deletes them when it's off.
-pub const global_names = blk: {
-    var names: [object_types.len + 1][:0]const u8 = undefined;
-    names[0] = "WebGL2RenderingContext";
-    for (object_types, names[1..]) |T, *name| {
-        name.* = T.JsApi.Meta.name;
-    }
-    break :blk names;
-};
-
 fn Object(comptime class_name: [:0]const u8) type {
     return struct {
         const Self = @This();
