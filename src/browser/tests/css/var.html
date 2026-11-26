@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+  var() in the properties layout reads: the variable's value on the element
+  (the nearest declaration up the tree), substituted before the property is
+  parsed. And what a change of the variable reaches afterwards.
+-->
+
+<style>
+  body { margin: 0 }
+  /* Tailwind v4's theme selector */
+  :root, :host { --spacing: .25rem; --w: 100px; --pad: 4px 8px; --loop-a: var(--loop-b); --loop-b: var(--loop-a); --kw: initial; --none: none; --big: calc(var(--spacing) * 10); --pos: absolute; }
+  #wrap { width: 300px }
+  .box { height: 10px }
+  .w { width: var(--w) }
+  .calc { width: calc(var(--spacing) * 10) }
+  .nested { width: var(--big) }
+  .fb { width: var(--nope, 33px) }
+  .fb2 { width: var(--nope, var(--w)) }
+  .fb3 { width: var(--nope, calc(var(--spacing) * 3)) }
+  .undef { width: 50px; } .undef { width: var(--nope) }
+  .loop { width: 60px; } .loop { width: var(--loop-a) }
+  .kw { width: 61px; } .kw { width: var(--kw) }
+  .pad { padding: var(--pad); width: 20px }
+  .padx { padding-inline: calc(var(--spacing) * 2); width: 20px }
+  .m { margin-left: var(--w) }
+  .scope { --w: 70px }
+  .imp { width: var(--w) !important } #imp { width: 5px }
+  .over { width: var(--w) } #over { width: 5px }
+  .disp { display: var(--none) }
+  .h { height: var(--w) }
+  .inset-p { position: relative; width: 200px; height: 50px }
+  .inset { position: var(--pos); inset: calc(var(--spacing) * 2) }
+  .late { width: var(--late) }
+  .cs { --w: 12px }
+  .upper { width: VAR(--w) }
+  .mixed { width: 10px; width: var(--w); }
+  .gap { display: flex; gap: var(--w) } .gap > i { width: 10px; height: 10px; display: block }
+  .attr[data-x] { --w: 15px }
+  .sib + .sibn { --w: 16px }
+
+  /* #4706 */
+  :root { --d: none; --v: hidden; --tt: uppercase; --chain: var(--d); }
+  #i-display { display: var(--d) }
+  #i-visibility { visibility: var(--v) }
+  #i-fallback { display: var(--missing, none) }
+  #i-chain { display: var(--chain) }
+  .i-scope { --local: none }
+  .i-scope #i-scoped { display: var(--local) }
+  .i-override { --d: block }
+  .i-override #i-overridden { display: var(--d) }
+  #i-upper { text-transform: var(--tt) }
+
+  /* An empty value is a value: Tailwind v3 composes touch-action from three */
+  :root { --e: ; --e2:; }
+  .e1 { width: var(--e) 10px }
+  .e2 { width: var(--e2) 11px }
+  .e3 { --l: ; width: var(--l) 12px }
+  .e4 { width: 5px } .e4 { width: var(--e) }
+  .e5 { --w: 20px } .e5 > div { --w: ; } .e5 > div > div { width: var(--w, 15px) 16px }
+</style>
+<style>:root { --late: 44px }</style>
+
+<div id=wrap>
+  <div class="box w" id=w></div>
+  <div class="box calc" id=calc></div>
+  <div class="box nested" id=nested></div>
+  <div class="box fb" id=fb></div>
+  <div class="box fb2" id=fb2></div>
+  <div class="box fb3" id=fb3></div>
+  <div class="box undef" id=undef></div>
+  <div class="box loop" id=loop></div>
+  <div class="box kw" id=kw></div>
+  <div class="box pad" id=pad></div>
+  <div class="box padx" id=padx></div>
+  <div class="box m" id=m></div>
+  <div class=scope><div class="box w" id=scoped></div></div>
+  <div style="--w: 80px"><div><div class="box w" id=inl></div></div></div>
+  <div class="box imp" id=imp></div>
+  <div class="box over" id=over></div>
+  <div class="box disp" id=disp>x</div>
+  <div class=h id=h></div>
+  <div class=inset-p><div class=inset id=inset></div></div>
+  <div class="box late" id=late></div>
+  <div class="box upper" id=upper></div>
+  <div class="box mixed" id=mixed></div>
+  <div class=box id=istyle style="width: var(--w)"></div>
+  <div class=box id=istyle2 style="--mine: 21px; width: var(--mine)"></div>
+  <div class=gap id=gap><i></i><i id=gap2></i></div>
+  <div id=dyn-p><div><div class="box w" id=dyn></div></div></div>
+  <div id=cls-p><div class="box w" id=cls></div></div>
+  <div id=attr-p class=attr><div class="box w" id=attr></div></div>
+  <div><div class=sib id=sib-a></div><div id=sib-b><div class="box w" id=sib></div></div></div>
+  <div id=i-display>x</div><div id=i-visibility>x</div><div id=i-fallback>x</div><div id=i-chain>x</div>
+  <div class=i-scope><div id=i-scoped>x</div></div>
+  <div class=i-override><div id=i-overridden>x</div></div>
+  <div id=i-inline style="display: var(--d)">x</div>
+  <div id=i-upper>hello</div>
+  <div class="box e1" id=e1></div>
+  <div class="box e2" id=e2></div>
+  <div class="box e3" id=e3></div>
+  <div class="box e4" id=e4></div>
+  <div class=e5><div><div class=box id=e5></div></div></div>
+  <div class=box id=e6 style="--i: ; width: var(--i) 17px"></div>
+  <div style="--j: ;"><div class=box id=e7 style="width: var(--j) 18px"></div></div>
+  <div class=box id=e8></div>
+  <div id=mv-a style="--w: 91px"></div><div id=mv-b style="--w: 92px"><div class="box w" id=mv></div></div>
+</div>
+
+<script id=substitution>
+{
+  const width = (id) => $('#' + id).offsetWidth;
+  testing.expectEqual(100, width('w'));
+  // Tailwind's spacing utilities; rem resolves after the substitution
+  testing.expectEqual(40, width('calc'));
+  // a variable defined from another
+  testing.expectEqual(40, width('nested'));
+  // a function's name is case-insensitive
+  testing.expectEqual(100, width('upper'));
+  // the last declaration of a block
+  testing.expectEqual(100, width('mixed'));
+  // declared in a later sheet than its use
+  testing.expectEqual(44, width('late'));
+}
+</script>
+
+<script id=fallback>
+{
+  const width = (id) => $('#' + id).offsetWidth;
+  testing.expectEqual(33, width('fb'));
+  testing.expectEqual(100, width('fb2'));
+  testing.expectEqual(12, width('fb3'));
+}
+</script>
+
+<script id=invalid>
+{
+  // Invalid at computed-value time: the declaration still wins the cascade,
+  // as unset. Not the 50px of the rule before it.
+  const width = (id) => $('#' + id).offsetWidth;
+  testing.expectEqual(300, width('undef'));
+  testing.expectEqual(300, width('loop'));
+  testing.expectEqual(300, width('kw'));
+}
+</script>
+
+<script id=inheritance>
+{
+  const width = (id) => $('#' + id).offsetWidth;
+  // the nearest declaration: a class rule, a style attribute
+  testing.expectEqual(70, width('scoped'));
+  testing.expectEqual(80, width('inl'));
+  // in a style attribute, and declared by the same one
+  testing.expectEqual(100, width('istyle'));
+  testing.expectEqual(21, width('istyle2'));
+}
+</script>
+
+<script id=cascade>
+{
+  testing.expectEqual(100, $('#imp').offsetWidth);
+  testing.expectEqual(5, $('#over').offsetWidth);
+}
+</script>
+
+<script id=properties>
+{
+  // a shorthand's sides are split after the substitution
+  testing.expectEqual(36, $('#pad').offsetWidth);
+  testing.expectEqual(18, $('#pad').offsetHeight);
+  testing.expectEqual(36, $('#padx').offsetWidth);
+  testing.expectEqual(100, $('#m').getBoundingClientRect().left);
+  testing.expectEqual(100, $('#h').offsetHeight);
+  // keywords too
+  testing.expectEqual(0, $('#disp').offsetHeight);
+  const inset = $('#inset').getBoundingClientRect();
+  const parent = $('#inset').parentNode.getBoundingClientRect();
+  testing.expectEqual([8, 8, 184, 34], [inset.left - parent.left, inset.top - parent.top, inset.width, inset.height]);
+  testing.expectEqual(110, $('#gap2').getBoundingClientRect().left);
+}
+</script>
+
+<script id=visibility_and_text>
+{
+  // The reproducer of #4706
+  const visible = (id) => $('#' + id).checkVisibility({ visibilityProperty: true });
+  testing.expectEqual(false, visible('i-display'));
+  testing.expectEqual(false, visible('i-visibility'));
+  testing.expectEqual(false, visible('i-fallback'));
+  testing.expectEqual(false, visible('i-chain'));
+  testing.expectEqual(false, visible('i-scoped'));
+  testing.expectEqual(true, visible('i-overridden'));
+  testing.expectEqual('none', getComputedStyle($('#i-inline')).display);
+  testing.expectEqual('uppercase', getComputedStyle($('#i-upper')).textTransform);
+  testing.expectEqual('HELLO', $('#i-upper').innerText);
+}
+</script>
+
+<script id=empty_value>
+{
+  const width = (id) => $('#' + id).offsetWidth;
+  testing.expectEqual(10, width('e1'));
+  testing.expectEqual(11, width('e2'));
+  testing.expectEqual(12, width('e3'));
+  // alone, it leaves the property without a value: invalid
+  testing.expectEqual(300, width('e4'));
+  // declared, so the fallback isn't used
+  testing.expectEqual(16, width('e5'));
+  testing.expectEqual(17, width('e6'));
+  testing.expectEqual(18, width('e7'));
+
+  testing.expectEqual('', getComputedStyle(document.documentElement).getPropertyValue('--e'));
+  const inline = $('#e6').style;
+  testing.expectEqual(2, inline.length);
+  testing.expectEqual('', inline.getPropertyValue('--i'));
+
+  const written = $('#e8');
+  written.style.setProperty('--k', ' ');
+  written.style.width = 'var(--k) 21px';
+  testing.expectEqual(21, written.offsetWidth);
+  testing.expectEqual('--k: ; width: var(--k) 21px;', written.getAttribute('style'));
+  written.style.setProperty('--k', '');
+  testing.expectEqual(300, written.offsetWidth);
+  testing.expectEqual(1, written.style.length);
+}
+</script>
+
+<script id=inline_writes>
+{
+  const parent = $('#dyn-p');
+  const width = () => $('#dyn').offsetWidth;
+  testing.expectEqual(100, width());
+  parent.style.setProperty('--w', '110px');
+  testing.expectEqual(110, width());
+  parent.style.setProperty('--w', '120px');
+  testing.expectEqual(120, width());
+  parent.setAttribute('style', '--w: 130px');
+  testing.expectEqual(130, width());
+  parent.style.cssText = 'color: red; --w: 140px';
+  testing.expectEqual(140, width());
+  parent.style.removeProperty('--w');
+  testing.expectEqual(100, width());
+  parent.removeAttribute('style');
+  testing.expectEqual(100, width());
+
+  document.documentElement.style.setProperty('--w', '150px');
+  testing.expectEqual(150, width());
+  testing.expectEqual(150, $('#w').offsetWidth);
+  document.documentElement.style.removeProperty('--w');
+  testing.expectEqual(100, width());
+}
+</script>
+
+<script id=selector_changes>
+{
+  const width = (id) => $('#' + id).offsetWidth;
+  testing.expectEqual(100, width('cls'));
+  $('#cls-p').classList.add('scope');
+  testing.expectEqual(70, width('cls'));
+  $('#cls-p').classList.remove('scope');
+  testing.expectEqual(100, width('cls'));
+  $('#cls-p').className = 'cs';
+  testing.expectEqual(12, width('cls'));
+
+  testing.expectEqual(100, width('attr'));
+  $('#attr-p').setAttribute('data-x', '1');
+  testing.expectEqual(15, width('attr'));
+  $('#attr-p').removeAttribute('data-x');
+  testing.expectEqual(100, width('attr'));
+
+  testing.expectEqual(100, width('sib'));
+  $('#sib-b').className = 'sibn';
+  testing.expectEqual(16, width('sib'));
+  $('#sib-a').className = '';
+  testing.expectEqual(100, width('sib'));
+}
+</script>
+
+<script id=moved>
+{
+  const moved = $('#mv');
+  testing.expectEqual(92, moved.offsetWidth);
+  $('#mv-a').appendChild(moved);
+  testing.expectEqual(91, moved.offsetWidth);
+  $('#wrap').appendChild(moved);
+  testing.expectEqual(100, moved.offsetWidth);
+}
+</script>
+
+<script id=sheet_changes>
+{
+  const width = () => $('#dyn').offsetWidth;
+  const style = document.createElement('style');
+  document.head.appendChild(style);
+  style.sheet.insertRule('#dyn-p { --w: 160px }', 0);
+  testing.expectEqual(160, width());
+  style.sheet.insertRule('#dyn-p { --w: 170px }', 1);
+  testing.expectEqual(170, width());
+  // a variable nothing reads
+  style.sheet.insertRule('#dyn-p { --color: red }', 2);
+  testing.expectEqual(170, width());
+  style.sheet.deleteRule(1);
+  testing.expectEqual(160, width());
+  style.sheet.cssRules[0].style.setProperty('--w', '180px');
+  testing.expectEqual(180, width());
+  style.remove();
+  testing.expectEqual(100, width());
+}
+</script>
+
+<script id=declared_after_read>
+{
+  // Nothing declares the name when it's first read
+  const box = document.createElement('div');
+  box.className = 'box';
+  box.style.width = 'var(--brand-new, 9px)';
+  $('#wrap').appendChild(box);
+  testing.expectEqual(9, box.offsetWidth);
+  $('#wrap').style.setProperty('--brand-new', '19px');
+  testing.expectEqual(19, box.offsetWidth);
+}
+</script>

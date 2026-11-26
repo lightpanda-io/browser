@@ -755,7 +755,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             if (tag != .a and tag != .area) return false;
             return el.hasAttributeInterned("href");
         },
-        .visited => return false,
+        .visited, .host => return false,
         .target => {
             const element_id = el.getAttributeInterned("id") orelse return false;
             const doc = node.ownerDocument(frame) orelse return false;

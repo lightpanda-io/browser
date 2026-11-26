@@ -106,6 +106,15 @@ unscoped_sizing: bool = false,
 // `content` rule.
 lazy_rules: std.HashMapUnmanaged(properties.Id, LazyRules, IdContext, std.hash_map.default_max_load_percentage) = .empty,
 
+// The memos each custom property reaches, by its index among the custom names:
+// those of the properties whose var() read it since the rebuild. Empty for
+// most: a colour variable is only read by properties nothing here tracks.
+var_reach: std.ArrayList(Memos) = .empty,
+
+// The rule blocks kept as written, see Var. A rule's `unresolved` is an index
+// in here, plus one.
+var_blocks: std.ArrayList([]const Var.Declaration) = .empty,
+
 // The rules declaring each animation property, the shorthand apart from the
 // longhands. frame/css_animations.zig reads them to fire the animation events.
 animation_rules: std.enums.EnumArray(Animation.Property, LazyRules) = .initFill(.{}),
@@ -695,6 +704,8 @@ fn addSelectorRules(
     // By pointer: inlined, by value would copy them for every rule
     props: *const Declarations,
     important: *const Declarations,
+    // Null for most rules: no declaration uses var()
+    unresolved: ?*const Var.Blocks,
     declared: LazyDeclarations,
     layer: u16,
 ) !bool {
@@ -709,13 +720,24 @@ fn addSelectorRules(
         lazy.animation = .{};
     }
 
-    const relevant = props.isRelevant() or important.isRelevant();
+    const relevant = props.isRelevant() or important.isRelevant() or unresolved != null;
     if (relevant == false and lazy.isEmpty()) {
         return false;
     }
 
     const arena = self.arena.allocator();
-    var changed = lazy.declaresCustom();
+    // A custom property no var() has read changes no memo. During a rebuild
+    // that's all of them, and the memos are reset anyway.
+    var changed = false;
+    for (lazy.declared) |declaration| {
+        const reach = self.varReach(declaration.id);
+        if (reach.count() != 0) {
+            changed = true;
+            for (SelectorParser.parseList(arena, selector_text) catch &.{}) |selector| {
+                try self.trackVarSelector(selector, reach);
+            }
+        }
+    }
 
     if (lazy.isEmpty() == false) {
         const priority = try self.nextPriority(layer);
@@ -742,7 +764,7 @@ fn addSelectorRules(
         const before = self.next_doc_order;
         const selectors = SelectorParser.parseList(arena, selector_text) catch &.{};
         for (selectors) |selector| {
-            try self.addTrackedRule(selector, props, important, layer);
+            try self.addTrackedRule(selector, props, important, unresolved, layer);
         }
         changed = changed or self.next_doc_order != before;
     }
@@ -752,14 +774,28 @@ fn addSelectorRules(
 // One priority per selector, shared by every group it lands in: doc_order
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
-fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *const Declarations, important: *const Declarations, layer: u16) !void {
+fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *const Declarations, important: *const Declarations, unresolved: ?*const Var.Blocks, layer: u16) !void {
     const matched = unwrapWhere(selector);
     // Before anything is collected: a rule no bucket holds reads nothing
     const placement = placeSelector(matched) orelse return;
     const deep = siblingsReachDescendants(selector);
     try self.collectAttributeNames(selector, false, deep);
     self.siblings.addNext(nextReach(selector), deep);
-    try self.collectClassReach(selector, .subtree, true, matched.rightmost(), BoxReach.of(props).widest(.of(important)));
+    var boxes = BoxReach.of(props).widest(.of(important));
+    if (unresolved) |blocks| {
+        for (blocks) |by_group| {
+            for (by_group) |block| {
+                for (block) |declaration| {
+                    // What it resolves to isn't known: any z-index, any box
+                    boxes = boxes.widest(.ofMemos(propertyReach(declaration.id)));
+                    if (declaration.id == .@"z-index") {
+                        self.z_index_rules = true;
+                    }
+                }
+            }
+        }
+    }
+    try self.collectClassReach(selector, .subtree, true, matched.rightmost(), boxes);
     for ([_]?ZIndex{ props.geometry.z_index, important.geometry.z_index }) |z| {
         if ((z orelse .auto) != .auto) {
             self.z_index_rules = true;
@@ -770,12 +806,31 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
     const parent_needs = if (parentCompound(matched)) |compound| KeyBits.needed(compound) else 0;
     const ancestor_needs = try self.ancestors.needed(self.arena.allocator(), matched);
-    inline for (group_fields) |field| {
-        inline for (.{ props, important }, .{ priority, important_priority }) |source, p| {
+    inline for (group_fields, 0..) |field, group| {
+        inline for (.{ props, important }, .{ priority, important_priority }, 0..) |source, p, importance| {
             const declared = &@field(source, field);
-            if (declaresAny(declared)) {
+            // A group's block is parsed whole, in order: it holds what the
+            // group declares without var() too
+            const in_block = if (unresolved) |blocks| blocks[importance][group].len != 0 else false;
+            if (in_block == false and declaresAny(declared)) {
                 try @field(self, field).bucket(self.arena.allocator(), placement, .{
                     .props = .init(declared),
+                    .selector = matched,
+                    .priority = p,
+                    .parent_needs = parent_needs,
+                    .ancestor_needs = ancestor_needs,
+                });
+            }
+        }
+    }
+    const blocks = unresolved orelse return;
+    inline for (group_fields, 0..) |field, group| {
+        inline for (.{ priority, important_priority }, 0..) |p, importance| {
+            const block = blocks[importance][group];
+            if (block.len != 0) {
+                try self.var_blocks.append(self.arena.allocator(), block);
+                try @field(self, field).bucket(self.arena.allocator(), placement, .{
+                    .props = .{ .set = .full, .unresolved = @intCast(self.var_blocks.items.len) },
                     .selector = matched,
                     .priority = p,
                     .parent_needs = parent_needs,
@@ -877,7 +932,7 @@ fn pseudoClassAttributes(pseudo: Selector.PseudoClass) []const []const u8 {
         // value set a control's state while the user hasn't touched it.
         .valid, .invalid, .in_range, .out_of_range => &.{ "required", "readonly", "disabled", "pattern", "min", "max", "step", "minlength", "maxlength", "multiple", "value", "checked", "selected", "form", "name" },
         // Element state, the tree, or always_read (:target reads id)
-        .modal, .popover_open, .indeterminate, .placeholder_shown, .hover, .active, .focus, .focus_within, .focus_visible, .visited, .target, .root, .scope, .empty, .first_child, .last_child, .only_child, .first_of_type, .last_of_type, .only_of_type, .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type, .defined => &.{},
+        .modal, .popover_open, .indeterminate, .placeholder_shown, .hover, .active, .focus, .focus_within, .focus_visible, .visited, .host, .target, .root, .scope, .empty, .first_child, .last_child, .only_child, .first_of_type, .last_of_type, .only_of_type, .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type, .defined => &.{},
         // Walked by collectCompoundAttributeNames
         .not, .is, .where, .has, .nth_child_of, .nth_last_child_of => unreachable,
     };
@@ -1379,6 +1434,15 @@ const BoxReach = enum(u8) {
 
     fn widest(a: BoxReach, b: BoxReach) BoxReach {
         return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
+    }
+
+    // Of a property by the memos it reaches, when its value isn't known
+    fn ofMemos(memos: Memos) BoxReach {
+        if (memos.contains(.layout) or memos.contains(.heights)) {
+            return .layout;
+        }
+        // could be a vertical inset
+        return if (memos.contains(.geometry)) .hit else .none;
     }
 
     // Field by field what property_reach says of the properties they parse:
@@ -2470,6 +2534,9 @@ pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) 
     if (self.dirty or self.reads_style_attribute) {
         return false;
     }
+    if (@backingInt(id) >= properties.known_count) {
+        return self.customChanged(el, self.varReach(id));
+    }
     // z-index orders boxes, it doesn't move them
     self.invalidateInline(el, propertyReach(id), id != .@"z-index");
     return true;
@@ -2492,7 +2559,79 @@ pub fn styleAttributeChanged(self: *StyleManager, el: *Element, old: ?[]const u8
         }
     }
     self.invalidateInline(el, reach, true);
-    return true;
+    return self.customChanged(el, self.customReach(old, new).unionWith(self.customReach(new, old)));
+}
+
+// What the custom properties `text` declares reach, those `other` declares
+// the same aside.
+fn customReach(self: *const StyleManager, text: ?[]const u8, other: ?[]const u8) Memos {
+    var reach: Memos = .empty;
+    if (self.var_reach.items.len == 0) {
+        return reach;
+    }
+    var it = CssParser.parseDeclarationsList(text orelse "");
+    while (it.next()) |declaration| {
+        const id = self.frame.page.css_custom_names.lookup(declaration.name) orelse continue;
+        const memos = self.varReach(id);
+        if (memos.subsetOf(reach)) {
+            continue;
+        }
+        const a = customDeclared(text, declaration.name);
+        const b = customDeclared(other, declaration.name);
+        const same = a.important == b.important and std.mem.eql(u8, a.value orelse "", b.value orelse "");
+        if (same == false) {
+            reach = reach.unionWith(memos);
+        }
+    }
+    return reach;
+}
+
+// A style attribute's winning declaration of a custom property
+fn customDeclared(text: ?[]const u8, name: []const u8) Slot {
+    var slot: Slot = .{};
+    var it = CssParser.parseDeclarationsList(text orelse "");
+    while (it.next()) |declaration| {
+        if (std.mem.eql(u8, declaration.name, name)) {
+            slot.apply(declaration.value, declaration.important);
+        }
+    }
+    return slot;
+}
+
+// The custom properties `el` declares changed, the ones reaching `reach`:
+// everything under it inherits them. False when that can't be scoped.
+fn customChanged(self: *StyleManager, el: *Element, reach: Memos) bool {
+    if (reach.count() == 0) {
+        return true;
+    }
+    self.origin_memo = null;
+    const moves: BoxReach = .ofMemos(reach);
+    if (moves == .hit) {
+        self.inline_bumps += 1;
+    }
+    var memos: Memos = .empty;
+    var budget: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (reach.contains(@field(Memo, field)) and group.memo.count() != 0 and group.fresh(self.frame)) {
+            memos.insert(@field(Memo, field));
+            budget += group.memo.count();
+        }
+    }
+    if (budget == 0) {
+        if (moves == .layout) {
+            self.layout_bumps += 1;
+        }
+        return true;
+    }
+    const root = el.asNode();
+    if (self.droppedCovers(root)) {
+        return true;
+    }
+    // recordDropped speaks for every memo: only those in reach go here
+    var boxes: BoxScope = if (moves == .layout) .init(self, &memos, &budget) else .{ .style_manager = self, .memos = &memos, .scoped = false };
+    boxes.restyled(root);
+    return self.dropSubtree(root, memos, &budget);
 }
 
 // The memos a style attribute's declarations reach
@@ -2679,8 +2818,8 @@ fn heightWritten(self: *StyleManager, el: *Element) void {
 }
 
 /// Each known property's memos: the ones that read it. A property not listed
-/// reaches nothing. transform/custom properties...no memo reads them.
-/// Nothing substitutes var() (yet).
+/// reaches nothing: no memo reads a transform. A custom property reaches what
+/// the properties reading it through var() do, see varReach.
 const property_reach = blk: {
     // layout reads everything, except what we explicitly ignore (safer option)
     // A vertical inset moves a positioned box, or sizes one with both, and
@@ -2721,10 +2860,17 @@ const property_reach = blk: {
 fn propertyReach(id: properties.Id) Memos {
     const index = @backingInt(id);
     if (index >= property_reach.len) {
-        // a custom property
+        // a custom property: see varReach
         return .empty;
     }
     return property_reach[index];
+}
+
+// What reading custom property `id` through var() reaches: nothing for a
+// known property, or a custom one no tracked property has read.
+fn varReach(self: *const StyleManager, id: properties.Id) Memos {
+    const index = std.math.sub(usize, @backingInt(id), properties.known_count) catch return .empty;
+    return if (index < self.var_reach.items.len) self.var_reach.items[index] else .empty;
 }
 
 /// Rank and document-order bits of the next rule. A rule outside any layer
@@ -2863,6 +3009,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.lazy_rules = .empty;
     try self.lazy_rules.ensureTotalCapacity(arena, lazy_rules_count);
+    self.var_reach = .empty;
+    self.var_blocks = .empty;
     self.animation_rules = .initFill(.{});
     self.keyframes = .empty;
     self.attribute_names = .empty;
@@ -3258,7 +3406,7 @@ pub fn rootHeight(self: *StyleManager, el: *Element) ?f64 {
 /// Like declaredSize, but only the inline style counts.
 pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
     self.assertOwns(el);
-    const length = @field(inlineDeclared(Geometry.Declared, el, self.frame).props(.any), @tagName(axis)) orelse return null;
+    const length = @field(inlineDeclared(Geometry.Declared, el, self.frame).resolved(.any, .{ .style_manager = self, .el = el }), @tagName(axis)) orelse return null;
     return @max(0, length.resolve(self, el) orelse return null);
 }
 
@@ -4444,6 +4592,9 @@ fn Group(comptime Spec: type) type {
         // their values. Read for every candidate rule, so kept small.
         const RuleProps = struct {
             set: std.EnumSet(Field) = .empty,
+            // The block in var_blocks, plus one, of a rule whose values wait
+            // for an element. What it sets isn't known before: `set` is full.
+            unresolved: u32 = 0,
             values: Cascaded = .{},
 
             fn init(declared: *const Declared) RuleProps {
@@ -4731,7 +4882,7 @@ fn Group(comptime Spec: type) type {
             const inline_style = inlineDeclared(Declared, el, frame);
             if (inline_style.isEmpty() == false) {
                 inline for (.{ .normal, .important }, .{ INLINE_PRIORITY, INLINE_IMPORTANT_PRIORITY }) |importance, priority| {
-                    const inline_declared = inline_style.props(importance);
+                    const inline_declared = inline_style.resolved(importance, .{ .style_manager = &frame._style_manager, .el = el });
                     inline for (fields) |field| {
                         if (@field(inline_declared, field)) |value| {
                             @field(p, field) = value;
@@ -4869,11 +5020,34 @@ fn Group(comptime Spec: type) type {
                             },
                         }
                         matched = true;
+                        if (rule.unresolved != 0) {
+                            applyUnresolved(frame._style_manager.var_blocks.items[rule.unresolved - 1], priority, p, priorities, el, frame);
+                            continue :rules;
+                        }
                     }
                     switch (f) {
                         inline else => |field| @field(p, @tagName(field)) = @field(rule.values, @tagName(field)),
                     }
                     priorities.set(f, priority);
+                }
+            }
+        }
+
+        // A matching rule's block, parsed with el's variables.
+        fn applyUnresolved(block: []const Var.Declaration, priority: u64, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+            const resolver: Var.Resolver = .{ .style_manager = &frame._style_manager, .el = el };
+            var declared: Declared = .{};
+            for (block) |declaration| {
+                var buf: Var.Buffer = undefined;
+                declared.apply(declaration.id, resolver.resolve(declaration.id, declaration.value, &buf));
+            }
+            inline for (fields) |field| {
+                if (@field(declared, field)) |value| {
+                    const f = @field(Field, field);
+                    if (priority > priorities.get(f)) {
+                        @field(p, field) = value;
+                        priorities.set(f, priority);
+                    }
                 }
             }
         }
@@ -4936,14 +5110,35 @@ fn addStoredRule(self: *StyleManager, entry: *const RuleStore.Entry, selector_te
     // doesn't need a copy: the sheet frees a rule's selector only along with
     // sheetModified(), and every lookup rebuilds first.
     if (folded.isEmpty()) {
-        return self.addSelectorRules(selector_text, &no_declarations, &no_declarations, lazy, layer);
+        return self.addSelectorRules(selector_text, &no_declarations, &no_declarations, null, lazy, layer);
     }
+    var blocks: Var.Blocks = undefined;
+    const unresolved = folded.uses_var and try self.unresolvedBlocks(&folded, &blocks);
+    const blocks_ptr: ?*const Var.Blocks = if (unresolved) &blocks else null;
     const normal = folded.props(.normal);
     if (folded.anyImportant() == false) {
-        return self.addSelectorRules(selector_text, &normal, &no_declarations, lazy, layer);
+        return self.addSelectorRules(selector_text, &normal, &no_declarations, blocks_ptr, lazy, layer);
     }
     const important = folded.props(.important);
-    return self.addSelectorRules(selector_text, &normal, &important, lazy, layer);
+    return self.addSelectorRules(selector_text, &normal, &important, blocks_ptr, lazy, layer);
+}
+
+// Fills `blocks` with the rule's declarations of each group that reads a
+// var(). False when no group reads one.
+// Out of line: inlined into addStoredRule, the rules that never get here pay
+// for it (the style perf scenario went +0.4% instructions).
+noinline fn unresolvedBlocks(self: *StyleManager, folded: *const Slots(Declarations), blocks: *Var.Blocks) !bool {
+    const arena = self.arena.allocator();
+    var any = false;
+    inline for (.{ .normal, .important }, 0..) |importance, i| {
+        const block = try folded.unresolved(arena, importance);
+        inline for (group_fields, 0..) |field, group| {
+            const own = try Var.blockOf(@FieldType(Declarations, field), arena, block) orelse &.{};
+            blocks[i][group] = own;
+            any = any or own.len != 0;
+        }
+    }
+    return any;
 }
 
 const no_declarations: Declarations = .{};
@@ -7495,6 +7690,134 @@ const Grid = struct {
 
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
+/// var() in the value of a property the cascade reads. A rule's declarations
+/// are parsed once, for every element the rule matches, but a variable's
+/// value depends on the element. So a block using one is kept as written, and
+/// parsed each time it's cascaded for an element (the memos keep the result).
+const Var = struct {
+    /// A declaration as written
+    const Declaration = struct { id: properties.Id, value: []const u8 };
+
+    /// A rule's blocks: normal then !important, one per group, empty for a
+    /// group that reads no var().
+    const Blocks = [2][group_fields.len][]const Declaration;
+
+    // What a value expands into. A longer one is invalid.
+    const max_len = 512;
+    const Buffer = [max_len]u8;
+
+    // Variables defined from variables, and what stops a cycle
+    const max_depth = 8;
+
+    // What a value that doesn't resolve is parsed as (invalid at
+    // computed-value time): the declaration still wins the cascade.
+    const invalid = "unset";
+
+    const Out = struct {
+        buf: *Buffer,
+        len: usize = 0,
+
+        fn append(self: *Out, text: []const u8) bool {
+            if (text.len > self.buf.len - self.len) {
+                return false;
+            }
+            @memcpy(self.buf[self.len..][0..text.len], text);
+            self.len += text.len;
+            return true;
+        }
+    };
+
+    /// The element a block is cascaded for.
+    const Resolver = struct {
+        style_manager: *StyleManager,
+        el: *Element,
+
+        // `value` of property `id`, its variables replaced by their values
+        fn resolve(self: Resolver, id: properties.Id, value: []const u8, buf: *Buffer) []const u8 {
+            if (in(value) == false) {
+                return value;
+            }
+            var out: Out = .{ .buf = buf };
+            if (self.style_manager.expandVars(self.el, propertyReach(id), value, &out, 0) == false) {
+                return invalid;
+            }
+            return std.mem.trim(u8, buf[0..out.len], &std.ascii.whitespace);
+        }
+    };
+
+    // Asked of every declaration: most values are short and call no
+    // function, which a plain loop finds out faster than a vectorized search.
+    fn in(value: []const u8) bool {
+        for (value) |c| {
+            if (c == '(') {
+                return find(value) != null;
+            }
+        }
+        return false;
+    }
+
+    // Where the next var( starts
+    fn find(value: []const u8) ?usize {
+        var from: usize = 0;
+        while (std.mem.findScalarPos(u8, value, from, '(')) |paren| : (from = paren + 1) {
+            if (paren < 3 or std.ascii.eqlIgnoreCase(value[paren - 3 .. paren], "var") == false) {
+                continue;
+            }
+            const start = paren - 3;
+            // not the end of another function's name
+            if (start == 0 or (std.ascii.isAlphanumeric(value[start - 1]) == false and value[start - 1] != '-' and value[start - 1] != '_')) {
+                return start;
+            }
+        }
+        return null;
+    }
+
+    // The `)` of a function whose arguments start at `from`
+    fn closing(value: []const u8, from: usize) ?usize {
+        var depth: usize = 0;
+        for (value[from..], from..) |c, i| {
+            switch (c) {
+                '(' => depth += 1,
+                ')' => {
+                    if (depth == 0) {
+                        return i;
+                    }
+                    depth -= 1;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    // The declarations of `block` a group reads, when one of them uses var().
+    fn blockOf(comptime Declared: type, allocator: Allocator, block: []const Declaration) !?[]const Declaration {
+        var count: usize = 0;
+        var uses_var = false;
+        for (block) |declaration| {
+            if (Slots(Declared).tracks(declaration.id)) {
+                count += 1;
+                uses_var = uses_var or in(declaration.value);
+            }
+        }
+        if (uses_var == false) {
+            return null;
+        }
+        if (count == block.len) {
+            return block;
+        }
+        const own = try allocator.alloc(Declaration, count);
+        var i: usize = 0;
+        for (block) |declaration| {
+            if (Slots(Declared).tracks(declaration.id)) {
+                own[i] = declaration;
+                i += 1;
+            }
+        }
+        return own;
+    }
+};
+
 const Declarations = struct {
     const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names ++ Grid.Declared.names;
 
@@ -7576,6 +7899,10 @@ const ParsedRule = struct {
     selector: Selector.Selector,
     value: []const u8,
     priority: u64, // packed the same way as a group Rule.priority
+
+    // The selector is `:root`, where most variables are declared: expandVar
+    // walks every ancestor, and needn't match it on each.
+    root: bool,
 };
 
 /// A lazy declaration on its way from a rule block into lazy_rules.
@@ -7598,16 +7925,6 @@ const LazyDeclarations = struct {
     fn declares(self: LazyDeclarations, id: properties.Id) bool {
         for (self.declared) |declaration| {
             if (declaration.id == id) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Unlike `content`, a custom property can change what a memo reads
-    fn declaresCustom(self: LazyDeclarations) bool {
-        for (self.declared) |declaration| {
-            if (declaration.id != .content) {
                 return true;
             }
         }
@@ -7759,6 +8076,9 @@ fn Slots(comptime Declared: type) type {
         set: std.StaticBitSet(Declared.names.len) = .empty,
         slots: [Declared.names.len]Slot = undefined,
 
+        // Whether a value applied used var(): it may have been replaced since
+        uses_var: bool = false,
+
         const ids = blk: {
             var result: [Declared.names.len]properties.Id = undefined;
             for (Declared.names, &result) |name, *id| {
@@ -7796,10 +8116,11 @@ fn Slots(comptime Declared: type) type {
             if (slot == untracked) {
                 return;
             }
+            const uses_var = Var.in(value);
             if (comptime @hasDecl(Declared, "accepts")) {
                 // An invalid value is dropped, so an earlier one in the same
                 // block still holds
-                if (value.len != 0 and Declared.accepts(id, value) == false) {
+                if (value.len != 0 and uses_var == false and Declared.accepts(id, value) == false) {
                     return;
                 }
             }
@@ -7808,6 +8129,7 @@ fn Slots(comptime Declared: type) type {
             }
             self.slots[slot].apply(value, important);
             self.set.setValue(slot, self.slots[slot].value != null);
+            self.uses_var = self.uses_var or uses_var;
         }
 
         fn isEmpty(self: *const Self) bool {
@@ -7824,6 +8146,8 @@ fn Slots(comptime Declared: type) type {
             return false;
         }
 
+        // The values as written: one using var() parses as whatever its
+        // property makes of an invalid value. See resolved and unresolved.
         fn props(self: *const Self, comptime importance: Importance) Declared {
             var p: Declared = .{};
             var it = self.set.iterator(.{});
@@ -7837,6 +8161,65 @@ fn Slots(comptime Declared: type) type {
                 p.apply(ids[slot], s.value.?);
             }
             return p;
+        }
+
+        // props for an element: its variables replace each var().
+        fn resolved(self: *const Self, comptime importance: Importance, resolver: Var.Resolver) Declared {
+            if (self.uses_var == false) {
+                return self.props(importance);
+            }
+            var p: Declared = .{};
+            var it = self.set.iterator(.{});
+            while (it.next()) |slot| {
+                const s = self.slots[slot];
+                switch (importance) {
+                    .any => {},
+                    .normal => if (s.important) continue,
+                    .important => if (s.important == false) continue,
+                }
+                var buf: Var.Buffer = undefined;
+                p.apply(ids[slot], resolver.resolve(ids[slot], s.value.?, &buf));
+            }
+            return p;
+        }
+
+        // The declarations as written, when one of them uses var(): they
+        // fold in order, so the others can't be parsed apart.
+        fn unresolved(self: *const Self, allocator: Allocator, comptime importance: Importance) ![]const Var.Declaration {
+            if (self.uses_var == false) {
+                return &.{};
+            }
+            var count: usize = 0;
+            var uses_var = false;
+            var it = self.set.iterator(.{});
+            while (it.next()) |slot| {
+                const s = self.slots[slot];
+                if (s.important != (importance == .important)) {
+                    continue;
+                }
+                count += 1;
+                uses_var = uses_var or Var.in(s.value.?);
+            }
+            if (uses_var == false) {
+                return &.{};
+            }
+            const block = try allocator.alloc(Var.Declaration, count);
+            var i: usize = 0;
+            it = self.set.iterator(.{});
+            while (it.next()) |slot| {
+                const s = self.slots[slot];
+                if (s.important != (importance == .important)) {
+                    continue;
+                }
+                block[i] = .{ .id = ids[slot], .value = s.value.? };
+                i += 1;
+            }
+            return block;
+        }
+
+        fn tracks(id: properties.Id) bool {
+            const index = @backingInt(id);
+            return index < slot_of.len and slot_of[index] != untracked;
         }
     };
 }
@@ -8007,6 +8390,143 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, id: properties.Id)
         }
     }
     return null;
+}
+
+// Appends `value` to `out`, each var() replaced by its variable's value on
+// `el`, or its fallback. `reach`: the memos of the property this is for.
+// False for an invalid value: a variable nothing declares, a cycle.
+fn expandVars(self: *StyleManager, el: *Element, reach: Memos, value: []const u8, out: *Var.Out, depth: u8) bool {
+    var rest = value;
+    while (Var.find(rest)) |start| {
+        const args_start = start + "var(".len;
+        const end = Var.closing(rest, args_start) orelse return false;
+        const args = rest[args_start..end];
+        // a name has no comma: the first one starts the fallback
+        const comma = std.mem.findScalar(u8, args, ',');
+        const name = std.mem.trim(u8, args[0 .. comma orelse args.len], &std.ascii.whitespace);
+        if (out.append(rest[0..start]) == false) {
+            return false;
+        }
+        const mark = out.len;
+        if (self.expandVar(el, reach, name, out, depth) == false) {
+            out.len = mark;
+            const fallback = args[(comma orelse return false) + 1 ..];
+            if (self.expandVars(el, reach, std.mem.trim(u8, fallback, &std.ascii.whitespace), out, depth) == false) {
+                return false;
+            }
+        }
+        rest = rest[end + 1 ..];
+    }
+    return out.append(rest);
+}
+
+// Appends the value of the custom property `name` on `el`: the nearest
+// declaration up the flat tree, its own variables resolved where it's declared.
+fn expandVar(self: *StyleManager, el: *Element, reach: Memos, name: []const u8, out: *Var.Out, depth: u8) bool {
+    if (depth == Var.max_depth or name.len < 3 or std.mem.startsWith(u8, name, "--") == false) {
+        return false;
+    }
+    const page = self.frame.page;
+    // Numbered even when nothing declares it: what declares it later then
+    // finds what it reaches.
+    const id = (page.css_custom_names.intern(page.arena, name) catch return false) orelse return false;
+    const rules = self.parsedRules(self.lazy_rules.getPtr(id)) catch return false;
+    self.varRead(id, reach, rules);
+
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
+        const declared = self.varDeclared(elem, id, name, rules) orelse continue;
+        if (inheritsKeyword(declared)) {
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(declared, "initial")) {
+            return false;
+        }
+        if (Var.in(declared)) {
+            return self.expandVars(elem, reach, declared, out, depth + 1);
+        }
+        return out.append(declared);
+    }
+    return false;
+}
+
+// lazyWinner for expandVar: a style attribute is read as written, where
+// lazyWinner parses it into the element's style object.
+fn varDeclared(self: *StyleManager, el: *Element, id: properties.Id, name: []const u8, rules: []const ParsedRule) ?[]const u8 {
+    const nth = self.nthCache();
+    const is_root = if (el.asNode()._parent) |parent| parent._type == .document else false;
+    var value: ?[]const u8 = null;
+    var priority: u64 = 0;
+    for (rules) |rule| {
+        if (rule.priority <= priority) {
+            continue;
+        }
+        const matches = if (rule.root) is_root else matchesSelector(el, rule.selector, nth, self.frame);
+        if (matches) {
+            value = rule.value;
+            priority = rule.priority;
+        }
+    }
+    if (el._flags.has_inline_style == false) {
+        return value;
+    }
+    var slot: Slot = .{};
+    if (el.existingStyle(self.frame)) |style| {
+        if (style.asCSSStyleDeclaration().storedDeclaration(id)) |declared| {
+            slot = .{ .value = declared.value, .important = declared.important };
+        }
+    } else if (el.getAttributeInterned("style")) |attr| {
+        // Parsed only when it can declare it: every element under el asks
+        if (std.mem.find(u8, attr, name) != null) {
+            var it = CssParser.parseDeclarationsList(attr);
+            while (it.next()) |declaration| {
+                if (std.mem.eql(u8, declaration.name, name)) {
+                    slot.apply(declaration.value, declaration.important);
+                }
+            }
+        }
+    }
+    const inline_value = slot.value orelse return value;
+    const inline_priority = if (slot.important) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
+    return if (inline_priority > priority) inline_value else value;
+}
+
+// A property reaching `reach` read custom property `id`, which `rules`
+// declare: from here on a change to its value on an element reaches those
+// memos, for everything under the element.
+fn varRead(self: *StyleManager, id: properties.Id, reach: Memos, rules: []const ParsedRule) void {
+    const index = @backingInt(id) - properties.known_count;
+    if (index < self.var_reach.items.len and reach.subsetOf(self.var_reach.items[index])) {
+        return;
+    }
+    self.trackVar(index, reach, rules) catch |err| {
+        log.err(.browser, "StyleManager var", .{ .err = err });
+        // Its changes can't be scoped: start over
+        self.dirty = true;
+    };
+}
+
+fn trackVar(self: *StyleManager, index: usize, reach: Memos, rules: []const ParsedRule) !void {
+    const allocator = self.arena.allocator();
+    if (index >= self.var_reach.items.len) {
+        try self.var_reach.appendNTimes(allocator, .empty, index + 1 - self.var_reach.items.len);
+    }
+    const wider = self.var_reach.items[index].unionWith(reach);
+    self.var_reach.items[index] = wider;
+    for (rules) |rule| {
+        try self.trackVarSelector(rule.selector, wider);
+    }
+}
+
+// What addTrackedRule collects of a rule's selector, for one that declares a
+// custom property reaching `reach`.
+fn trackVarSelector(self: *StyleManager, selector: Selector.Selector, reach: Memos) !void {
+    // Like parsedRules: these are never matched
+    _ = getBucketKey(selector.rightmost()) orelse return;
+    const deep = siblingsReachDescendants(selector);
+    try self.collectAttributeNames(selector, false, deep);
+    self.siblings.addNext(nextReach(selector), deep);
+    try self.collectClassReach(selector, .subtree, true, selector.rightmost(), .ofMemos(reach));
 }
 
 /// Declared `content` of `el`, or null when nothing declares it. It doesn't
@@ -8268,10 +8788,12 @@ fn parsedRules(self: *StyleManager, maybe_property: ?*LazyRules) ![]const Parsed
                 _ = getBucketKey(selector.rightmost()) orelse continue;
             }
 
+            const first = selector.first();
             try parsed.append(arena, .{
                 .selector = selector,
                 .value = rule.value,
                 .priority = rule.priority | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT),
+                .root = selector.segments().len == 0 and first.parts.len == 1 and first.parts[0] == .pseudo_class and first.parts[0].pseudo_class == .root,
             });
         }
     }
@@ -8402,6 +8924,121 @@ test "StyleManager: stylesheet :scope is the root element" {
 
 test "StyleManager: position" {
     try testing.htmlRunner("css/position.html", .{});
+}
+
+test "StyleManager: var()" {
+    try testing.htmlRunner("css/var.html", .{});
+}
+
+test "StyleManager: memo: a custom property reaches the memos that read it through var()" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p class=\"w c\"></p></div><div><p class=\"w\"></p></div>");
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    const other = div.asNode().nextSibling().?.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(":root { --w: 10px; --c: red } .w { width: var(--w) } .c { color: var(--c) }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const sheet = style_el._sheet orelse return error.NoSheet;
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+
+    try testing.expectEqual(10, sm.declaredSize(p, .width));
+    try testing.expectEqual(10, sm.declaredSize(other, .width));
+    const version = frame.page.style_version;
+    const fills = sm.geometry.fills;
+
+    // Only a colour reads --c, and no memo reads a colour
+    sm.setCacheLayout(p, .box_width, 100);
+    try style.setProperty("--c", "blue", null, frame);
+    try testing.expect(sm.geometry.memo.contains(p));
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(p, .box_width));
+    _ = try sheet.insertRule("div { --c: green; --unread: 1px }", 3, frame);
+    try testing.expectEqual(false, sm.dirty);
+    try testing.expect(sm.geometry.memo.contains(p));
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(p, .box_width));
+    try testing.expectEqual(version, frame.page.style_version);
+
+    // A width reads --w: what's under the element it changed on
+    try style.setProperty("--w", "20px", null, frame);
+    try testing.expectEqual(false, sm.geometry.memo.contains(p));
+    try testing.expect(sm.geometry.memo.contains(other));
+    try testing.expectEqual(null, sm.getCachedLayout(p, .box_width));
+    try testing.expectEqual(20, sm.declaredSize(p, .width));
+    try testing.expectEqual(10, sm.declaredSize(other, .width));
+    try testing.expectEqual(fills + 1, sm.geometry.fills);
+    try testing.expectEqual(version, frame.page.style_version);
+
+    // The value it has
+    try style.setProperty("--w", "20px", null, frame);
+    try testing.expect(sm.geometry.memo.contains(p));
+
+    // A rule declaring it reaches every memo, like any tracked rule
+    _ = try sheet.insertRule("div { --w: 30px }", 4, frame);
+    try testing.expectEqual(false, sm.dirty);
+    try testing.expect(frame.page.style_version != version);
+    try testing.expectEqual(20, sm.declaredSize(p, .width));
+    try testing.expectEqual(30, sm.declaredSize(other, .width));
+}
+
+test "StyleManager: Var: expansion" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style=\"--a: 1px; --b: var(--a) var(--a); --self: var(--self); --up: var(--c)\"><p style=\"--c: 3px; --a: 2px\"></p></div>");
+    const p = body.firstChild().?.firstChild().?.as(Element);
+
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "10px", "10px" },
+        .{ "var(--a)", "2px" },
+        .{ "VAR( --a )", "2px" },
+        .{ "calc(var(--a) * 2)", "calc(2px * 2)" },
+        // resolved where it's declared: the div's --a, not p's
+        .{ "var(--b)", "1px 1px" },
+        // --c isn't declared on the div
+        .{ "var(--up)", Var.invalid },
+        .{ "var(--up, 4px)", "4px" },
+        .{ "var(--nope)", Var.invalid },
+        .{ "var(--nope, 5px)", "5px" },
+        .{ "var(--nope,)", "" },
+        .{ "var(--nope, var(--c))", "3px" },
+        .{ "var(--nope, var(--nope, 6px))", "6px" },
+        .{ "var(--nope, rgb(1, 2, 3))", "rgb(1, 2, 3)" },
+        .{ "var(--self)", Var.invalid },
+        .{ "var(--a) var(--c)", "2px 3px" },
+        .{ "var(--a", Var.invalid },
+        .{ "var()", Var.invalid },
+        .{ "var(a)", Var.invalid },
+        // another function's name
+        .{ "foovar(--a)", "foovar(--a)" },
+        .{ "min(var(--a), 1px)", "min(2px, 1px)" },
+    };
+    const resolver: Var.Resolver = .{ .style_manager = sm, .el = p };
+    for (cases) |case| {
+        var buf: Var.Buffer = undefined;
+        try testing.expectString(case[1], resolver.resolve(.width, case[0], &buf));
+    }
+
+    // What doesn't fit the buffer is invalid
+    var long: [Var.max_len + 16]u8 = undefined;
+    @memset(&long, ' ');
+    @memcpy(long[0.."var(--a)".len], "var(--a)");
+    var buf: Var.Buffer = undefined;
+    try testing.expectString(Var.invalid, resolver.resolve(.width, &long, &buf));
 }
 
 test "StyleManager: inline style writes" {

@@ -192,9 +192,9 @@ pub const DeclarationsIterator = struct {
             return null;
         }
 
-        // Only a custom property's value may hold a `{}` block. Anywhere
-        // else, the block makes this a nested rule or, without nesting, an
-        // invalid declaration.
+        // Only a custom property's value may hold a `{}` block, or nothing.
+        // Anywhere else, the block makes this a nested rule or, without
+        // nesting, an invalid declaration.
         const value = self.consumeValue(std.mem.startsWith(u8, name, "--")) orelse return null;
         return .{
             .name = name,
@@ -208,7 +208,12 @@ pub const DeclarationsIterator = struct {
         important: bool,
     };
 
-    fn consumeValue(self: *DeclarationsIterator, allow_block: bool) ?ValueResult {
+    // An empty value removes a declaration everywhere a Declaration goes, so
+    // a custom property's empty one (`--tw-pan-x: ;`, which var() substitutes
+    // as nothing) is the whitespace it's written with.
+    const empty_custom = " ";
+
+    fn consumeValue(self: *DeclarationsIterator, custom: bool) ?ValueResult {
         self.skipTrivia();
 
         var depth: usize = 0;
@@ -222,7 +227,7 @@ pub const DeclarationsIterator = struct {
                 _ = self.stream.next();
                 break;
             }
-            if (!allow_block and depth == 0 and peeked.token == .curly_bracket_block) {
+            if (!custom and depth == 0 and peeked.token == .curly_bracket_block) {
                 return null;
             }
 
@@ -237,7 +242,7 @@ pub const DeclarationsIterator = struct {
             updateDepth(span.token, &depth);
         }
 
-        const value_start = start orelse return null;
+        const value_start = start orelse return if (custom) .{ .value = empty_custom, .important = false } else null;
         const last = last_sig orelse return null;
 
         var important = false;
@@ -246,13 +251,17 @@ pub const DeclarationsIterator = struct {
         if (isImportantPair(prev_sig, last)) {
             important = true;
             const bang = prev_sig orelse return null;
-            if (value_start >= bang.start) return null;
+            if (value_start >= bang.start) {
+                return if (custom) .{ .value = empty_custom, .important = true } else null;
+            }
             end_pos = bang.start;
         }
 
         var value_slice = self.input[value_start..end_pos];
         value_slice = std.mem.trim(u8, value_slice, &std.ascii.whitespace);
-        if (value_slice.len == 0) return null;
+        if (value_slice.len == 0) {
+            return if (custom) .{ .value = empty_custom, .important = important } else null;
+        }
 
         return .{ .value = value_slice, .important = important };
     }
@@ -870,6 +879,24 @@ test "DeclarationsIterator: next skips nested rules" {
     try testing.expectEqualStrings("red", declaration.value);
     declaration = it.next() orelse return error.MissingDeclaration;
     try testing.expectEqualStrings("margin", declaration.name);
+    try testing.expectEqual(null, it.next());
+}
+
+test "DeclarationsIterator: a custom property's empty value" {
+    var it = parseDeclarationsList("--a: ; --b:; color: ; --c: !important; width: 1px; --d:");
+    const expected = [_]struct { []const u8, []const u8, bool }{
+        .{ "--a", " ", false },
+        .{ "--b", " ", false },
+        .{ "--c", " ", true },
+        .{ "width", "1px", false },
+        .{ "--d", " ", false },
+    };
+    for (expected) |case| {
+        const declaration = it.next().?;
+        try testing.expectEqualStrings(case[0], declaration.name);
+        try testing.expectEqualStrings(case[1], declaration.value);
+        try testing.expectEqual(case[2], declaration.important);
+    }
     try testing.expectEqual(null, it.next());
 }
 
