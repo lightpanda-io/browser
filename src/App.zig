@@ -78,6 +78,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
         .v8_flags = config.v8Flags(),
         .gc_auto_min_mb = config.v8GCAutoMinMb(),
+        .maglev_invocation_count = config.v8MaglevInvocationCount(),
         .locale = config.locale(),
         .timezone = config.timezone(),
     });

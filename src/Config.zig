@@ -305,6 +305,7 @@ const CommonOptions = .{
     .{ .name = "v8_gc_request_min_mb", .type = ?u16 },
     .{ .name = "v8_gc_hint_floor_mb", .type = ?u16, .deprecated = "use --v8-gc-request-min-mb" },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
+    .{ .name = "v8_maglev_invocation_count", .type = ?u16, .validator = maglevInvocationCountValidator },
     .{ .name = "watchdog_ms", .type = ?u32 },
     .{
         .name = "ca_cert",
@@ -712,6 +713,13 @@ pub fn v8GCRequestMin(self: *const Config) ?u64 {
 pub fn v8MaxHeapMb(self: *const Config) ?u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb,
+        else => unreachable,
+    };
+}
+
+pub fn v8MaglevInvocationCount(self: *const Config) u16 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_maglev_invocation_count orelse 800,
         else => unreachable,
     };
 }
@@ -1493,6 +1501,37 @@ test "Config: parseArgs refuses a mozilla user-agent" {
     try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
 }
 
+test "Config: parseArgs --v8-maglev-invocation-count" {
+    // parseArgs allocations live for the process; an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "https://example.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(800, config.v8MaglevInvocationCount());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--v8-maglev-invocation-count", "1" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(1, config.v8MaglevInvocationCount());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--v8-maglev-invocation-count", "16000" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(16000, config.v8MaglevInvocationCount());
+    }
+    for ([_][*:0]const u8{ "0", "16001", "70000", "x" }) |value| {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--v8-maglev-invocation-count", value };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), proc_args));
+    }
+}
+
 test "Config: parseArgs --http-version" {
     // parseArgs allocations live for the process; an arena stands in for main's.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -1897,6 +1936,21 @@ fn timezoneValidator(allocator: Allocator, args: *std.process.Args.Iterator, fie
         return error.InvalidArgument;
     };
     field.* = try allocator.dupeSentinel(u8, str, 0);
+}
+
+// V8 keeps the tier-up budget (call count x bytecode length) in an int, and
+// uses INT_MAX / 2 as "never" for its largest optimizable functions (60KB of
+// bytecode); 16000 calls stays below that.
+const max_maglev_invocation_count = 16000;
+
+fn maglevInvocationCountValidator(_: Allocator, args: *std.process.Args.Iterator, field: *?u16) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    const count = std.fmt.parseInt(u16, str, 10) catch 0;
+    if (count == 0 or count > max_maglev_invocation_count) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--v8-maglev-invocation-count", .value = str, .hint = "must be an integer from 1 to 16000" });
+        return error.InvalidArgument;
+    }
+    field.* = count;
 }
 
 // libcurl only stores the string; BoringSSL parses it at handshake time, so

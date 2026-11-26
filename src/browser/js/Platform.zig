@@ -26,6 +26,7 @@ handle: *v8.Platform,
 pub const Options = struct {
     v8_flags: ?[]const u8 = null,
     gc_auto_min_mb: ?u16 = null,
+    maglev_invocation_count: ?u16 = null,
     // BCP 47 tag; becomes ICU's default locale (Intl, toLocaleString).
     locale: ?[:0]const u8 = null,
     // IANA id; becomes ICU's default time zone. Null keeps the host zone.
@@ -44,6 +45,12 @@ pub fn init(opts: Options) !Platform {
         // each full GC; ResourceConstraints sets the initial limit only.
         var buf: [48]u8 = undefined;
         const flag = std.fmt.bufPrint(&buf, "--initial-old-space-size={d}", .{mb}) catch unreachable;
+        v8.v8__V8__SetFlagsFromString(flag.ptr, flag.len);
+    }
+
+    if (opts.maglev_invocation_count) |count| {
+        var buf: [48]u8 = undefined;
+        const flag = std.fmt.bufPrint(&buf, "--invocation-count-for-maglev={d}", .{count}) catch unreachable;
         v8.v8__V8__SetFlagsFromString(flag.ptr, flag.len);
     }
 
