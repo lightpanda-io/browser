@@ -85,6 +85,10 @@ pub extern "c" fn url_resolve_with_encoding(base_ptr: [*]const u8, base_len: usi
 /// `err` is `0` if there's no error.
 /// Returned `OwnedString` doesn't have a sentinel; callers must be aware of that.
 pub extern "c" fn url_resolve_without_encoding(base_ptr: [*]const u8, base_len: usize, input_ptr: [*]const u8, input_len: usize, err: *i32) OwnedString;
+/// url_resolve_with_encoding against a base already parsed by url_parse.
+/// `err` is `0` if there's no error.
+/// Returned `OwnedString` doesn't have a sentinel; callers must be aware of that.
+pub extern "c" fn url_resolve_parsed_with_encoding(base: *const Url, input_ptr: [*]const u8, input_len: usize, enc_ptr: [*]const u8, enc_len: usize, err: *i32) OwnedString;
 
 extern "c" fn url_get_port(url: *const Url) i32;
 pub inline fn urlGetPort(url: *const Url) ?u16 {

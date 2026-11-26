@@ -175,6 +175,8 @@ const Context = struct {
     frame: *Frame,
     tree: RenderTree,
     stack: std.ArrayList(Open) = .empty,
+    // Parsed once: a page can hold tens of thousands of links.
+    base: ?URL.Base,
 
     // Content still to render, followed by what closes the element.
     const Open = struct {
@@ -194,8 +196,19 @@ const Context = struct {
         blockquote: *QuoteWriter,
     };
 
+    fn init(writer: *std.Io.Writer, state: RenderTree.State, frame: *Frame) Context {
+        return .{
+            .state = .{},
+            .writer = writer,
+            .frame = frame,
+            .tree = .{ .frame = frame, .state = state },
+            .base = .init(frame.base(), frame.charset),
+        };
+    }
+
     fn deinit(self: *Context) void {
         self.stack.deinit(self.frame.local_arena);
+        if (self.base) |base| base.deinit();
     }
 
     fn ensureNewline(self: *Context) !void {
@@ -207,7 +220,10 @@ const Context = struct {
 
     fn resolveHref(self: *Context, raw: []const u8) []const u8 {
         const frame = self.frame;
-        return URL.resolve(frame.local_arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
+        const base = self.base orelse {
+            return URL.resolve(frame.local_arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
+        };
+        return base.resolve(frame.local_arena, raw) catch raw;
     }
 
     fn writeLinkTarget(self: *Context, href: []const u8) !void {
@@ -418,9 +434,7 @@ const Context = struct {
                 }
                 try self.writer.writeAll("](");
                 if (el.getAttributeInterned("src")) |src| {
-                    const frame = self.frame;
-                    const absolute_src = URL.resolve(frame.call_arena, frame.base(), src, .{ .encoding = frame.charset }) catch src;
-                    try self.writer.writeAll(absolute_src);
+                    try self.writer.writeAll(self.resolveHref(src));
                 }
                 try self.writer.writeAll(")");
                 self.state.last_char_was_newline = false;
@@ -717,12 +731,7 @@ pub fn dump(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: 
     }
     if (opts.max_bytes) |limit| {
         var lw = LimitedWriter.init(writer, limit);
-        var ctx: Context = .{
-            .state = .{},
-            .writer = &lw.writer,
-            .frame = frame,
-            .tree = .{ .frame = frame, .state = state },
-        };
+        var ctx: Context = .init(&lw.writer, state, frame);
         defer ctx.deinit();
         ctx.render(node) catch |err| switch (err) {
             error.OutOfMemory => return err,
@@ -738,12 +747,7 @@ pub fn dump(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: 
         return;
     }
 
-    var ctx: Context = .{
-        .state = .{},
-        .writer = writer,
-        .frame = frame,
-        .tree = .{ .frame = frame, .state = state },
-    };
+    var ctx: Context = .init(writer, state, frame);
     defer ctx.deinit();
     try ctx.render(node);
     if (!ctx.state.last_char_was_newline) {
