@@ -2382,6 +2382,16 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
         log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
     }
 
+    // The retry goes out with credentials the lookup/revalidation above
+    // didn't know about, so the first attempt's cache intent no longer
+    // applies, as with a redirect.
+    if (transfer._cache_intent == .revalidate) {
+        transfer._cache_intent.revalidate.data.deinit(transfer.client.allocator);
+        transfer.removeHeader("If-None-Match");
+        transfer.removeHeader("If-Modified-Since");
+    }
+    transfer._cache_intent = .none;
+
     transfer.unpark();
     self.processTransfer(transfer) catch |err| {
         transfer.abortPipelineError(err);

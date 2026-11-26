@@ -162,6 +162,7 @@ pub const ResponseDirectives = struct {
     no_cache: bool = false,
     private: bool = false,
     public: bool = false,
+    must_revalidate: bool = false,
     max_age: ?u64 = null,
     s_maxage: ?u64 = null,
 
@@ -188,6 +189,8 @@ pub const ResponseDirectives = struct {
                 directives.private = true;
             } else if (std.ascii.eqlIgnoreCase(name, "public")) {
                 directives.public = true;
+            } else if (std.ascii.eqlIgnoreCase(name, "must-revalidate")) {
+                directives.must_revalidate = true;
             } else if (std.ascii.eqlIgnoreCase(name, "max-age")) {
                 directives.max_age = parseDeltaSeconds(argument);
             } else if (std.ascii.eqlIgnoreCase(name, "s-maxage")) {
@@ -343,7 +346,6 @@ const ResponseHeaders = struct {
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
     has_set_cookie: bool = false,
-    has_authorization: bool = false,
 
     fn parse(headers: []const Http.Header) ResponseHeaders {
         var self: ResponseHeaders = .{};
@@ -376,8 +378,6 @@ const ResponseHeaders = struct {
                         self.directives = .parse(h.value);
                     } else if (std.mem.eql(u8, h.name, "last-modified")) {
                         self.last_modified = h.value;
-                    } else if (std.mem.eql(u8, h.name, "authorization")) {
-                        self.has_authorization = true;
                     }
                 },
                 else => {},
@@ -430,7 +430,7 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, private_cache: 
     const status = candidate.status;
     const response: ResponseHeaders = .parse(candidate.headers);
 
-    if (status == 206 or (status >= 300 and status < 400)) {
+    if (status == 206 or status == 401 or status == 407 or (status >= 300 and status < 400)) {
         // TODO
         // Could be cached, but HttpClient doesn't handle this correctly, it
         // just writes the response instead of actually processing it.
@@ -449,10 +449,17 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, private_cache: 
         }
     }
 
-    if (response.has_authorization) {
-        if (private_cache) {
-            private = true;
-        } else {
+    // RFC 9111 §3.5: a shared cache may store a response to a request that
+    // had an Authorization header only if the response is marked public,
+    // s-maxage, or must-revalidate. Lookups for such requests are otherwise
+    // unrestricted; an origin answering per-user sends Vary: Authorization.
+    const request_has_authorization = for (candidate.request_headers) |h| {
+        if (std.mem.eql(u8, h.name, "authorization")) break true;
+    } else false;
+
+    if (request_has_authorization) {
+        const d = response.directives;
+        if (!(d.public or d.s_maxage != null or d.must_revalidate)) {
             log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
             return null;
         }
