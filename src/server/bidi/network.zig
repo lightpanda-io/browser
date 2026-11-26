@@ -25,6 +25,7 @@ const lp = @import("lightpanda");
 const Notification = @import("../../Notification.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 const Cookie = @import("../../browser/webapi/storage/Cookie.zig");
+const Mime = @import("../../browser/Mime.zig");
 
 const BiDi = @import("BiDi.zig");
 const storage = @import("storage.zig");
@@ -153,12 +154,16 @@ const BaseParameters = struct {
             .redirect => transfer._redirect_count - 1,
         });
 
+        const url = if (transfer.res.header) |header|
+            std.mem.span(header.url)
+        else
+            transfer.req.url;
         try jws.objectField("request");
         try jws.write(RequestData{
             .transfer = transfer,
             .url = switch (self.hop) {
                 .current => null,
-                .redirect => responseUrl(transfer),
+                .redirect => url,
             },
             // Whether to report the request's cookies, in `cookies` and in the
             // Cookie header. The response events don't: we read the jar when we
@@ -290,13 +295,15 @@ const ResponseData = struct {
 
     fn _jsonStringify(self: *const ResponseData, jws: anytype) !void {
         const transfer = self.transfer;
-        const url = responseUrl(transfer);
-
         var headers_size: usize = 0;
         for (transfer.responseHeaders()) |hdr| {
             headers_size += Header.size(hdr.name, hdr.value);
         }
 
+        const url = if (transfer.res.header) |header|
+            std.mem.span(header.url)
+        else
+            transfer.req.url;
         try jws.beginObject();
         try jws.objectField("url");
         try jws.write(url);
@@ -320,8 +327,14 @@ const ResponseData = struct {
         }
         try jws.endArray();
 
+        const mime: Mime = blk: {
+            if (transfer.contentType()) |ct| {
+                break :blk Mime.parse(ct) catch .unknown;
+            }
+            break :blk .unknown;
+        };
         try jws.objectField("mimeType");
-        try jws.write(try mimeEssence(transfer.arena.allocator(), transfer.contentType() orelse ""));
+        try jws.write(mime.contentTypeString());
 
         try jws.objectField("headersSize");
         try jws.write(headers_size);
@@ -353,15 +366,6 @@ const ResponseData = struct {
     }
 };
 
-// The url the response came from. After a redirect, req.url is already the
-// redirect target, but the response head still has the url of its hop.
-fn responseUrl(transfer: *Transfer) []const u8 {
-    if (transfer.res.header) |header| {
-        return std.mem.span(header.url);
-    }
-    return transfer.req.url;
-}
-
 // The spec's "get the protocol": the ALPN protocol, else the url's scheme.
 fn writeProtocol(jws: anytype, transfer: *const Transfer, url: []const u8) !void {
     const protocol = transfer._timing.protocol;
@@ -370,13 +374,6 @@ fn writeProtocol(jws: anytype, transfer: *const Transfer, url: []const u8) !void
     }
     const i = std.mem.findScalar(u8, url, ':') orelse return jws.write("");
     return jws.write(url[0..i]);
-}
-
-// The MIME type's essence: "type/subtype" in lowercase, without parameters.
-fn mimeEssence(arena: std.mem.Allocator, content_type: []const u8) ![]const u8 {
-    const end = std.mem.findScalar(u8, content_type, ';') orelse content_type.len;
-    const essence = std.mem.trim(u8, content_type[0..end], " \t");
-    return std.ascii.allocLowerString(arena, essence);
 }
 
 // network.BytesValue: a string when the bytes are UTF-8, base64 otherwise.
