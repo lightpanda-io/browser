@@ -24,6 +24,7 @@
 
 const std = @import("std");
 
+const U = @import("../../sys/url.zig");
 const URL = @import("../../browser/URL.zig");
 
 const UrlPattern = @This();
@@ -53,8 +54,7 @@ pub const Input = struct {
 pub fn parse(arena: std.mem.Allocator, input: Input) error{ InvalidArgument, OutOfMemory }!UrlPattern {
     if (input.type == .string) {
         const pattern = input.pattern orelse return error.InvalidArgument;
-        const parsed = try parseUrl(arena, try unescape(arena, pattern));
-        return fromUrl(parsed, .{});
+        return fromUrl(arena, try unescape(arena, pattern), .{});
     }
 
     // Build a url from the components, with placeholders for the missing
@@ -75,7 +75,7 @@ pub fn parse(arena: std.mem.Allocator, input: Input) error{ InvalidArgument, Out
 
     const scheme = try std.ascii.allocLowerString(arena, url.items);
     try url.append(arena, ':');
-    if (isSpecial(scheme)) {
+    if (URL.isSpecialScheme(scheme)) {
         try url.appendSlice(arena, "//");
     }
 
@@ -132,8 +132,7 @@ pub fn parse(arena: std.mem.Allocator, input: Input) error{ InvalidArgument, Out
         try url.appendSlice(arena, search);
     }
 
-    const parsed = try parseUrl(arena, url.items);
-    return fromUrl(parsed, .{
+    return fromUrl(arena, url.items, .{
         .protocol = input.protocol != null,
         .hostname = input.hostname != null,
         .port = input.port != null,
@@ -190,21 +189,41 @@ const Has = struct {
     search: bool = true,
 };
 
-fn fromUrl(url: [:0]const u8, has: Has) UrlPattern {
+// Parses `raw` and keeps the components the pattern has, copied in `arena`
+// since the parsed url is freed on return. Reading the url record, rather
+// than its serialization, keeps the spec's nulls apart from empty strings:
+// a url with no host, or with an empty path.
+fn fromUrl(arena: std.mem.Allocator, raw: []const u8, has: Has) !UrlPattern {
+    var err: i32 = 0;
+    const url = U.url_parse(raw.ptr, raw.len, &err) orelse return error.InvalidArgument;
+    defer U.url_free(url);
+
+    const scheme = U.urlGetScheme(url);
     return .{
-        .protocol = if (has.protocol) schemeOf(url) else null,
-        .hostname = if (has.hostname) URL.getHostname(url) else null,
-        .port = if (has.port) portOf(url) else null,
-        .pathname = if (has.pathname) pathnameOf(url) else null,
-        .search = if (has.search) query(url) else null,
+        .protocol = if (has.protocol) try arena.dupe(u8, scheme) else null,
+        .hostname = if (has.hostname) try dupeComponent(arena, U.urlGetHostname(url)) else null,
+        .port = if (has.port) try parsedPort(arena, url, scheme) else null,
+        .pathname = if (has.pathname) try parsedPathname(arena, url) else null,
+        .search = if (has.search) try arena.dupe(u8, U.urlGetQuery(url) orelse "") else null,
     };
 }
 
-fn parseUrl(arena: std.mem.Allocator, url: []const u8) ![:0]const u8 {
-    return URL.resolve(arena, "", url, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.InvalidArgument,
-    };
+// "" for the scheme's default port, the port when there's another one,
+// else null. The parser drops a default port, so it reads as null.
+fn parsedPort(arena: std.mem.Allocator, url: *const U.Url, scheme: []const u8) !?[]const u8 {
+    if (U.urlGetPort(url)) |port| {
+        return try arena.print("{d}", .{port});
+    }
+    return if (URL.defaultPort(scheme) != null) "" else null;
+}
+
+// Null for an empty path, like "foo://host"'s.
+fn parsedPathname(arena: std.mem.Allocator, url: *const U.Url) !?[]const u8 {
+    const path = U.urlGetPath(url);
+    if (path.len == 0) {
+        return null;
+    }
+    return try arena.dupe(u8, path);
 }
 
 // The spec's "unescape URL pattern": a backslash escapes the next
@@ -248,32 +267,14 @@ fn query(url: [:0]const u8) []const u8 {
     return if (search.len > 0) search[1..] else "";
 }
 
-// The spec's pathname of a parsed pattern: null for an empty path.
-fn pathnameOf(url: [:0]const u8) ?[]const u8 {
-    const pathname = URL.getPathname(url);
-    return if (pathname.len > 0) pathname else null;
-}
-
-// "" for a special scheme's default port, the port when there's another
-// one, else null. The parser already removed a default port from the url.
+// The url's port as the spec compares it: "" for the scheme's default port.
+// The serializer already removed a default port from the url.
 fn portOf(url: [:0]const u8) ?[]const u8 {
     const port = URL.getPort(url);
     if (port.len > 0) {
         return port;
     }
-    return if (hasDefaultPort(schemeOf(url))) "" else null;
-}
-
-// https://url.spec.whatwg.org/#special-scheme
-fn isSpecial(s: []const u8) bool {
-    return hasDefaultPort(s) or std.mem.eql(u8, s, "file");
-}
-
-fn hasDefaultPort(s: []const u8) bool {
-    inline for (.{ "ftp", "http", "https", "ws", "wss" }) |special| {
-        if (std.mem.eql(u8, s, special)) return true;
-    }
-    return false;
+    return if (URL.defaultPort(schemeOf(url)) != null) "" else null;
 }
 
 const testing = @import("../../testing.zig");
@@ -327,6 +328,13 @@ test "bidi.UrlPattern: parse a pattern" {
 
     // Escaped characters.
     try expectPattern(.{ .pathname = "/a*b" }, .{ .type = .pattern, .pathname = "/a\\*b" });
+
+    // A non-special scheme gets no "//", so the hostname becomes a path: the
+    // url has no host, and the spec's hostname is null.
+    try expectPattern(.{ .protocol = "foo" }, .{ .type = .pattern, .protocol = "foo", .hostname = "x" });
+    // Only special schemes have a default port.
+    try expectPattern(.{ .protocol = "ftp", .port = "" }, .{ .type = .pattern, .protocol = "ftp", .port = "21" });
+    try expectPattern(.{ .protocol = "file" }, .{ .type = .pattern, .protocol = "file" });
 }
 
 test "bidi.UrlPattern: parse a string" {
@@ -353,6 +361,24 @@ test "bidi.UrlPattern: parse a string" {
         .pathname = "/(x)",
         .search = "",
     }, .{ .type = .string, .pattern = "http://example.com/\\(x\\)" });
+
+    // A non-special url can have an empty path, and no port: both are null.
+    try expectPattern(.{
+        .protocol = "foo",
+        .hostname = "host",
+        .port = null,
+        .pathname = null,
+        .search = "",
+    }, .{ .type = .string, .pattern = "foo://host" });
+
+    // No host: null, not "".
+    try expectPattern(.{
+        .protocol = "data",
+        .hostname = null,
+        .port = null,
+        .pathname = "text/plain,hi",
+        .search = "",
+    }, .{ .type = .string, .pattern = "data:text/plain,hi" });
 }
 
 test "bidi.UrlPattern: invalid patterns" {
