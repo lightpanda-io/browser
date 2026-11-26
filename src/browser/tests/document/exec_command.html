@@ -52,10 +52,6 @@
     testing.expectEqual(false, document.execCommand('bold'));
     testing.expectEqual('abc', host.innerHTML);
   });
-  // supported in Chrome whether or not there's a user click; exec isn't
-  testing.diverges('no clipboard', () => {
-    testing.expectEqual(false, document.queryCommandSupported('copy'));
-  });
   getSelection().removeAllRanges();
 }
 </script>

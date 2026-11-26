@@ -167,6 +167,7 @@ pub const tracksSelection = entry.tracksSelection;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const caretToEnd = entry.caretToEnd;
+pub const selectedText = entry.selectedText;
 pub const rememberValueBeforeEdit = entry.rememberValueBeforeEdit;
 pub const dispatchChangeIfEdited = entry.dispatchChangeIfEdited;
 pub const CaretMove = entry.CaretMove;

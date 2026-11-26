@@ -1973,7 +1973,7 @@ fn deleteInEditingHost(frame: *Frame, target: *Element, forward: bool) !void {
         return;
     }
 
-    if (!try deleteAtSelection(frame, host_el, forward)) {
+    if (!try deleteAtSelection(frame, host_el, forward, input_type)) {
         // Chrome merges blocks, deletes a <br>, an image, ...
         log.info(.not_implemented, "contenteditable delete", .{ .forward = forward });
     }
@@ -2158,7 +2158,7 @@ pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !vo
 /// <br>, an image or a non-editable inline goes whole. At the edge of a block
 /// its line joins the one next to it. A noop at the edge of the host. Returns
 /// false, with no edit, for things we don't currently handle, e.g. tables.
-pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool) !bool {
+pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool, input_type: []const u8) !bool {
     const host = host_el.asNode();
     const selection = &frame.document._selection;
     const usable = if (selection._range) |range| blk: {
@@ -2257,7 +2257,7 @@ pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool) !bool 
         .bubbles = true,
         .composed = true,
         .data = null,
-        .inputType = if (forward) "deleteContentForward" else "deleteContentBackward",
+        .inputType = input_type,
     }, frame);
     try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
     return true;

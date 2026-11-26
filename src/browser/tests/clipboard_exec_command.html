@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content="skipped: Chrome copies and cuts only after a click (user activation), which we don't track">
+<script src="./testing.js"></script>
+<body>
+<p id="p">hello world</p>
+<div id="a">first line</div><div id="b">second <b>x</b></div>
+<p id="hidden">vis<span style="display:none">HIDDEN</span>ible</p>
+<div id="host" contenteditable><p id="editable">hello world</p></div>
+<input id="text" value="abcdef">
+<input id="ro" readonly value="abcdef">
+<input id="pw" type="password" value="abcdef">
+<textarea id="area">ab
+cdef</textarea>
+<button id="btn">b</button>
+</body>
+
+<script>
+  // Events from the last command, as "type:target:inputType".
+  let events = [];
+  for (const type of ['copy', 'cut', 'paste', 'beforeinput', 'input']) {
+    document.addEventListener(type, e => {
+      events.push(`${type}:${e.target.id || e.target.nodeName}:${e.inputType ?? ''}`);
+    }, true);
+  }
+
+  function selectText(el, start, end) {
+    const range = document.createRange();
+    range.setStart(el.firstChild, start);
+    range.setEnd(el.firstChild, end);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  }
+
+  function selectControl(el, start, end) {
+    el.focus();
+    el.setSelectionRange(start, end);
+  }
+
+  function reset() {
+    document.activeElement?.blur();
+    getSelection().removeAllRanges();
+    $('#text').value = 'abcdef';
+    $('#host').innerHTML = '<p id="editable">hello world</p>';
+  }
+
+  // Runs `command` with SENTINEL on the clipboard, `listener` handling its
+  // copy/cut event. Resolves to what it returned, the clipboard after it and
+  // the events.
+  async function run(command, setup, listener) {
+    reset();
+    await navigator.clipboard.writeText('SENTINEL');
+    setup?.();
+    events = [];
+    const controller = new AbortController();
+    if (listener) {
+      document.addEventListener(command, listener, { signal: controller.signal });
+    }
+    const ret = document.execCommand(command);
+    controller.abort();
+    return { ret, clip: await navigator.clipboard.readText(), events };
+  }
+</script>
+
+<script>
+  // After load: while the page parses, Chrome reports copy as disabled
+  async function query() {
+    const supported = ['copy', 'cut', 'paste'].map(c => document.queryCommandSupported(c));
+    const paste_enabled = document.queryCommandEnabled('paste');
+    const enabled = () => [document.queryCommandEnabled('copy'), document.queryCommandEnabled('cut')];
+    reset();
+    const nothing = enabled();
+    selectText($('#p'), 0, 5);
+    const plain = enabled();
+    reset();
+    selectText($('#editable'), 0, 5);
+    const editable = enabled();
+    reset();
+    selectControl($('#text'), 1, 4);
+    const control = enabled();
+    selectControl($('#text'), 2, 2);
+    const collapsed = enabled();
+    selectControl($('#ro'), 1, 4);
+    const readonly = enabled();
+    selectControl($('#pw'), 1, 4);
+    const password = enabled();
+    return () => {
+      // Chrome: only extensions can paste this way
+      testing.expectEqual([true, true, false], supported);
+      testing.expectEqual(false, paste_enabled);
+      testing.expectEqual([false, false], nothing);
+      testing.expectEqual([true, false], plain);
+      testing.expectEqual([true, true], editable);
+      testing.expectEqual([true, true], control);
+      testing.expectEqual([false, false], collapsed);
+      testing.expectEqual([true, false], readonly);
+      testing.expectEqual([false, false], password);
+    };
+  }
+</script>
+
+<script>
+  async function paste() {
+    const result = await run('paste', () => selectControl($('#text'), 1, 4));
+    return () => {
+      testing.expectEqual(false, result.ret);
+      testing.expectEqual('SENTINEL', result.clip);
+      testing.expectEqual([], result.events);
+      testing.expectEqual('abcdef', $('#text').value);
+    };
+  }
+</script>
+
+<script>
+  async function copy_selection() {
+    let event = null;
+    const none = await run('copy');
+    const plain = await run('copy', () => selectText($('#p'), 0, 5), e => { event = e; });
+    const blocks = await run('copy', () => {
+      const range = document.createRange();
+      range.setStart($('#a').firstChild, 2);
+      range.setEnd($('#b').firstChild, 3);
+      getSelection().addRange(range);
+    });
+    const hidden = await run('copy', () => getSelection().selectAllChildren($('#hidden')));
+    // Focus moving to a button leaves the selection where it was
+    const button = await run('copy', () => { selectText($('#p'), 6, 11); $('#btn').focus(); });
+    return () => {
+      // the event fires with nothing selected, but nothing is copied
+      testing.expectEqual(true, none.ret);
+      testing.expectEqual('SENTINEL', none.clip);
+      testing.expectEqual(['copy:BODY:'], none.events);
+
+      testing.expectEqual(true, plain.ret);
+      testing.expectEqual('hello', plain.clip);
+      testing.expectEqual(['copy:p:'], plain.events);
+      testing.expectTrue(event instanceof ClipboardEvent);
+      testing.expectEqual(true, event.isTrusted);
+      testing.expectEqual(true, event.bubbles);
+      testing.expectEqual(true, event.cancelable);
+      testing.expectEqual(true, event.composed);
+      testing.expectTrue(event.clipboardData instanceof DataTransfer);
+
+      testing.diverges('Selection.toString is not rendered text: no line break between blocks, display:none included', () => {
+        // Chrome: 'rst line\nsec' and 'visible'
+        testing.expectEqual('rst linesec', blocks.clip);
+        testing.expectEqual('visHIDDENible', hidden.clip);
+      });
+      testing.expectEqual(['copy:a:'], blocks.events);
+      testing.expectEqual('world', button.clip);
+      testing.expectEqual(['copy:p:'], button.events);
+    };
+  }
+</script>
+
+<script>
+  async function copy_control() {
+    const text = await run('copy', () => selectControl($('#text'), 1, 4));
+    const area = await run('copy', () => selectControl($('#area'), 1, 6));
+    const collapsed = await run('copy', () => selectControl($('#text'), 2, 2));
+    const readonly = await run('copy', () => selectControl($('#ro'), 1, 4));
+    // a selection set while not focused isn't the one copied
+    const unfocused = await run('copy', () => $('#text').setSelectionRange(1, 4));
+    const password = await run('copy', () => selectControl($('#pw'), 1, 4));
+    return () => {
+      testing.expectEqual(true, text.ret);
+      testing.expectEqual('bcd', text.clip);
+      testing.expectEqual(['copy:text:'], text.events);
+      testing.expectEqual('b\ncde', area.clip);
+      testing.expectEqual(['copy:area:'], area.events);
+      testing.expectEqual('SENTINEL', collapsed.clip);
+      testing.expectEqual(['copy:text:'], collapsed.events);
+      testing.expectEqual('bcd', readonly.clip);
+      testing.expectEqual('SENTINEL', unfocused.clip);
+      testing.expectEqual(['copy:BODY:'], unfocused.events);
+
+      // Chrome fires nothing for a password, yet succeeds
+      testing.expectEqual(true, password.ret);
+      testing.expectEqual('SENTINEL', password.clip);
+      testing.expectEqual([], password.events);
+    };
+  }
+</script>
+
+<script>
+  async function cut() {
+    const text = await run('cut', () => selectControl($('#text'), 1, 4));
+    const value = $('#text').value;
+    const caret = [$('#text').selectionStart, $('#text').selectionEnd];
+    const collapsed = await run('cut', () => selectControl($('#text'), 2, 2));
+    const collapsed_value = $('#text').value;
+    const readonly = await run('cut', () => selectControl($('#ro'), 1, 4));
+    const password = await run('cut', () => selectControl($('#pw'), 1, 4));
+    const plain = await run('cut', () => selectText($('#p'), 0, 5));
+    const host = await run('cut', () => selectText($('#editable'), 0, 5));
+    const host_html = $('#host').innerHTML;
+    return () => {
+      testing.expectEqual(true, text.ret);
+      testing.expectEqual('bcd', text.clip);
+      testing.expectEqual('aef', value);
+      testing.expectEqual([1, 1], caret);
+      testing.expectEqual(['cut:text:', 'input:text:deleteByCut'], text.events);
+
+      testing.expectEqual('SENTINEL', collapsed.clip);
+      testing.expectEqual('abcdef', collapsed_value);
+      testing.expectEqual(['cut:text:'], collapsed.events);
+
+      // not editable: the event fires, nothing is copied or removed
+      testing.expectEqual(true, readonly.ret);
+      testing.expectEqual('SENTINEL', readonly.clip);
+      testing.expectEqual('abcdef', $('#ro').value);
+      testing.expectEqual(['cut:ro:'], readonly.events);
+      testing.expectEqual(true, plain.ret);
+      testing.expectEqual('SENTINEL', plain.clip);
+      testing.expectEqual('hello world', $('#p').textContent);
+      testing.expectEqual(['cut:p:'], plain.events);
+
+      testing.expectEqual(true, password.ret);
+      testing.expectEqual('SENTINEL', password.clip);
+      testing.expectEqual('abcdef', $('#pw').value);
+      testing.expectEqual([], password.events);
+
+      testing.expectEqual(true, host.ret);
+      testing.expectEqual('hello', host.clip);
+      testing.expectEqual('<p id="editable">&nbsp;world</p>', host_html);
+      testing.expectEqual(['cut:editable:', 'input:host:deleteByCut'], host.events);
+    };
+  }
+</script>
+
+<script>
+  async function listeners() {
+    const select = () => selectText($('#p'), 0, 5);
+    const set_and_cancel = await run('copy', select, e => {
+      e.clipboardData.setData('text/plain', 'FROM LISTENER');
+      e.clipboardData.setData('text/html', '<b>html</b>');
+      e.preventDefault();
+    });
+    // nothing set: the clipboard is left alone
+    const cancel_only = await run('copy', select, e => e.preventDefault());
+    // not canceled: what was set is ignored
+    const set_only = await run('copy', select, e => e.clipboardData.setData('text/plain', 'IGNORED'));
+    // set, but no text
+    const html_only = await run('copy', select, e => {
+      e.clipboardData.setData('text/html', '<b>html</b>');
+      e.preventDefault();
+    });
+    // with nothing selected
+    const no_selection = await run('copy', null, e => {
+      e.clipboardData.setData('text/plain', 'FROM LISTENER');
+      e.preventDefault();
+    });
+    const cut_cancel = await run('cut', () => selectControl($('#text'), 1, 4), e => {
+      e.clipboardData.setData('text/plain', 'CUT');
+      e.preventDefault();
+    });
+    const cut_value = $('#text').value;
+
+    let during = null;
+    let kept = null;
+    await run('copy', select, e => {
+      const data = e.clipboardData;
+      during = [data.getData('text/plain'), [...data.types], data.dropEffect, data.effectAllowed];
+      data.setData('text/plain', 'x');
+      kept = data;
+    });
+    kept.setData('text/plain', 'late');
+    const after = [kept.getData('text/plain'), [...kept.types], kept.items.length];
+
+    let inner = null;
+    const nested = await run('copy', select, () => { inner = document.execCommand('copy'); });
+    return () => {
+      testing.expectEqual(true, set_and_cancel.ret);
+      testing.expectEqual('FROM LISTENER', set_and_cancel.clip);
+      testing.expectEqual('SENTINEL', cancel_only.clip);
+      testing.expectEqual('hello', set_only.clip);
+      testing.expectEqual('', html_only.clip);
+      testing.expectEqual('FROM LISTENER', no_selection.clip);
+      testing.expectEqual('CUT', cut_cancel.clip);
+      testing.expectEqual('abcdef', cut_value);
+      testing.expectEqual(['cut:text:'], cut_cancel.events);
+
+      testing.expectEqual(['', [], 'none', 'uninitialized'], during);
+      // once dispatched, clipboardData is empty and stays so
+      testing.expectEqual(['', [], 0], after);
+
+      testing.expectEqual(true, nested.ret);
+      testing.expectEqual(false, inner);
+      testing.expectEqual('hello', nested.clip);
+    };
+  }
+</script>
+
+<script id="commands" type=module>
+{
+  // One after the other: they share the document and the clipboard.
+  const state = await testing.async();
+  const checks = [];
+  for (const section of [query, paste, copy_selection, copy_control, cut, listeners]) {
+    checks.push(await section());
+  }
+  state.resolve();
+  await state.done(() => {
+    for (const check of checks) {
+      check();
+    }
+  });
+}
+</script>

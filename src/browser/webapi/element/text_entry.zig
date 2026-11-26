@@ -161,6 +161,16 @@ pub fn TextEntry(comptime T: type) type {
             try dispatchInputEvent(self, null, input_type, frame);
         }
 
+        // The selected part of the value, "" for a collapsed selection.
+        pub fn selectedText(self: *const T, frame: *Frame) ![]const u8 {
+            const value = try editingValue(self, frame);
+            return switch (howSelected(self, @intCast(value.len))) {
+                .full => value,
+                .partial => |range| value[range[0]..range[1]],
+                .none => "",
+            };
+        }
+
         pub fn rememberValueBeforeEdit(self: *T, frame: *Frame) !void {
             if (self._value_before_edit != null) {
                 return;
