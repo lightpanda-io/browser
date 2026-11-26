@@ -29,15 +29,142 @@ const Mime = @import("../../browser/Mime.zig");
 
 const BiDi = @import("BiDi.zig");
 const storage = @import("storage.zig");
+const browsing_context = @import("browsing_context.zig");
+const UrlPattern = @import("UrlPattern.zig");
+const uuidv4 = @import("../../id.zig").uuidv4;
 const net_error = @import("../net_error.zig");
 
 const Transfer = HttpClient.Transfer;
 
 pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
-    _ = cmd;
-    _ = action;
-    // No commands yet.
-    return error.UnknownCommand;
+    const command = std.meta.stringToEnum(enum {
+        addIntercept,
+        removeIntercept,
+    }, action) orelse return error.UnknownCommand;
+
+    switch (command) {
+        .addIntercept => return addIntercept(cmd),
+        .removeIntercept => return removeIntercept(cmd),
+    }
+}
+
+// network.InterceptPhase
+pub const InterceptPhase = enum {
+    beforeRequestSent,
+    responseStarted,
+    authRequired,
+};
+
+// A network.addIntercept registration: the requests it blocks, and in which
+// phases.
+pub const Intercept = struct {
+    id: [36]u8,
+    phases: std.EnumSet(InterceptPhase),
+    // The navigable whose requests it blocks, null for every navigable.
+    // There's only one navigable, so a list of contexts is that one.
+    context: ?[36]u8,
+    // Empty matches every url.
+    url_patterns: []const UrlPattern,
+
+    // The spec's "get the network intercepts", for one intercept.
+    // `context` is the request's top-level context, `url` its url.
+    fn matches(self: *const Intercept, phase: InterceptPhase, context: ?[]const u8, url: [:0]const u8) bool {
+        if (self.context) |*id| {
+            const c = context orelse return false;
+            if (!std.mem.eql(u8, id, c)) return false;
+        }
+        if (!self.phases.contains(phase)) {
+            return false;
+        }
+        if (self.url_patterns.len == 0) {
+            return true;
+        }
+        for (self.url_patterns) |*pattern| {
+            if (pattern.matches(url)) return true;
+        }
+        return false;
+    }
+};
+
+fn addIntercept(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        phases: []const InterceptPhase,
+        contexts: ?[]const []const u8 = null,
+        urlPatterns: []const UrlPattern.Input = &.{},
+    });
+
+    if (p.phases.len == 0) {
+        return cmd.sendError("invalid argument", "phases is empty");
+    }
+
+    var context: ?[36]u8 = null;
+    if (p.contexts) |contexts| {
+        if (contexts.len == 0) {
+            return cmd.sendError("invalid argument", "contexts is empty");
+        }
+        // There's only one navigable, and it's top-level.
+        for (contexts) |id| {
+            const ctx = (try browsing_context.requireContext(cmd, id)) orelse return;
+            context = ctx.id;
+        }
+    }
+
+    // Parsed in the message arena: parsing leaves temporary buffers, and a
+    // pattern can still be invalid. Only the result goes to the session.
+    const parsed = try cmd.arena.alloc(UrlPattern, p.urlPatterns.len);
+    for (p.urlPatterns, parsed) |input, *pattern| {
+        pattern.* = UrlPattern.parse(cmd.arena, input) catch |err| switch (err) {
+            error.InvalidArgument => return cmd.sendError("invalid argument", "invalid url pattern"),
+            else => return err,
+        };
+    }
+
+    // In the session arena, so a removed intercept isn't freed until the
+    // session ends.
+    const bidi = cmd.bidi;
+    const allocator = bidi.session_arena.allocator();
+
+    const url_patterns = try allocator.alloc(UrlPattern, parsed.len);
+    for (parsed, url_patterns) |*src, *dest| {
+        dest.* = try src.dupe(allocator);
+    }
+
+    var intercept: Intercept = .{
+        .id = undefined,
+        .phases = .initMany(p.phases),
+        .context = context,
+        .url_patterns = url_patterns,
+    };
+    uuidv4(&intercept.id);
+    try bidi.intercepts.append(allocator, intercept);
+
+    return cmd.sendResult(.{ .intercept = &intercept.id });
+}
+
+fn removeIntercept(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        intercept: []const u8,
+    });
+
+    // Requests it already blocks stay blocked: only later ones are affected.
+    const bidi = cmd.bidi;
+    for (bidi.intercepts.items, 0..) |*intercept, i| {
+        if (std.mem.eql(u8, &intercept.id, p.intercept)) {
+            _ = bidi.intercepts.orderedRemove(i);
+            return cmd.sendResult(struct {}{});
+        }
+    }
+    return cmd.sendError("no such intercept", "unknown intercept");
+}
+
+// The request's top-level browsing context. Child frames have no BiDi
+// context of their own yet: their requests are reported on the top-level
+// context.
+fn topLevelContext(bidi: *const BiDi, transfer: *const Transfer) ?*const browsing_context.Context {
+    const c = &(bidi.browsing_context orelse return null);
+    const req = &transfer.req;
+    const root = if (req.root_frame_id != 0) req.root_frame_id else req.document_frame_id orelse req.frame_id;
+    return if (c.frame_id == root) c else null;
 }
 
 pub fn registerNotifications(bidi: *BiDi) !void {
@@ -142,13 +269,7 @@ const BaseParameters = struct {
         const transfer = self.transfer;
         const req = &transfer.req;
 
-        // Child frames have no BiDi context of their own yet: their requests
-        // are reported on the top-level context.
-        const ctx: ?*const @import("browsing_context.zig").Context = blk: {
-            const c = &(bidi.browsing_context orelse break :blk null);
-            const root = if (req.root_frame_id != 0) req.root_frame_id else req.document_frame_id orelse req.frame_id;
-            break :blk if (c.frame_id == root) c else null;
-        };
+        const ctx = topLevelContext(bidi, transfer);
 
         try jws.beginObject();
         try jws.objectField("context");
@@ -707,6 +828,129 @@ test "bidi.network: no event without a subscription" {
 
     _ = try ctx.createContext(.{ .url = "bidi/network.html" });
     try testing.expectError(error.EventNotFound, findEvent(&ctx, "network.beforeRequestSent", "bidi/network.html"));
+}
+
+test "bidi.network: addIntercept and removeIntercept" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "network.addIntercept", .params = .{
+        .phases = .{ "beforeRequestSent", "responseStarted" },
+        .contexts = .{context_id},
+        .urlPatterns = .{
+            .{ .type = "string", .pattern = "http://127.0.0.1:9582/a" },
+            .{ .type = "pattern", .hostname = "localhost" },
+        },
+    } });
+
+    const intercepts = &ctx.bidi().intercepts;
+    try testing.expectEqual(1, intercepts.items.len);
+    const intercept = &intercepts.items[0];
+    const id = try testing.arena.dupe(u8, &intercept.id);
+    try ctx.expectSentResult(.{ .intercept = id }, .{ .id = 1 });
+
+    try testing.expectEqual(true, std.mem.eql(u8, context_id, &intercept.context.?));
+    try testing.expectEqual(true, intercept.phases.contains(.beforeRequestSent));
+    try testing.expectEqual(true, intercept.phases.contains(.responseStarted));
+    try testing.expectEqual(false, intercept.phases.contains(.authRequired));
+    try testing.expectEqual(2, intercept.url_patterns.len);
+
+    // Without contexts and urlPatterns: every navigable, every url.
+    try ctx.processMessage(.{ .id = 2, .method = "network.addIntercept", .params = .{ .phases = .{"authRequired"} } });
+    try testing.expectEqual(2, intercepts.items.len);
+    try testing.expect(intercepts.items[1].context == null);
+    try testing.expectEqual(0, intercepts.items[1].url_patterns.len);
+
+    try ctx.processMessage(.{ .id = 3, .method = "network.removeIntercept", .params = .{ .intercept = id } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(1, intercepts.items.len);
+
+    // Already removed.
+    try ctx.processMessage(.{ .id = 4, .method = "network.removeIntercept", .params = .{ .intercept = id } });
+    try ctx.expectSentError("no such intercept", "unknown intercept", .{ .id = 4 });
+}
+
+test "bidi.network: addIntercept errors" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.createContext(.{});
+    const session_capacity = ctx.bidi().session_arena.queryCapacity();
+
+    try ctx.processMessage(.{ .id = 1, .method = "network.addIntercept", .params = .{ .phases = .{} } });
+    try ctx.expectSentError("invalid argument", "phases is empty", .{ .id = 1 });
+
+    try ctx.processMessage(.{ .id = 2, .method = "network.addIntercept", .params = .{ .phases = .{"responseCompleted"} } });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "network.addIntercept", .params = .{ .phases = .{"beforeRequestSent"}, .contexts = .{} } });
+    try ctx.expectSentError("invalid argument", "contexts is empty", .{ .id = 3 });
+
+    try ctx.processMessage(.{ .id = 4, .method = "network.addIntercept", .params = .{ .phases = .{"beforeRequestSent"}, .contexts = .{"nope"} } });
+    try ctx.expectSentError("no such frame", "unknown context", .{ .id = 4 });
+
+    try ctx.processMessage(.{ .id = 5, .method = "network.addIntercept", .params = .{
+        .phases = .{"beforeRequestSent"},
+        .urlPatterns = .{.{ .type = "pattern", .pathname = "/*" }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid url pattern", .{ .id = 5 });
+
+    try ctx.processMessage(.{ .id = 6, .method = "network.addIntercept", .params = .{} });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 6 });
+
+    try ctx.processMessage(.{ .id = 7, .method = "network.removeIntercept", .params = .{} });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 7 });
+
+    try ctx.processMessage(.{ .id = 8, .method = "network.addIntercept", .params = .{
+        .phases = .{"beforeRequestSent"},
+        .urlPatterns = .{.{ .type = "nope" }},
+    } });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 8 });
+
+    try ctx.processMessage(.{ .id = 9, .method = "network.addIntercept", .params = .{
+        .phases = .{"beforeRequestSent"},
+        .urlPatterns = .{
+            .{ .type = "string", .pattern = "http://127.0.0.1:9582/a" },
+            .{ .type = "pattern", .hostname = "a/b" },
+        },
+    } });
+    try ctx.expectSentError("invalid argument", "invalid url pattern", .{ .id = 9 });
+
+    // None of them added an intercept, or left anything in the session arena.
+    try testing.expectEqual(0, ctx.bidi().intercepts.items.len);
+    try testing.expectEqual(session_capacity, ctx.bidi().session_arena.queryCapacity());
+}
+
+test "bidi.network: Intercept.matches" {
+    const arena = testing.arena;
+    const context = "11111111-1111-4111-8111-111111111111";
+    const url = "http://127.0.0.1:9582/a";
+
+    const patterns = [_]UrlPattern{
+        try UrlPattern.parse(arena, .{ .type = .pattern, .pathname = "/a" }),
+        try UrlPattern.parse(arena, .{ .type = .pattern, .hostname = "localhost" }),
+    };
+    var intercept: Intercept = .{
+        .id = undefined,
+        .phases = .initOne(.beforeRequestSent),
+        .context = context.*,
+        .url_patterns = &patterns,
+    };
+
+    try testing.expect(intercept.matches(.beforeRequestSent, context, url));
+    // Another phase.
+    try testing.expect(!intercept.matches(.responseStarted, context, url));
+    // Another context, or no context (a request with no top-level context).
+    try testing.expect(!intercept.matches(.beforeRequestSent, "22222222-2222-4222-8222-222222222222", url));
+    try testing.expect(!intercept.matches(.beforeRequestSent, null, url));
+    // One pattern is enough.
+    try testing.expect(intercept.matches(.beforeRequestSent, context, "http://localhost:9582/b"));
+    try testing.expect(!intercept.matches(.beforeRequestSent, context, "http://127.0.0.1:9582/b"));
+
+    // No context and no patterns: every request in the phase.
+    intercept.context = null;
+    intercept.url_patterns = &.{};
+    try testing.expect(intercept.matches(.beforeRequestSent, null, "http://example.com/"));
 }
 
 test "bidi.network: unknown command" {
