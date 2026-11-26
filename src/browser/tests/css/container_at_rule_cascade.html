@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  `@container` rules match per element, against the content box of its
+  nearest ancestor query container (container-type / container-name).
+-->
+
+<style>
+  body { margin: 0; }
+  .card { container-type: inline-size; }
+  #narrow { width: 300px; }
+  #wide { width: 600px; }
+  #padded { width: 420px; padding: 0 20px; box-sizing: border-box; }
+
+  .wide-only { display: none; }
+  @container (min-width: 400px) {
+    .wide-only { display: block; }
+  }
+  @container (width < 400px) {
+    .narrow-hidden { display: none; }
+  }
+
+  /* No container above it: never matches */
+  @container (min-width: 1px) {
+    #orphan { display: none; }
+  }
+
+  /* An element doesn't query itself */
+  #self { container-type: inline-size; width: 300px; }
+  @container (min-width: 1px) {
+    #self { display: none; }
+  }
+
+  /* The name skips the nearer unnamed container */
+  #page { container: page / inline-size; width: 800px; }
+  #page .card { width: 300px; }
+  @container page (min-width: 700px) {
+    #by-name { display: none; }
+  }
+  @container (min-width: 700px) {
+    #by-nearest { display: none; }
+  }
+
+  /* A name-only query: any container type */
+  #named-normal { container-name: side; }
+  @container side {
+    #name-only { display: none; }
+  }
+  /* A size query skips a container that doesn't contain its axis */
+  @container side (min-width: 1px) {
+    #normal-type { display: none; }
+  }
+
+  /* Height needs container-type: size */
+  #sized { container-type: size; width: 300px; height: 200px; }
+  @container (height > 100px) {
+    #tall { display: none; }
+  }
+  @container (orientation: landscape) {
+    #landscape { display: none; }
+  }
+  #inline-only { container-type: inline-size; width: 300px; height: 200px; }
+  @container (height > 100px) {
+    #no-height-axis { display: none; }
+  }
+
+  /* Nested rules must all hold */
+  @container (min-width: 400px) {
+    @container (max-width: 500px) {
+      #nested { display: none; }
+    }
+  }
+
+  /* not / or / range / comma lists */
+  @container not (min-width: 400px) {
+    #negated { display: none; }
+  }
+  @container (max-width: 10px) or (min-width: 500px) {
+    #either { display: none; }
+  }
+  @container (200px < width <= 300px) {
+    #range { display: none; }
+  }
+  @container (max-width: 10px), (min-width: 290px) {
+    #list { display: none; }
+  }
+
+  /* Unknown features invalidate the rule */
+  @container style(--x: y) {
+    #unknown { display: none; }
+  }
+
+  /* visibility through @container */
+  @container (min-width: 1px) {
+    #invisible { visibility: hidden; }
+  }
+
+  /* Containment: an inline-block container is sized as if empty */
+  #shrink { display: inline-block; container-type: inline-size; }
+  @container (width > 0px) {
+    #shrink-child { display: none; }
+  }
+
+  /* Without a box, a size query fails, even under not */
+  #boxless-none { container-type: inline-size; width: 500px; display: none; }
+  #boxless-parent { display: none; }
+  #boxless-nested { container-type: inline-size; width: 500px; }
+  #boxless-contents { container-type: inline-size; display: contents; }
+  @container (min-width: 400px) {
+    #boxless-none-child, #boxless-nested-child { visibility: hidden; }
+  }
+  @container not (min-width: 400px) {
+    #boxless-contents-child { visibility: hidden; }
+  }
+
+  /* An invalid declaration doesn't override a valid one */
+  #invalid-type { container-type: inline-size; container-type: bogus; width: 300px; }
+  #unset-type { container-type: inline-size; container-type: unset; width: 300px; }
+  @container (min-width: 1px) {
+    #invalid-type-child, #unset-type-child { display: none; }
+  }
+  /* CSS-wide keywords only stand alone */
+  #wide-keyword { container: kw / initial; }
+  @container kw {
+    #wide-keyword-child { display: none; }
+  }
+
+  /* Inside a nested style rule */
+  #nesting {
+    container-type: inline-size;
+    width: 300px;
+    @container (min-width: 1px) {
+      & .inner { display: none; }
+    }
+  }
+
+  #dynamic { width: 300px; }
+</style>
+<body>
+  <div class="card" id="narrow">
+    <div class="wide-only" id="narrow-wide-only">wide only</div>
+    <div class="narrow-hidden" id="narrow-hidden">narrow hidden</div>
+    <div id="negated">negated</div>
+    <div id="either">either</div>
+    <div id="range">range</div>
+    <div id="list">list</div>
+    <div id="unknown">unknown</div>
+    <div id="invisible">invisible</div>
+  </div>
+  <div class="card" id="wide">
+    <div class="wide-only" id="wide-wide-only">wide only</div>
+    <div class="narrow-hidden" id="wide-narrow-hidden">narrow hidden</div>
+  </div>
+  <div class="card" id="padded">
+    <div class="wide-only" id="padded-wide-only">wide only</div>
+  </div>
+  <div class="card" style="width: 450px">
+    <div id="nested">nested</div>
+  </div>
+  <div id="orphan">orphan</div>
+  <div id="self">self</div>
+  <div id="page">
+    <div class="card">
+      <div id="by-name">by name</div>
+      <div id="by-nearest">by nearest</div>
+    </div>
+  </div>
+  <div id="named-normal">
+    <div id="name-only">name only</div>
+    <div id="normal-type">normal type</div>
+  </div>
+  <div id="sized">
+    <div id="tall">tall</div>
+    <div id="landscape">landscape</div>
+  </div>
+  <div id="inline-only">
+    <div id="no-height-axis">no height axis</div>
+  </div>
+  <div id="shrink"><div id="shrink-child">some text that would be wide</div></div>
+  <div id="boxless-none"><div id="boxless-none-child">x</div></div>
+  <div id="boxless-parent"><div id="boxless-nested"><div id="boxless-nested-child">x</div></div></div>
+  <div style="width: 300px"><div id="boxless-contents"><div id="boxless-contents-child">x</div></div></div>
+  <div id="invalid-type"><div id="invalid-type-child">x</div></div>
+  <div id="unset-type"><div id="unset-type-child">x</div></div>
+  <div id="wide-keyword"><div id="wide-keyword-child">x</div></div>
+  <div id="nesting"><div class="inner" id="nesting-child">x</div></div>
+  <div class="card" id="dynamic">
+    <div class="wide-only" id="dynamic-wide-only">wide only</div>
+  </div>
+</body>
+
+<script id=width_queries>
+{
+  testing.expectFalse($('#narrow-wide-only').checkVisibility());
+  testing.expectTrue($('#wide-wide-only').checkVisibility());
+  testing.expectFalse($('#narrow-hidden').checkVisibility());
+  testing.expectTrue($('#wide-narrow-hidden').checkVisibility());
+  testing.expectEqual('none', getComputedStyle($('#narrow-wide-only')).display);
+  testing.expectEqual('block', getComputedStyle($('#wide-wide-only')).display);
+}
+</script>
+
+<script id=content_box>
+{
+  // 420px wide, 380px of content
+  testing.expectFalse($('#padded-wide-only').checkVisibility());
+}
+</script>
+
+<script id=container_selection>
+{
+  testing.expectTrue($('#orphan').checkVisibility());
+  testing.expectTrue($('#self').checkVisibility());
+  testing.expectFalse($('#by-name').checkVisibility());
+  testing.expectTrue($('#by-nearest').checkVisibility());
+  testing.expectFalse($('#name-only').checkVisibility());
+  testing.expectTrue($('#normal-type').checkVisibility());
+}
+</script>
+
+<script id=height_queries>
+{
+  testing.expectFalse($('#tall').checkVisibility());
+  testing.expectFalse($('#landscape').checkVisibility());
+  testing.expectTrue($('#no-height-axis').checkVisibility());
+}
+</script>
+
+<script id=conditions>
+{
+  testing.expectFalse($('#nested').checkVisibility());
+  testing.expectFalse($('#negated').checkVisibility());
+  testing.expectTrue($('#either').checkVisibility());
+  testing.expectFalse($('#range').checkVisibility());
+  testing.expectFalse($('#list').checkVisibility());
+  testing.expectTrue($('#unknown').checkVisibility());
+  testing.expectFalse($('#invisible').checkVisibility({ visibilityProperty: true }));
+}
+</script>
+
+<script id=containment>
+{
+  testing.expectEqual(0, $('#shrink').getBoundingClientRect().width);
+  testing.expectTrue($('#shrink-child').checkVisibility());
+}
+</script>
+
+<script id=boxless>
+{
+  testing.expectEqual('visible', getComputedStyle($('#boxless-none-child')).visibility);
+  testing.expectEqual('visible', getComputedStyle($('#boxless-nested-child')).visibility);
+  testing.expectEqual('visible', getComputedStyle($('#boxless-contents-child')).visibility);
+}
+</script>
+
+<script id=declarations>
+{
+  testing.expectFalse($('#invalid-type-child').checkVisibility());
+  testing.expectTrue($('#unset-type-child').checkVisibility());
+  testing.expectTrue($('#wide-keyword-child').checkVisibility());
+  testing.expectFalse($('#nesting-child').checkVisibility());
+}
+</script>
+
+<script id=dynamic_width>
+{
+  const container = $('#dynamic');
+  const child = $('#dynamic-wide-only');
+  testing.expectFalse(child.checkVisibility());
+
+  container.style.width = '500px';
+  testing.expectTrue(child.checkVisibility());
+
+  container.setAttribute('style', 'width: 200px');
+  testing.expectFalse(child.checkVisibility());
+
+  container.removeAttribute('style');
+  container.classList.remove('card');
+  container.style.width = '500px';
+  // No container any more
+  testing.expectFalse(child.checkVisibility());
+  container.classList.add('card');
+  testing.expectTrue(child.checkVisibility());
+}
+</script>
+
+<script id=cssom>
+{
+  let rule = null;
+  for (const r of document.styleSheets[0].cssRules) {
+    if (r.cssText.startsWith('@container page')) {
+      rule = r;
+    }
+  }
+  testing.expectTrue(rule !== null);
+  testing.expectEqual(0, rule.type);
+}
+</script>

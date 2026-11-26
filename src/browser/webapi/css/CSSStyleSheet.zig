@@ -291,14 +291,14 @@ fn parseStyleRule(self: *CSSStyleSheet, selector: []const u8, block: []const u8,
     return entry;
 }
 
-/// An at-rule. For grouping ones (@media, @supports, @layer) we keep the prelude
+/// An at-rule. For grouping ones (@media, @supports, @layer, @container) we keep the prelude
 /// as text, and the block as children rules. For all others, we keep the source
 /// as written.
 fn parseAtRule(self: *CSSStyleSheet, rule: Parser.AtRule, depth: u8, in_style: bool, frame: *Frame) CSSError!Entry {
     const allocator = frame.page.recycling;
     const kind: RuleStore.Kind = .ofAtRule(rule.keyword);
     const body = switch (kind) {
-        .media, .supports, .layer => rule.block,
+        .media, .supports, .layer, .container => rule.block,
         else => null,
     } orelse return Entry.init(allocator, kind, rule.text, try self.nextRuleId());
 
@@ -478,6 +478,10 @@ test "WebApi: layer order cascade" {
 
 test "WebApi: supports @-rule cascade" {
     try testing.htmlRunner("css/supports_at_rule_cascade.html", .{});
+}
+
+test "WebApi: container @-rule cascade" {
+    try testing.htmlRunner("css/container_at_rule_cascade.html", .{});
 }
 
 test "WebApi: CSS nesting" {

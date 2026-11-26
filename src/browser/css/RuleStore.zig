@@ -183,13 +183,14 @@ pub const Entry = struct {
         };
     }
 
-    /// A grouping rule (@media, @supports, @layer): its keyword, lowercased
+    /// A grouping rule (@media, @supports, @layer, @container): its keyword, lowercased
     /// as Chrome serializes it, then its prelude.
     pub fn initPrelude(allocator: Allocator, kind: Kind, prelude: []const u8, id: u32) !Entry {
         const name = switch (kind) {
             .media => "@media",
             .supports => "@supports",
             .layer => "@layer",
+            .container => "@container",
             else => unreachable,
         };
         const len = name.len + @intFromBool(prelude.len > 0) + prelude.len;
@@ -251,11 +252,12 @@ pub const Kind = enum(u8) {
     viewport,
     region_style,
     layer,
+    container,
     unknown,
 
     pub fn ruleType(self: Kind) u16 {
         return switch (self) {
-            .layer, .unknown => 0,
+            .layer, .container, .unknown => 0,
             else => @as(u16, @backingInt(self)) + 1,
         };
     }
@@ -311,6 +313,9 @@ pub const Kind = enum(u8) {
         }
         if (eql(keyword, "layer")) {
             return .layer;
+        }
+        if (eql(keyword, "container")) {
+            return .container;
         }
         return .unknown;
     }
