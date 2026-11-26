@@ -3350,6 +3350,23 @@ pub const Transfer = struct {
         return written.ptr[0 .. written.len - 1 :0];
     }
 
+    // Calls `f` with each cookie getCookieString puts in the Cookie header.
+    pub fn forEachCookie(
+        self: *Transfer,
+        ctx: anytype,
+        comptime f: fn (@TypeOf(ctx), *const Cookie) anyerror!void,
+    ) !void {
+        const req = &self.req;
+        if (!req.credentialsAllowed()) return;
+
+        const jar = self.cookie_jar orelse return;
+        try jar.forEachForRequest(req.url, .{
+            .is_http = true,
+            .origin_url = self.cookie_origin,
+            .kind = self.requestKind(),
+        }, ctx, f);
+    }
+
     // Mirrors the transfer to whoever the owner reports to (CDP). A request
     // without attribution has nobody listening.
     fn notify(self: *Transfer, comptime event: Notification.EventType, data: Notification.ArgType(event)) void {

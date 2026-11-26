@@ -222,7 +222,8 @@ pub const TestContext = struct {
         }
     }
 
-    fn read(self: *TestContext) !void {
+    // Reads what was sent so far into `received`.
+    pub fn read(self: *TestContext) !void {
         while (true) {
             const n = posix.read(self.socket, self.read_buf[self.read_at..]) catch |err| switch (err) {
                 error.WouldBlock => return,
