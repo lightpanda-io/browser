@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=exists>
+  testing.expectEqual('object', typeof document.timeline);
+  testing.expectTrue(document.timeline instanceof DocumentTimeline);
+  // the same object every time
+  testing.expectTrue(document.timeline === document.timeline);
+</script>
+
+<script id=currentTime>
+  {
+    // currentTime follows the document's time origin, like performance.now().
+    const before = performance.now();
+    const t1 = document.timeline.currentTime;
+    const after = performance.now();
+    testing.expectEqual('number', typeof t1);
+    testing.expectTrue(t1 >= before && t1 <= after);
+
+    const t2 = document.timeline.currentTime;
+    testing.expectTrue(t2 >= t1);
+  }
+</script>
+
+<script id=inactive>
+  {
+    // A document without a browsing context has an inactive timeline.
+    const doc = new DOMParser().parseFromString('<p>x</p>', 'text/html');
+    testing.expectTrue(doc.timeline instanceof DocumentTimeline);
+    testing.expectEqual(null, doc.timeline.currentTime);
+  }
+</script>
+
+<script id=real_world>
+  {
+    // elevenlabs.io: a marquee reads the timeline next to getAnimations() in a
+    // React layout effect; when document.timeline was undefined this threw and
+    // React replaced the whole page with its error screen.
+    const el = document.createElement('div');
+    const animations = el.getAnimations({ subtree: true }) ?? [];
+    const now = document.timeline.currentTime;
+    testing.expectEqual(0, animations.length);
+    testing.expectEqual('number', typeof now);
+  }
+</script>
