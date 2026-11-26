@@ -3761,6 +3761,14 @@ pub fn clipsOverflowX(self: *StyleManager, el: *Element) bool {
     return self.geometryProps(el).overflow_x_clips;
 }
 
+/// Overflow along y is clipped or scrolled within the box: what lies past its
+/// top or bottom edge isn't seen (see IntersectionObserver).
+pub fn clipsOverflowY(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.geometryProps(el).overflow_y_clips;
+}
+
 /// A length that may depend on the containing block's size.
 pub const BoxLength = union(enum) {
     px: f64,
@@ -6331,6 +6339,7 @@ const Geometry = struct {
         flex_grow: ?bool = null,
         flex_no_shrink: ?bool = null,
         overflow_y_scrolls: ?bool = null,
+        overflow_y_clips: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
         z_index: ?ZIndex = null,
@@ -6417,6 +6426,7 @@ const Geometry = struct {
                 },
                 .@"overflow-y" => {
                     self.overflow_y_scrolls = overflowScrolls(value);
+                    self.overflow_y_clips = overflowClips(value);
                 },
                 .@"overscroll-behavior-x" => {
                     self.overscroll_x_contains = overscrollContains(value);
@@ -6676,12 +6686,13 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u616) {
+    const Computed = packed struct(u617) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
         flex_no_shrink: bool = false,
         overflow_y_scrolls: bool = false,
+        overflow_y_clips: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
         z_index: ZIndex = .auto,
@@ -8344,11 +8355,11 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .visibility = .{ .visibility_hidden = true } },
         .{},
         .{},
-        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = false } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = false, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
         .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true } },
         .{},
         .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
