@@ -792,8 +792,8 @@ const ActivationState = struct {
             // Rollback: restore previous state
             input._checked = self.old_checked;
             input._checked_dirty = true;
-            if (self.old_indeterminate) {
-                input._indeterminate = true;
+            if (input._input_type == .checkbox and input._indeterminate != self.old_indeterminate) {
+                input._indeterminate = self.old_indeterminate;
                 Frame.change.stateChanged(input.asElement(), .indeterminate, frame);
             }
             if (self.previously_checked_radio) |prev_radio| {

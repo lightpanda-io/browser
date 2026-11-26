@@ -345,3 +345,20 @@
     testing.expectEqual(true, cb.indeterminate);
   }
 </script>
+
+<script id="checkbox_click_preventDefault_restores_cleared_indeterminate">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+
+    cb.addEventListener('click', (e) => {
+      cb.indeterminate = true;
+      e.preventDefault();
+    });
+
+    cb.click();
+    testing.expectEqual(false, cb.checked);
+    testing.expectEqual(false, cb.indeterminate);
+    testing.expectEqual(false, cb.matches(':indeterminate'));
+  }
+</script>
