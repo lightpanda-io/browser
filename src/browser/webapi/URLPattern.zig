@@ -22,6 +22,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const U = @import("../../sys/url.zig");
+const URL = @import("../URL.zig");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 
@@ -122,7 +123,7 @@ pub fn init(input: ?Input, arg2: ?OptionsOrBaseUrl, arg3: ?OptionsOrBaseUrl.Opti
             @field(processed, name) = "*";
         }
     }
-    if (defaultPort(processed.protocol.?)) |port| {
+    if (URL.defaultPort(processed.protocol.?)) |port| {
         if (std.mem.eql(u8, processed.port.?, port)) {
             processed.port = "";
         }
@@ -335,14 +336,14 @@ fn match(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *c
             defer U.url_free(url);
 
             values = .{
-                .protocol = try arena.dupe(u8, urlScheme(url)),
-                .username = try arena.dupe(u8, urlUsername(url)),
-                .password = try arena.dupe(u8, urlPassword(url)),
-                .hostname = try arena.dupe(u8, urlHost(url)),
+                .protocol = try arena.dupe(u8, U.urlGetScheme(url)),
+                .username = try arena.dupe(u8, U.urlGetUsername(url)),
+                .password = try arena.dupe(u8, U.urlGetPassword(url) orelse ""),
+                .hostname = try arena.dupe(u8, U.urlGetHostname(url) orelse ""),
                 .port = try urlPort(arena, url),
-                .pathname = try arena.dupe(u8, urlPath(url)),
-                .search = try arena.dupe(u8, urlQuery(url)),
-                .hash = try arena.dupe(u8, urlFragment(url)),
+                .pathname = try arena.dupe(u8, U.urlGetPath(url)),
+                .search = try arena.dupe(u8, U.urlGetQuery(url) orelse ""),
+                .hash = try arena.dupe(u8, U.urlGetFragment(url) orelse ""),
             };
         },
     }
@@ -672,32 +673,9 @@ fn parseConstructorString(env: Env, input: []const u8) Error!Init {
     return parser.run();
 }
 
-const special_schemes = [_][]const u8{ "http", "https", "ws", "wss", "ftp", "file" };
-
-fn isSpecialScheme(scheme: []const u8) bool {
-    for (special_schemes) |s| {
-        if (std.mem.eql(u8, s, scheme)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-const default_ports = std.StaticStringMap([]const u8).initComptime(.{
-    .{ "http", "80" },
-    .{ "https", "443" },
-    .{ "ws", "80" },
-    .{ "wss", "443" },
-    .{ "ftp", "21" },
-});
-
-fn defaultPort(scheme: []const u8) ?[]const u8 {
-    return default_ports.get(scheme);
-}
-
 fn protocolMatchesSpecialScheme(component: *const Component, local: *const js.Local) Error!bool {
     const re = component.regExp(local) catch return error.JsException;
-    for (special_schemes) |scheme| {
+    for (URL.special_schemes) |scheme| {
         if (re.match(scheme) catch return error.JsException) {
             return true;
         }
@@ -747,28 +725,28 @@ fn processInit(arena: Allocator, in: Init, comptime typ: InitType) Error!Init {
         const has_hash = has_search or in.hash != null;
 
         if (!has_protocol) {
-            result.protocol = try processBaseUrlString(arena, urlScheme(b), typ);
+            result.protocol = try processBaseUrlString(arena, U.urlGetScheme(b), typ);
         }
         if (typ != .pattern and !has_username) {
-            result.username = try processBaseUrlString(arena, urlUsername(b), typ);
+            result.username = try processBaseUrlString(arena, U.urlGetUsername(b), typ);
         }
         if (typ != .pattern and !has_password) {
-            result.password = try processBaseUrlString(arena, urlPassword(b), typ);
+            result.password = try processBaseUrlString(arena, U.urlGetPassword(b) orelse "", typ);
         }
         if (!has_hostname) {
-            result.hostname = try processBaseUrlString(arena, urlHost(b), typ);
+            result.hostname = try processBaseUrlString(arena, U.urlGetHostname(b) orelse "", typ);
         }
         if (!has_port) {
             result.port = try urlPort(arena, b);
         }
         if (!has_pathname) {
-            result.pathname = try processBaseUrlString(arena, urlPath(b), typ);
+            result.pathname = try processBaseUrlString(arena, U.urlGetPath(b), typ);
         }
         if (!has_search) {
-            result.search = try processBaseUrlString(arena, urlQuery(b), typ);
+            result.search = try processBaseUrlString(arena, U.urlGetQuery(b) orelse "", typ);
         }
         if (!has_hash) {
-            result.hash = try processBaseUrlString(arena, urlFragment(b), typ);
+            result.hash = try processBaseUrlString(arena, U.urlGetFragment(b) orelse "", typ);
         }
     }
 
@@ -793,7 +771,7 @@ fn processInit(arena: Allocator, in: Init, comptime typ: InitType) Error!Init {
         var pathname = init_pathname;
         if (base) |b| {
             if (!urlHasOpaquePath(b) and !isAbsolutePathname(pathname, typ)) {
-                const base_path = try processBaseUrlString(arena, urlPath(b), typ);
+                const base_path = try processBaseUrlString(arena, U.urlGetPath(b), typ);
                 if (std.mem.findScalarLast(u8, base_path, '/')) |slash| {
                     pathname = try std.mem.concat(arena, u8, &.{ base_path[0 .. slash + 1], pathname });
                 }
@@ -801,7 +779,7 @@ fn processInit(arena: Allocator, in: Init, comptime typ: InitType) Error!Init {
         }
         if (typ == .pattern) {
             result.pathname = pathname;
-        } else if (isSpecialScheme(result_protocol) or result_protocol.len == 0) {
+        } else if (URL.isSpecialScheme(result_protocol) or result_protocol.len == 0) {
             result.pathname = try canonicalizePathname(arena, pathname);
         } else {
             result.pathname = try canonicalizeOpaquePathname(arena, pathname);
@@ -840,73 +818,16 @@ fn isAbsolutePathname(input: []const u8, comptime typ: InitType) bool {
 
 // == URL record accessors (borrowed from the rust-url object) ==
 
-fn urlScheme(url: *const U.Url) []const u8 {
-    var out: [*]const u8 = undefined;
-    var len: usize = 0;
-    U.url_get_scheme(url, &out, &len);
-    return out[0..len];
-}
-
-fn urlUsername(url: *const U.Url) []const u8 {
-    var out: [*]const u8 = undefined;
-    var len: usize = 0;
-    U.url_get_username(url, &out, &len);
-    return out[0..len];
-}
-
-fn urlPassword(url: *const U.Url) []const u8 {
-    var out: [*]const u8 = undefined;
-    var len: usize = 0;
-    if (U.url_get_password(url, &out, &len) != 0) {
-        return "";
-    }
-    return out[0..len];
-}
-
-fn urlHost(url: *const U.Url) []const u8 {
-    var out: [*]const u8 = undefined;
-    var len: usize = 0;
-    if (U.url_get_hostname(url, &out, &len) != 0) {
-        return "";
-    }
-    return out[0..len];
-}
-
 fn urlPort(arena: Allocator, url: *const U.Url) Error![]const u8 {
     const port = U.urlGetPort(url) orelse return "";
     return arena.print("{d}", .{port});
-}
-
-fn urlPath(url: *const U.Url) []const u8 {
-    var out: [*]const u8 = undefined;
-    var len: usize = 0;
-    U.url_get_path(url, &out, &len);
-    return out[0..len];
-}
-
-fn urlQuery(url: *const U.Url) []const u8 {
-    var out: [*]const u8 = undefined;
-    var len: usize = 0;
-    if (U.url_get_query(url, &out, &len) != 0) {
-        return "";
-    }
-    return out[0..len];
-}
-
-fn urlFragment(url: *const U.Url) []const u8 {
-    var out: [*]const u8 = undefined;
-    var len: usize = 0;
-    if (U.url_get_fragment(url, &out, &len) != 0) {
-        return "";
-    }
-    return out[0..len];
 }
 
 // An opaque path is the only kind that serializes without a leading "/";
 // the empty path is ambiguous but behaves the same either way for our one
 // caller (no "/" to split on).
 fn urlHasOpaquePath(url: *const U.Url) bool {
-    const path = urlPath(url);
+    const path = U.urlGetPath(url);
     return path.len > 0 and path[0] != '/';
 }
 
@@ -930,7 +851,7 @@ fn canonicalizeProtocol(arena: Allocator, value: []const u8) Error![]const u8 {
     var err: i32 = 0;
     const url = U.url_parse(probe.ptr, probe.len, &err) orelse return error.TypeError;
     defer U.url_free(url);
-    return arena.dupe(u8, urlScheme(url));
+    return arena.dupe(u8, U.urlGetScheme(url));
 }
 
 fn canonicalizeUsername(arena: Allocator, value: []const u8) Error![]const u8 {
@@ -961,7 +882,7 @@ fn canonicalizeHostname(arena: Allocator, value: []const u8) Error![]const u8 {
     if (U.url_set_hostname(url, value.ptr, value.len) != 0) {
         return error.TypeError;
     }
-    return arena.dupe(u8, urlHost(url));
+    return arena.dupe(u8, U.urlGetHostname(url) orelse "");
 }
 
 fn canonicalizeIpv6Hostname(arena: Allocator, value: []const u8) Error![]const u8 {
@@ -1007,7 +928,7 @@ fn canonicalizePort(arena: Allocator, value: []const u8, protocol: ?[]const u8) 
     }
     const serialized = try arena.print("{d}", .{port});
     if (protocol) |p| {
-        if (defaultPort(p)) |default| {
+        if (URL.defaultPort(p)) |default| {
             if (std.mem.eql(u8, default, serialized)) {
                 return "";
             }
@@ -1031,7 +952,7 @@ fn canonicalizePathname(arena: Allocator, value: []const u8) Error![]const u8 {
     if (U.url_set_path(url, modified.ptr, modified.len) != 0) {
         return error.TypeError;
     }
-    const result = try arena.dupe(u8, urlPath(url));
+    const result = try arena.dupe(u8, U.urlGetPath(url));
     if (leading_slash) {
         return result;
     }
