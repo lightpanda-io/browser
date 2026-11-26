@@ -29,8 +29,7 @@ const Mime = @import("../../browser/Mime.zig");
 
 const BiDi = @import("BiDi.zig");
 const storage = @import("storage.zig");
-// Chrome's net::ERR_* names, as chromium-bidi reports them.
-const netError = @import("../cdp/domains/log.zig").netError;
+const net_error = @import("../net_error.zig");
 
 const Transfer = HttpClient.Transfer;
 
@@ -103,7 +102,7 @@ fn onHttpRequestFail(ptr: *anyopaque, msg: *const Notification.RequestFail) !voi
     return bidi.sendEvent(method, BaseParameters{
         .bidi = bidi,
         .transfer = msg.transfer,
-        .error_text = netError(msg.err),
+        .error_text = net_error.netError(msg.err),
     });
 }
 

@@ -24,7 +24,7 @@ const CDP = @import("../CDP.zig");
 const SafeString = @import("../SafeString.zig");
 const Notification = @import("../../../Notification.zig");
 const Transfer = @import("../../../network/HttpClient.zig").Transfer;
-const network = @import("network.zig");
+const net_error = @import("../../net_error.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -123,7 +123,7 @@ pub fn httpRequestFail(arena: Allocator, target: *CDP.Target, session_id: []cons
     if (isCancellation(msg.err)) {
         return;
     }
-    const text = try std.fmt.allocPrint(arena, "Failed to load resource: {s}", .{netError(msg.err)});
+    const text = try std.fmt.allocPrint(arena, "Failed to load resource: {s}", .{net_error.netError(msg.err)});
     return send(target, session_id, transfer, text, transfer.req.url);
 }
 
@@ -147,47 +147,9 @@ fn isCancellation(err: anyerror) bool {
     };
 }
 
-// Chrome's net error for a transfer error. libcurl folds some of Chrome's
-// causes into one code: CouldntConnect is also an unreachable host.
-pub fn netError(err: anyerror) []const u8 {
-    return switch (err) {
-        error.CouldntConnect => "net::ERR_CONNECTION_REFUSED",
-        error.CouldntResolveHost => "net::ERR_NAME_NOT_RESOLVED",
-        error.CouldntResolveProxy => "net::ERR_PROXY_CONNECTION_FAILED",
-        error.RecvError, error.SendError => "net::ERR_CONNECTION_RESET",
-        error.GotNothing => "net::ERR_EMPTY_RESPONSE",
-        error.TooManyRedirects => "net::ERR_TOO_MANY_REDIRECTS",
-        error.UrlMalformat => "net::ERR_INVALID_URL",
-        error.UnsupportedProtocol => "net::ERR_UNKNOWN_URL_SCHEME",
-        error.BadContentEncoding => "net::ERR_CONTENT_DECODING_FAILED",
-        error.SslConnectError, error.UseSslFailed => "net::ERR_SSL_PROTOCOL_ERROR",
-        error.PeerFailedVerification,
-        error.SslCertproblem,
-        error.SslCacertBadfile,
-        error.SslIssuerError,
-        error.SslInvalidcertstatus,
-        => "net::ERR_CERT_AUTHORITY_INVALID",
-        error.SslPinnedpubkeynotmatch => "net::ERR_SSL_PINNED_KEY_NOT_IN_CERT_CHAIN",
-        error.UrlBlocked, error.RobotsBlocked => "net::ERR_BLOCKED_BY_CLIENT",
-        else => {
-            // Fetch.failRequest's reasons, and the timeout.
-            const text = network.errorText(err);
-            return if (std.mem.startsWith(u8, text, "net::")) text else "net::ERR_FAILED";
-        },
-    };
-}
-
 const testing = @import("../testing.zig");
 
 const fixtures = "http://127.0.0.1:9582/src/browser/tests/cdp/";
-
-test "cdp.log: netError" {
-    try testing.expectEqualSlices(u8, "net::ERR_CONNECTION_REFUSED", netError(error.CouldntConnect));
-    try testing.expectEqualSlices(u8, "net::ERR_TIMED_OUT", netError(error.OperationTimedout));
-    try testing.expectEqualSlices(u8, "net::ERR_BLOCKED_BY_CLIENT", netError(error.UrlBlocked));
-    try testing.expectEqualSlices(u8, "net::ERR_ACCESS_DENIED", netError(network.ErrorReason.AccessDenied.toError()));
-    try testing.expectEqualSlices(u8, "net::ERR_FAILED", netError(error.SomethingElse));
-}
 
 // The entries of the Log.entryAdded events the client received on `session_id`.
 fn sentEntries(ctx: *testing.TestContext, session_id: []const u8) ![]const std.json.ObjectMap {
