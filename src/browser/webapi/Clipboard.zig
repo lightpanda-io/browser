@@ -48,10 +48,7 @@ fn writeText(_: *const Clipboard, data: []const u8, exec: *Execution) !js.Promis
     if (browser.permissions.get("clipboard-write") orelse .prompt == .denied) {
         return error.NotAllowedError;
     }
-    // A copy of exactly this size: a large write isn't kept past the next one
-    const copy = try browser.allocator.dupe(u8, data);
-    browser.allocator.free(browser.clipboard);
-    browser.clipboard = copy;
+    try browser.setClipboard(data);
     return exec.js.local.?.resolvePromise({});
 }
 

@@ -29,8 +29,12 @@ const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
 const Node = @import("../webapi/Node.zig");
+const Range = @import("../webapi/Range.zig");
 const Element = @import("../webapi/Element.zig");
 const Document = @import("../webapi/Document.zig");
+const EventTarget = @import("../webapi/EventTarget.zig");
+const DataTransfer = @import("../webapi/DataTransfer.zig");
+const ClipboardEvent = @import("../webapi/event/ClipboardEvent.zig");
 const user_input = @import("user_input.zig");
 
 const log = lp.log;
@@ -56,6 +60,10 @@ const Command = enum {
     selectAll,
     insertLineBreak,
     insertParagraph,
+    copy,
+    cut,
+    // No paste: Chrome only lets extensions read the clipboard this way, a
+    // page gets false. A real paste is Ctrl+V.
 
     // Command names are ASCII case-insensitive.
     fn parse(name: []const u8) ?Command {
@@ -109,6 +117,8 @@ pub fn exec(doc: *Document, name: []const u8, value: []const u8) !bool {
         },
         .insertLineBreak => insertLineBreak(frame),
         .insertParagraph => insertParagraph(frame),
+        .copy => copyOrCut(frame, .copy),
+        .cut => copyOrCut(frame, .cut),
     };
 }
 
@@ -129,6 +139,13 @@ pub fn isEnabled(doc: *Document, name: []const u8) bool {
                 .host => |host| user_input.selectionEditableIn(host, doc),
                 .input, .textarea => true,
             };
+        },
+        inline .copy, .cut => |c| {
+            const source = copySource(doc) orelse return false;
+            if (isPassword(source) or source.collapsed()) {
+                return false;
+            }
+            return c == .copy or source.editable(doc);
         },
         .selectAll, .styleWithCSS, .useCSS, .defaultParagraphSeparator => true,
     };
@@ -263,7 +280,7 @@ fn delete(frame: *Frame, forward: bool) !bool {
             if (selectionInSelect(frame.document)) {
                 return false;
             }
-            if (try user_input.deleteAtSelection(frame, host, forward) == false) {
+            if (try user_input.deleteAtSelection(frame, host, forward, input_type) == false) {
                 // Chrome merges blocks, deletes a <br>, an image, ...
                 log.info(.not_implemented, "execCommand.delete", .{ .forward = forward });
                 return false;
@@ -345,4 +362,171 @@ fn isCollapsed(doc: *Document, target: EditTarget) bool {
             return range.asAbstractRange().getCollapsed();
         },
     };
+}
+
+// Where copy and cut take the selected text from: the focused text control,
+// else the document's selection. Chrome's selection stays put when focus moves
+// to something without text, a button say.
+const CopySource = union(enum) {
+    input: *Element.Html.Input,
+    textarea: *Element.Html.TextArea,
+    range: *Range,
+
+    fn collapsed(self: CopySource) bool {
+        return switch (self) {
+            inline .input, .textarea => |ctl| ctl._selection_start == ctl._selection_end,
+            .range => |range| range.asAbstractRange().getCollapsed(),
+        };
+    }
+
+    fn editable(self: CopySource, doc: *Document) bool {
+        return switch (self) {
+            inline .input, .textarea => |ctl| user_input.acceptsEdit(ctl.asElement()),
+            .range => self.editingHost(doc) != null,
+        };
+    }
+
+    // For a document selection, the host a cut deletes it from.
+    fn editingHost(self: CopySource, doc: *Document) ?*Element {
+        if (self != .range or selectionInSelect(doc)) {
+            return null;
+        }
+        const node = self.range.asAbstractRange().getStartContainer();
+        const el = node.is(Element) orelse node.parentElement() orelse return null;
+        if (el.isEditable() == false) {
+            return null;
+        }
+        const host = user_input.outermostEditingHost(el) orelse return null;
+        return if (user_input.selectionEditableIn(host, doc)) host else null;
+    }
+
+    fn text(self: CopySource, frame: *Frame) ![]const u8 {
+        return switch (self) {
+            inline .input, .textarea => |ctl| ctl.selectedText(frame),
+            .range => |range| range.toSelectionString(frame),
+        };
+    }
+
+    // The copy or cut event's target: the control, else where the selection
+    // starts.
+    fn eventTarget(self: CopySource) ?*EventTarget {
+        return switch (self) {
+            inline .input, .textarea => |ctl| ctl.asElement().asEventTarget(),
+            .range => |range| {
+                const node = range.asAbstractRange().getStartContainer();
+                const el = node.is(Element) orelse node.parentElement() orelse return null;
+                return el.asEventTarget();
+            },
+        };
+    }
+};
+
+fn copySource(doc: *Document) ?CopySource {
+    if (doc._active_element) |el| {
+        if (el.is(Element.Html.Input)) |input| {
+            if (input.tracksSelection()) {
+                return .{ .input = input };
+            }
+        } else if (el.is(Element.Html.TextArea)) |textarea| {
+            return .{ .textarea = textarea };
+        }
+    }
+    const range = doc._selection._range orelse return null;
+    return .{ .range = range };
+}
+
+// https://w3c.github.io/clipboard-apis/#fire-a-clipboard-event
+// The clipboard is the Browser's, never the system's, the one
+// navigator.clipboard reads. Unlike Chrome, no user activation is needed: we
+// don't track it, as for writeText.
+fn copyOrCut(frame: *Frame, comptime kind: enum { copy, cut }) !bool {
+    const doc = frame.document;
+    if (isPassword(copySource(doc))) {
+        // Chrome: no event, nothing copied, yet it succeeds
+        return true;
+    }
+
+    const target: *EventTarget = blk: {
+        if (copySource(doc)) |source| {
+            if (source.eventTarget()) |t| {
+                break :blk t;
+            }
+        }
+        if (doc.getBody()) |body| {
+            break :blk body.asEventTarget();
+        }
+        break :blk doc.asEventTarget();
+    };
+
+    const browser = frame._session.browser;
+    const data_transfer = try DataTransfer.init(frame);
+    data_transfer.acquireRef();
+    defer data_transfer.releaseRef(frame.page);
+    data_transfer._effect_allowed = "uninitialized";
+
+    const event = try ClipboardEvent.initTrusted(@tagName(kind), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clipboardData = data_transfer,
+    }, frame);
+    const cancelled = try frame._event_manager.dispatchCancelable(target, event.asEvent());
+    if (cancelled and data_transfer._items.items.len > 0) {
+        // What the listeners put there: "" when they set no text/plain.
+        try browser.setClipboard(try data_transfer.getData("text/plain", frame));
+    }
+    // A listener keeping clipboardData finds it empty and unchangeable.
+    try data_transfer.clearItems(frame);
+    data_transfer._mode = .protected;
+    if (cancelled) {
+        return true;
+    }
+
+    // A listener can move focus or the selection: take the text from wherever
+    // it is now.
+    const source = copySource(doc) orelse return true;
+    if (isPassword(source) or source.collapsed()) {
+        return true;
+    }
+    if (kind == .cut and source.editable(doc) == false) {
+        // Chrome copies nothing either
+        return true;
+    }
+    try browser.setClipboard(try source.text(frame));
+    if (kind == .copy) {
+        return true;
+    }
+
+    switch (source) {
+        inline .input, .textarea => |ctl| {
+            try ctl.rememberValueBeforeEdit(frame);
+            try ctl.innerDelete(false, "deleteByCut", frame);
+        },
+        .range => {
+            const host = source.editingHost(doc).?;
+            if (try user_input.deleteAtSelection(frame, host, false, "deleteByCut") == false) {
+                log.info(.not_implemented, "execCommand.cut", .{});
+                return false;
+            }
+        },
+    }
+    return true;
+}
+
+fn isPassword(source: ?CopySource) bool {
+    const s = source orelse return false;
+    return s == .input and s.input._input_type == .password;
+}
+
+const testing = @import("../../testing.zig");
+test "WebApi: execCommand copy and cut" {
+    const browser = testing.test_session.browser;
+    defer {
+        browser.clearPermissions();
+        browser.allocator.free(browser.clipboard);
+        browser.clipboard = "";
+    }
+    // to read back what was copied
+    try browser.setPermission("clipboard-read", .granted);
+    try testing.htmlRunner("clipboard_exec_command.html", .{});
 }

@@ -42,6 +42,14 @@ const ClipboardEventOptions = struct {
 const Options = Event.inheritOptions(ClipboardEvent, ClipboardEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*ClipboardEvent {
+    return initWithTrusted(typ, opts_, false, frame);
+}
+
+pub fn initTrusted(typ: []const u8, opts_: ?Options, frame: *Frame) !*ClipboardEvent {
+    return initWithTrusted(typ, opts_, true, frame);
+}
+
+fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, frame: *Frame) !*ClipboardEvent {
     const arena = try frame.getArena(.tiny, "ClipboardEvent");
     errdefer arena.release();
     const type_string = try String.init(arena.allocator(), typ, .{});
@@ -57,7 +65,7 @@ pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*ClipboardEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts, false);
+    Event.populatePrototypes(event, opts, trusted);
 
     // Hold a ref on the DataTransfer so its arena outlives this event even if
     // the JS wrapper is collected first; released in deinit (same as DragEvent).

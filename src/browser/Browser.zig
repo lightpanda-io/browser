@@ -227,6 +227,12 @@ pub fn setPermission(self: *Browser, name: []const u8, state: PermissionState) !
     gop.value_ptr.* = state;
 }
 
+pub fn setClipboard(self: *Browser, text: []const u8) !void {
+    const copy = try self.allocator.dupe(u8, text);
+    self.allocator.free(self.clipboard);
+    self.clipboard = copy;
+}
+
 // Clear all stored permissions, freeing the keys. Used by CDP
 // Browser.resetPermissions and on teardown.
 pub fn clearPermissions(self: *Browser) void {
