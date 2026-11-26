@@ -188,6 +188,35 @@ jobs:
     needs: [channel, build-linux]
     uses: ./.github/workflows/package-debian.yml
 
+  publish-apt-repository:
+    if: needs.channel.outputs.channel == 'release'
+    # Wait for both .deb uploads before triggering the publisher.
+    needs: [channel, package-debian]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Generate token for browser-apt
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: browser-apt
+          permission-actions: write
+
+      - name: Trigger APT repository publication
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh workflow run publish-lightpanda.yml \
+            --repo lightpanda-io/browser-apt \
+            --ref main \
+            --field release_tag="$RELEASE"
+          echo "Publication dispatched; follow its result at https://github.com/lightpanda-io/browser-apt/actions/workflows/publish-lightpanda.yml"
+
   update-versions:
     if: needs.channel.outputs.channel != 'prerelease'
     needs: [channel, build-linux, build-macos]
