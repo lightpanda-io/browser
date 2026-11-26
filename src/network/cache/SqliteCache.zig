@@ -42,13 +42,14 @@ entry_limit: u32,
 
 // When the schema changes, change this value, and the DB will be deleted and
 // re-created with the schema
-const schema_version = 3;
+const schema_version = 4;
 
 // body stays last so that reading columns before it hopefully doesn't visit
 // overflow pages.
 const schema = [_][:0]const u8{
     \\ create table cache (
     \\      url               text not null primary key,
+    \\      private           integer not null,
     \\      status            integer not null,
     \\      stored_at         integer not null,
     \\      age_at_store      integer not null,
@@ -305,11 +306,12 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
 
     try conn.exec(
         \\ insert or replace into cache
-        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate,
+        \\     (url, private, status, stored_at, age_at_store, max_age, must_revalidate,
         \\     content_type, etag, last_modified, vary_headers, headers, body)
-        \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     , .{
         req.url,
+        false,
         @as(i64, @intCast(req.status)),
         req.stored_at,
         @as(i64, @intCast(req.age_at_store)),
