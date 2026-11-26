@@ -519,7 +519,7 @@ fn package(kind: Package, body: []const u8, content_type: ?[]const u8, resolver:
             };
             resolver.resolve("json", value);
         },
-        .blob => resolver.resolve("blob", try Blob.initFromBytes(body, content_type orelse "", exec)),
+        .blob => resolver.resolve("blob", try Blob.initFromContentType(body, content_type orelse "", exec)),
         .form_data => {
             const form_data = body_init.parseFormData(body, content_type, exec) catch |err| switch (err) {
                 error.OutOfMemory => return err,

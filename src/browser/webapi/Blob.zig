@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Mime = @import("../Mime.zig");
 const Page = @import("../Page.zig");
 
 const Writer = std.Io.Writer;
@@ -176,6 +177,24 @@ pub fn initFromBytes(data: []const u8, content_type: []const u8, exec: *const Ex
 
     const self = try arena.create(Blob);
     self.* = try buildValueFromBytes(arena, data, content_type);
+    arena.report();
+    return self;
+}
+
+/// Like `initFromBytes` but where `content_type` is a Content-Type header value
+/// and needs to be parsed.
+pub fn initFromContentType(data: []const u8, content_type: []const u8, exec: *const Execution) !*Blob {
+    const arena = try exec.getPinnedArena(data.len + content_type.len + 256, "Blob");
+    errdefer arena.release();
+
+    const self = try arena.create(Blob);
+    self.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._type = .generic,
+        ._slice = try arena.dupe(u8, data),
+        ._mime = try Mime.serialize(arena.allocator(), content_type),
+    };
     arena.report();
     return self;
 }
