@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
 const auth = @import("auth.zig");
 
 const api_url = "https://models.dev/api.json";
@@ -57,15 +58,14 @@ fn cachePath(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const
 
 fn readCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8) ?Cache {
     const path = cachePath(arena, app_dir, provider_id) catch return null;
-    const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(1024 * 1024)) catch return null;
-    const parsed = std.json.parseFromSliceLeaky(Cache, arena, data, .{ .ignore_unknown_fields = true }) catch return null;
+    const parsed = zenai.json.readFile(Cache, lp.io, arena, path, 1024 * 1024) orelse return null;
     if (parsed.ids.len == 0) return null;
     return parsed;
 }
 
 fn writeCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8, ids: []const []const u8) !void {
     const path = try cachePath(arena, app_dir, provider_id);
-    try auth.writeJsonAtomic(path, Cache{ .fetched_ms = auth.nowMs(), .ids = ids }, .default_file);
+    try zenai.json.writeFileAtomic(lp.io, path, Cache{ .fetched_ms = auth.nowMs(), .ids = ids }, .default_file);
 }
 
 /// Model-id keys of `catalog[provider_id].models`, filtered to tool-call-capable
