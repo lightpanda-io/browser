@@ -324,6 +324,9 @@ const Value = union(enum) {
     /// An rgb()/hsl()/hwb() with a `none` component.
     missing: Missing,
 
+    /// lab(), lch(), oklab(), oklch() or color().
+    space: Space,
+
     pub fn writeSpecified(self: Value, writer: *Io.Writer) Io.Writer.Error!void {
         switch (self) {
             .named => |n| try writer.writeAll(n.name),
@@ -339,6 +342,7 @@ const Value = union(enum) {
                 }).writeLegacy(writer),
                 .hsl, .hwb => try m.writeModern(writer, ""),
             },
+            .space => |space| try space.writeSpecified(writer),
         }
     }
 
@@ -361,6 +365,7 @@ const Value = union(enum) {
                 },
                 .hsl, .hwb => try m.writeModern(writer, "%"),
             },
+            .space => |space| try space.writeComputed(writer),
         }
     }
 };
@@ -418,6 +423,193 @@ const Missing = struct {
         try writeComponent(writer, self.alpha, 6, "");
     }
 };
+
+/// A color in one of the CSS Color 4 spaces, as specified: a plain component
+/// is already in its canonical range, a calc() is kept until computed-value
+/// time.
+const Space = struct {
+    function: Function,
+    // color()'s predefined space
+    profile: Profile = .srgb,
+    channels: [3]Channel,
+    alpha: Channel,
+
+    const Function = enum { lab, lch, oklab, oklch, color };
+
+    const Profile = enum {
+        srgb,
+        @"srgb-linear",
+        @"display-p3",
+        @"display-p3-linear",
+        @"a98-rgb",
+        @"prophoto-rgb",
+        rec2020,
+        @"xyz-d50",
+        @"xyz-d65",
+    };
+
+    const Channel = union(enum) {
+        none,
+        value: f64,
+        calc: Calc,
+    };
+
+    const Calc = struct {
+        value: f64,
+        unit: enum { number, percent, angle },
+    };
+
+    const Kind = enum { lightness, chroma, hue, other };
+
+    fn kind(self: Space, index: usize) Kind {
+        return switch (self.function) {
+            .lab, .oklab => if (index == 0) .lightness else .other,
+            .lch, .oklch => switch (index) {
+                0 => .lightness,
+                1 => .chroma,
+                else => .hue,
+            },
+            .color => .other,
+        };
+    }
+
+    // What 100% is for channel `index`.
+    fn percentScale(self: Space, index: usize) f64 {
+        return switch (self.function) {
+            .lab => if (index == 0) 100 else 125,
+            .lch => if (index == 0) 100 else 150,
+            .oklab, .oklch => if (index == 0) 1 else 0.4,
+            .color => 1,
+        };
+    }
+
+    fn maxLightness(self: Space) f64 {
+        return if (self.function == .lab or self.function == .lch) 100 else 1;
+    }
+
+    // A channel's value clamped to its range: the specified form of a plain
+    // value, and every computed one.
+    fn clampChannel(self: Space, index: usize, value: f64) f64 {
+        return switch (self.kind(index)) {
+            .lightness => std.math.clamp(value, 0, self.maxLightness()),
+            .chroma => @max(value, 0),
+            .hue => normalizeHue(value),
+            .other => value,
+        };
+    }
+
+    fn writeSpecified(self: Space, writer: *Io.Writer) Io.Writer.Error!void {
+        try self.writeOpen(writer);
+        for (self.channels, 0..) |channel, i| {
+            if (i > 0) try writer.writeByte(' ');
+            switch (channel) {
+                .none => try writer.writeAll("none"),
+                .value => |v| try writeSignificant(writer, v),
+                .calc => |c| try writeCalc(writer, c),
+            }
+        }
+        switch (self.alpha) {
+            .value => |a| if (a != 1) {
+                try writer.writeAll(" / ");
+                try writeSignificant(writer, a);
+            },
+            .none => try writer.writeAll(" / none"),
+            .calc => |c| {
+                try writer.writeAll(" / ");
+                try writeCalc(writer, c);
+            },
+        }
+        try writer.writeByte(')');
+    }
+
+    fn writeComputed(self: Space, writer: *Io.Writer) Io.Writer.Error!void {
+        try self.writeOpen(writer);
+        for (self.channels, 0..) |channel, i| {
+            if (i > 0) try writer.writeByte(' ');
+            const value = switch (channel) {
+                .none => {
+                    try writer.writeAll("none");
+                    continue;
+                },
+                .value => |v| v,
+                .calc => |c| blk: {
+                    if (std.math.isNan(c.value)) break :blk 0;
+                    if (self.kind(i) == .hue and std.math.isInf(c.value)) break :blk 0;
+                    const v = if (c.unit == .percent) c.value / 100 * self.percentScale(i) else c.value;
+                    break :blk self.clampChannel(i, v);
+                },
+            };
+            try writeResolved(writer, value);
+        }
+        const alpha: ?f64 = switch (self.alpha) {
+            .none => null,
+            .value => |a| a,
+            .calc => |c| calcAlpha(c),
+        };
+        if (alpha) |a| {
+            if (a != 1) {
+                try writer.writeAll(" / ");
+                try writeSignificant(writer, a);
+            }
+        } else {
+            try writer.writeAll(" / none");
+        }
+        try writer.writeByte(')');
+    }
+
+    fn writeOpen(self: Space, writer: *Io.Writer) Io.Writer.Error!void {
+        if (self.function == .color) {
+            return writer.print("color({t} ", .{self.profile});
+        }
+        return writer.print("{t}(", .{self.function});
+    }
+
+    fn calcAlpha(c: Calc) f64 {
+        if (std.math.isNan(c.value)) return 0;
+        const v = if (c.unit == .percent) c.value / 100 else c.value;
+        return std.math.clamp(v, 0, 1);
+    }
+};
+
+fn normalizeHue(degrees: f64) f64 {
+    const h = @mod(degrees, 360);
+    return if (h < 0) h + 360 else h;
+}
+
+// Computed values can still be infinite (an infinite chroma).
+fn writeResolved(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
+    if (std.math.isInf(value)) {
+        return writer.writeAll(if (value > 0) "calc(infinity)" else "calc(-infinity)");
+    }
+    return writeSignificant(writer, value);
+}
+
+fn writeCalc(writer: *Io.Writer, c: Space.Calc) Io.Writer.Error!void {
+    try writer.writeAll("calc(");
+    if (std.math.isNan(c.value)) {
+        try writer.writeAll("NaN");
+    } else if (std.math.isInf(c.value)) {
+        try writer.writeAll(if (c.value > 0) "infinity" else "-infinity");
+    } else {
+        try writeSignificant(writer, c.value);
+    }
+    try writer.writeAll(switch (c.unit) {
+        .number => "",
+        .percent => "%",
+        .angle => "deg",
+    });
+    try writer.writeByte(')');
+}
+
+// Six significant digits, as Chrome serializes the CSS Color 4 functions.
+fn writeSignificant(writer: *Io.Writer, value: f64) Io.Writer.Error!void {
+    if (value == 0) {
+        return writer.writeByte('0');
+    }
+    const digits: i32 = @intFromFloat(@floor(std.math.log10(@abs(value))) + 1);
+    const decimals: usize = @intCast(std.math.clamp(6 - digits, 0, 15));
+    return writeNumber(writer, value, decimals);
+}
 
 fn writeComponent(writer: *Io.Writer, value: ?f64, decimals: usize, unit: []const u8) Io.Writer.Error!void {
     const v = value orelse return writer.writeAll("none");
@@ -644,8 +836,7 @@ fn parseHex(hex: []const u8) Parsed {
 
 // Color functions we don't parse but mustn't reject.
 const unsupported_functions = [_][]const u8{
-    "lab",        "lch",   "oklab",       "oklch",        "color",          "color-mix",
-    "light-dark", "alpha", "device-cmyk", "color-layers", "contrast-color",
+    "color-mix", "light-dark", "alpha", "device-cmyk", "color-layers", "contrast-color",
 };
 
 fn parseFunction(raw: []const u8, stream: *Stream) Parsed {
@@ -663,6 +854,9 @@ fn parseFunction(raw: []const u8, stream: *Stream) Parsed {
     }
     if (std.mem.eql(u8, name, "hwb")) {
         return parseHslLike(stream, .hwb) catch |err| fromError(err);
+    }
+    if (std.meta.stringToEnum(Space.Function, name)) |function| {
+        return parseSpace(stream, function) catch |err| fromError(err);
     }
     for (unsupported_functions) |unsupported| {
         if (std.mem.eql(u8, name, unsupported)) {
@@ -694,6 +888,8 @@ const Arg = union(enum) {
     comma,
     slash,
     value: Component,
+    // a calc(), which the modern functions serialize as one
+    calc: Component,
 };
 
 /// The arguments of a color function: legacy (comma-separated, no `none`)
@@ -702,6 +898,28 @@ const Args = struct {
     legacy: bool,
     channels: [3]Component,
     alpha: ?Component,
+    // channels, then alpha
+    calc: [4]bool = @splat(false),
+
+    // NaN is censored to zero at the top level of a calculation; the modern
+    // functions keep it until computed-value time.
+    fn censorNan(self: *Args) void {
+        for (&self.channels) |*channel| {
+            censor(channel);
+        }
+        if (self.alpha) |*alpha| {
+            censor(alpha);
+        }
+    }
+
+    fn censor(component: *Component) void {
+        switch (component.*) {
+            .number, .percent, .angle => |*v| if (std.math.isNan(v.*)) {
+                v.* = 0;
+            },
+            .none => {},
+        }
+    }
 };
 
 fn readArgs(stream: *Stream) ParseError!Args {
@@ -724,7 +942,7 @@ fn readArgs(stream: *Stream) ParseError!Args {
                 }
                 return error.Invalid;
             },
-            .function => |raw| .{ .value = try calcFunction(raw, stream) },
+            .function => |raw| .{ .calc = try calcFunction(raw, stream) },
             else => .{ .value = try numeric(token) },
         };
         if (len == buf.len) return error.Invalid;
@@ -748,7 +966,7 @@ fn readArgs(stream: *Stream) ParseError!Args {
         var values: [4]Component = undefined;
         for (0..len / 2 + 1) |i| {
             values[i] = switch (args[i * 2]) {
-                .value => |v| if (v == .none) return error.Invalid else v,
+                .value, .calc => |v| if (v == .none) return error.Invalid else v,
                 else => return error.Invalid,
             };
             if (i * 2 + 1 < len and args[i * 2 + 1] != .comma) {
@@ -766,6 +984,7 @@ fn readArgs(stream: *Stream) ParseError!Args {
         return error.Invalid;
     }
     var values: [4]Component = undefined;
+    var calc: [4]bool = @splat(false);
     for (args, 0..) |arg, i| {
         if (i == 3) {
             if (arg != .slash) {
@@ -773,8 +992,13 @@ fn readArgs(stream: *Stream) ParseError!Args {
             }
             continue;
         }
-        values[if (i == 4) 3 else i] = switch (arg) {
+        const index = if (i == 4) 3 else i;
+        values[index] = switch (arg) {
             .value => |v| v,
+            .calc => |v| blk: {
+                calc[index] = true;
+                break :blk v;
+            },
             else => return error.Invalid,
         };
     }
@@ -782,6 +1006,7 @@ fn readArgs(stream: *Stream) ParseError!Args {
         .legacy = false,
         .channels = values[0..3].*,
         .alpha = if (len == 5) values[3] else null,
+        .calc = calc,
     };
 }
 
@@ -830,15 +1055,7 @@ fn calcFunction(raw: []const u8, stream: *Stream) ParseError!Component {
         return error.Unsupported;
     }
 
-    var result = try calcBlock(stream);
-    // NaN is censored to zero at the top level of a calculation.
-    switch (result) {
-        .number, .percent, .angle => |*v| if (std.math.isNan(v.*)) {
-            v.* = 0;
-        },
-        .none => unreachable,
-    }
-    return result;
+    return calcBlock(stream);
 }
 
 // A sum, closed by `)` (or the end of the input).
@@ -946,7 +1163,8 @@ fn withMagnitude(component: Component, value: f64) Component {
 }
 
 fn parseRgb(stream: *Stream) ParseError!Parsed {
-    const args = try readArgs(stream);
+    var args = try readArgs(stream);
+    args.censorNan();
     if (args.legacy) {
         // Legacy channels are all numbers or all percentages.
         const tag = std.meta.activeTag(args.channels[0]);
@@ -985,7 +1203,8 @@ fn parseAlpha(component: ?Component) ParseError!?f64 {
 }
 
 fn parseHslLike(stream: *Stream, function: @FieldType(Missing, "function")) ParseError!Parsed {
-    const args = try readArgs(stream);
+    var args = try readArgs(stream);
+    args.censorNan();
     if (args.legacy and function == .hwb) {
         return error.Invalid;
     }
@@ -1028,6 +1247,65 @@ fn parseHslLike(stream: *Stream, function: @FieldType(Missing, "function")) Pars
         .b = std.math.clamp(rgb[2] * 255, 0, 255),
         .alpha = a,
     } } };
+}
+
+fn parseSpace(stream: *Stream, function: Space.Function) ParseError!Parsed {
+    var profile: Space.Profile = .srgb;
+    if (function == .color) {
+        const raw = switch (stream.next() orelse return error.Invalid) {
+            .ident => |raw| raw,
+            else => return error.Invalid,
+        };
+        var buf: [24]u8 = undefined;
+        const name = lowerName(raw, &buf) orelse return error.Invalid;
+        if (std.mem.eql(u8, name, "from")) {
+            // Relative color syntax
+            return error.Unsupported;
+        }
+        profile = if (std.mem.eql(u8, name, "xyz")) .@"xyz-d65" else std.meta.stringToEnum(Space.Profile, name) orelse return error.Invalid;
+    }
+
+    const args = try readArgs(stream);
+    if (args.legacy) {
+        return error.Invalid;
+    }
+
+    var space: Space = .{ .function = function, .profile = profile, .channels = undefined, .alpha = .{ .value = 1 } };
+    for (args.channels, &space.channels, 0..) |component, *channel, i| {
+        const is_hue = space.kind(i) == .hue;
+        switch (component) {
+            .none => channel.* = .none,
+            .angle => if (is_hue == false) return error.Invalid,
+            .percent => if (is_hue) return error.Invalid,
+            .number => {},
+        }
+        if (component == .none) {
+            continue;
+        }
+        if (args.calc[i]) {
+            channel.* = .{ .calc = .{ .value = magnitude(component), .unit = switch (component) {
+                .number => .number,
+                .percent => .percent,
+                .angle => .angle,
+                .none => unreachable,
+            } } };
+            continue;
+        }
+        const value = if (component == .percent) magnitude(component) / 100 * space.percentScale(i) else magnitude(component);
+        channel.* = .{ .value = space.clampChannel(i, value) };
+    }
+
+    if (args.alpha) |alpha| {
+        space.alpha = switch (alpha) {
+            .none => .none,
+            .angle => return error.Invalid,
+            .number, .percent => if (args.calc[3])
+                .{ .calc = .{ .value = magnitude(alpha), .unit = if (alpha == .percent) .percent else .number } }
+            else
+                .{ .value = (try parseAlpha(alpha)).? },
+        };
+    }
+    return .{ .value = .{ .space = space } };
 }
 
 fn missingValue(function: @FieldType(Missing, "function"), channels: [3]?f64, alpha: ?f64) Parsed {
@@ -1110,6 +1388,31 @@ test "color: parse and serialize" {
     try expectSerialized("hwb(none none none / none)", null, "hwb(none none none / none)");
 }
 
+test "color: CSS Color 4 spaces" {
+    try expectSerialized("lab(0 0 0 / 1)", "lab(0 0 0)", "lab(0 0 0)");
+    try expectSerialized("lab(400 0 10/50%)", "lab(100 0 10 / 0.5)", "lab(100 0 10 / 0.5)");
+    try expectSerialized("lab(50% 50% -20%)", "lab(50 62.5 -25)", "lab(50 62.5 -25)");
+    try expectSerialized("lab(calc(50 * 3) calc(0.5 - 1) calc(1.5) / calc(-0.5 + 1))", "lab(calc(150) calc(-0.5) calc(1.5) / calc(0.5))", "lab(100 -0.5 1.5 / 0.5)");
+    try expectSerialized("lab(calc(50%) 50% 0.5)", "lab(calc(50%) 62.5 0.5)", "lab(50 62.5 0.5)");
+    try expectSerialized("lab(calc(0 / 0) 0 0)", "lab(calc(NaN) 0 0)", "lab(0 0 0)");
+    try expectSerialized("lab(none none none / none)", null, "lab(none none none / none)");
+    try expectSerialized("oklab(50% 50% -20%)", "oklab(0.5 0.2 -0.08)", "oklab(0.5 0.2 -0.08)");
+    try expectSerialized("oklab(-0.4 0 0)", "oklab(0 0 0)", "oklab(0 0 0)");
+    try expectSerialized("lch(10 20 1.28rad)", "lch(10 20 73.3386)", "lch(10 20 73.3386)");
+    try expectSerialized("lch(0.5 -20% -20)", "lch(0.5 0 340)", "lch(0.5 0 340)");
+    try expectSerialized("lch(calc(-50 * 3) calc(0.5 + 1) calc(-20deg * 2) / calc(-0.5 * 2))", "lch(calc(-150) calc(1.5) calc(-40deg) / calc(-1))", "lch(0 1.5 320 / 0)");
+    try expectSerialized("lch(50 calc(infinity) 0)", null, "lch(50 calc(infinity) 0)");
+    try expectSerialized("lch(50 calc(-infinity) 0)", "lch(50 calc(-infinity) 0)", "lch(50 0 0)");
+    try expectSerialized("lch(50 10 calc(infinity))", "lch(50 10 calc(infinity))", "lch(50 10 0)");
+    try expectSerialized("oklch(20% 60% 10/0.5)", "oklch(0.2 0.24 10 / 0.5)", "oklch(0.2 0.24 10 / 0.5)");
+    try expectSerialized("oklch(calc(infinity) 0 0)", "oklch(calc(infinity) 0 0)", "oklch(1 0 0)");
+    try expectSerialized("color(xyz 10% none none / none)", "color(xyz-d65 0.1 none none / none)", "color(xyz-d65 0.1 none none / none)");
+    try expectSerialized("COLOR(Display-P3 -200% 200 0.5 / 200%)", "color(display-p3 -2 200 0.5)", "color(display-p3 -2 200 0.5)");
+    try expectSerialized("color(srgb calc(50% * 3) calc(-150% / 3) calc(50%) / calc(-50% * 3))", "color(srgb calc(150%) calc(-50%) calc(50%) / calc(-150%))", "color(srgb 1.5 -0.5 0.5 / 0)");
+    try expectSerialized("color(rec2020 0 calc(-infinity) 0)", null, "color(rec2020 0 calc(-infinity) 0)");
+    try expectSerialized("color(srgb 0.372222222 0.0411111 0)", "color(srgb 0.372222 0.0411111 0)", "color(srgb 0.372222 0.0411111 0)");
+}
+
 test "color: usesSubstitution" {
     try std.testing.expect(usesSubstitution("var(--x)"));
     try std.testing.expect(usesSubstitution("1px VAR(--x)"));
@@ -1120,14 +1423,17 @@ test "color: usesSubstitution" {
 
 test "color: invalid and unsupported" {
     const invalid = [_][]const u8{
-        "",                          " /* hey */\n",       "4",                 "top",
-        "current-Color",             "blac\u{212A}",       "red blue",          "#12",
-        "#ffg",                      "#123456789",         "rgb",               "rgb()",
-        "rgb(1)",                    "rgb(1,2,3,4,5)",     "rgb(10%, 20, 30%)", "rgb(none, none, none)",
-        "rgb(0, 0 0)",               "rgb(0, 0, 0,)",      "rgb(0, 0,, 0)",     "rgb(0, 0, 0deg)",
-        "rgb(0, 0, light)",          "rgb(257, 0, 5 / 0)", "hsl(10, 50%, 0)",   "hsl(50%, 50%, 0%)",
-        "hsl(0, 50, 30%)",           "hwba(120 30% 50%)",  "hwb(90, 50%, 50%)", "hsl(calc(0.56turn * -0.43turn), 47%, 4884.6%)",
-        "rgba(-2, 300, 400%, -0.5)", "foo(1)",
+        "",                          " /* hey */\n",             "4",                 "top",
+        "current-Color",             "blac\u{212A}",             "red blue",          "#12",
+        "#ffg",                      "#123456789",               "rgb",               "rgb()",
+        "rgb(1)",                    "rgb(1,2,3,4,5)",           "rgb(10%, 20, 30%)", "rgb(none, none, none)",
+        "rgb(0, 0 0)",               "rgb(0, 0, 0,)",            "rgb(0, 0,, 0)",     "rgb(0, 0, 0deg)",
+        "rgb(0, 0, light)",          "rgb(257, 0, 5 / 0)",       "hsl(10, 50%, 0)",   "hsl(50%, 50%, 0%)",
+        "hsl(0, 50, 30%)",           "hwba(120 30% 50%)",        "hwb(90, 50%, 50%)", "hsl(calc(0.56turn * -0.43turn), 47%, 4884.6%)",
+        "rgba(-2, 300, 400%, -0.5)", "foo(1)",                   "lab(0% 0 0 1)",     "lab(40% 0 0deg)",
+        "lch(20% 10 10%)",           "oklch(20% 10 10deg 10)",   "lab(1, 2, 3)",      "color(lab 20% 0 10)",
+        "color(srgb 1 1)",           "color(srgb 0deg 0 0)",     "color()",           "color(1 1 1)",
+        "color(displayp3 1 1 1)",    "color(srgb 1 1 1 / 0deg)",
     };
     for (invalid) |input| {
         std.testing.expectEqual(Parsed.invalid, parse(input)) catch |err| {
@@ -1137,9 +1443,10 @@ test "color: invalid and unsupported" {
     }
 
     const unsupported = [_][]const u8{
-        "var(--x)",            "rgb(var(--x), 0, 0)",                               "red var(--x)",
-        "lab(50% 20 -30)",     "color-mix(in srgb, red, blue)",                     "light-dark(black, white)",
-        "rgb(from red r g b)", "rgb(calc(50% + (sign(1em - 10px) * 10%)), 0%, 0%)", "-webkit-link",
+        "var(--x)",                   "rgb(var(--x), 0, 0)",                               "red var(--x)",
+        "lab(from red l a b)",        "color-mix(in srgb, red, blue)",                     "light-dark(black, white)",
+        "rgb(from red r g b)",        "rgb(calc(50% + (sign(1em - 10px) * 10%)), 0%, 0%)", "-webkit-link",
+        "color(from red srgb r g b)", "lch(calc(50 + (sign(1em - 10px) * 10)) 30 50deg)",
     };
     for (unsupported) |input| {
         std.testing.expectEqual(Parsed.unsupported, parse(input)) catch |err| {
