@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!-- A frame that navigates takes its descendants with it, and the navigations
+     they still had queued. -->
+<script>
+  const page = (query) => new URL('support/page.html?' + query, document.baseURI).href;
+
+  // An iframe, loaded, holding `depth` iframes nested in one another. Resolves
+  // with all of them, outermost first.
+  function nest(depth) {
+    return new Promise((resolve) => {
+      const outer = document.createElement('iframe');
+      outer.src = page('outer');
+      outer.onload = () => {
+        outer.onload = null;
+        const frames = [outer];
+        for (let i = 0; i < depth; i++) {
+          const doc = frames[i].contentDocument;
+          const inner = doc.createElement('iframe');
+          doc.body.appendChild(inner);
+          frames.push(inner);
+        }
+        resolve(frames);
+      };
+      document.body.appendChild(outer);
+    });
+  }
+
+  // Resolves once `frame` has loaded a document and the navigations queued
+  // behind it had their turn.
+  function navigated(frame) {
+    return new Promise((resolve) => {
+      frame.onload = () => setTimeout(resolve, 20);
+    });
+  }
+</script>
+
+<script id=child_about_blank_then_parent type=module>
+  {
+    const state = await testing.async();
+    const [a, b] = await nest(1);
+    const done = navigated(a);
+    b.src = 'about:blank';
+    a.src = page('child_about_blank_then_parent');
+    await done;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('?child_about_blank_then_parent', a.contentWindow.location.search);
+      testing.expectEqual(0, a.contentWindow.length);
+      testing.expectEqual(null, b.contentWindow);
+    });
+  }
+</script>
+
+<script id=child_url_then_parent type=module>
+  {
+    const state = await testing.async();
+    const [a, b] = await nest(1);
+    const done = navigated(a);
+    b.src = page('child');
+    a.src = page('child_url_then_parent');
+    await done;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('?child_url_then_parent', a.contentWindow.location.search);
+      testing.expectEqual(0, a.contentWindow.length);
+      testing.expectEqual(null, b.contentWindow);
+    });
+  }
+</script>
+
+<script id=parent_then_child type=module>
+  {
+    const state = await testing.async();
+    const [a, b] = await nest(1);
+    const done = navigated(a);
+    a.src = page('parent_then_child');
+    b.src = 'about:blank';
+    await done;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('?parent_then_child', a.contentWindow.location.search);
+      testing.expectEqual(0, a.contentWindow.length);
+      testing.expectEqual(null, b.contentWindow);
+    });
+  }
+</script>
+
+<script id=grandchild_then_parent type=module>
+  {
+    const state = await testing.async();
+    const [a, b, c] = await nest(2);
+    const done = navigated(a);
+    c.src = 'about:blank';
+    b.src = page('child');
+    a.src = page('grandchild_then_parent');
+    await done;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('?grandchild_then_parent', a.contentWindow.location.search);
+      testing.expectEqual(0, a.contentWindow.length);
+      testing.expectEqual(null, b.contentWindow);
+      testing.expectEqual(null, c.contentWindow);
+    });
+  }
+</script>
+
+<!-- Removing an iframe takes its navigation out of the queue, which can leave
+     a child's navigation queued behind its parent's. -->
+<script id=child_url_behind_parent type=module>
+  {
+    const state = await testing.async();
+    const [a, b] = await nest(1);
+    const other = document.createElement('iframe');
+    document.body.appendChild(other);
+    const done = navigated(a);
+    other.src = page('other');
+    b.src = page('child');
+    a.src = page('child_url_behind_parent');
+    other.remove();
+    await done;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('?child_url_behind_parent', a.contentWindow.location.search);
+      testing.expectEqual(0, a.contentWindow.length);
+      testing.expectEqual(null, b.contentWindow);
+    });
+  }
+</script>
+
+<script id=child_about_blank_behind_parent_about_blank type=module>
+  {
+    const state = await testing.async();
+    const [a, b] = await nest(1);
+    const other = document.createElement('iframe');
+    document.body.appendChild(other);
+    const done = navigated(a);
+    other.src = page('other');
+    b.src = 'about:blank';
+    a.src = 'about:blank';
+    other.remove();
+    await done;
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('about:blank', a.contentWindow.location.href);
+      testing.expectEqual(0, a.contentWindow.length);
+      testing.expectEqual(null, b.contentWindow);
+    });
+  }
+</script>
+
+<script id=popup_child_then_popup type=module>
+  {
+    const state = await testing.async();
+    const popup = window.open(page('popup'));
+    await new Promise((resolve) => popup.addEventListener('load', resolve));
+    const b = popup.document.createElement('iframe');
+    popup.document.body.appendChild(b);
+    b.src = 'about:blank';
+    popup.location.href = page('popup_child_then_popup');
+    const poll = () => {
+      let search = '';
+      try { search = popup.location.search; } catch (e) {}
+      if (search === '?popup_child_then_popup' && popup.document.readyState === 'complete') {
+        setTimeout(() => state.resolve(), 20);
+      } else {
+        setTimeout(poll, 5);
+      }
+    };
+    poll();
+
+    await state.done(() => {
+      testing.expectEqual(0, popup.length);
+      testing.expectEqual(null, b.contentWindow);
+      popup.close();
+    });
+  }
+</script>

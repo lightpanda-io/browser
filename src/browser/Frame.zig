@@ -4651,6 +4651,36 @@ test "Frame: document.open cancels the queued navigation without reviving load" 
     try testing.expectEqual("", try (try ls.local.exec("events.join('|')", null)).toStringSlice());
 }
 
+test "Frame: a root navigation takes its descendants' queued navigations with it" {
+    // replaced right away, and once the response arrives
+    inline for (.{ "about:blank", "/src/browser/tests/hi.html?next" }) |target| {
+        const page = try testing.pageTest("hi.html", .{});
+        defer page.close();
+        {
+            const frame = page.frame().?;
+            var ls: JS.Local.Scope = undefined;
+            frame.js.localScope(&ls);
+            defer ls.deinit();
+            try ls.local.eval(
+                \\const iframe = document.createElement('iframe');
+                \\document.body.appendChild(iframe);
+                \\iframe.src = 'about:blank';
+                \\location.assign('
+            ++ target ++ "');", null);
+            try testing.expect(frame.child_frames.items[0]._queued_navigation != null);
+            try testing.expectEqual(2, frame.page.queued_navigation.items.len);
+        }
+
+        var runner = testing.test_session.runner(.{});
+        try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+
+        const frame = page.frame().?;
+        try testing.expect(std.mem.endsWith(u8, frame.url, target));
+        try testing.expectEqual(0, frame.child_frames.items.len);
+        try testing.expectEqual(0, frame.page.queued_navigation.items.len);
+    }
+}
+
 test "Frame: document.open after inline navigation does not restart the parser" {
     const page = try testing.pageTest("fixtures/navigation_open.html", .{});
     defer page.close();
