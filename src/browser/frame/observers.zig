@@ -56,7 +56,7 @@ pub const Mutation = struct {
 pub const Intersection = struct {
     // List of active IntersectionObservers
     observers: std.ArrayList(*IntersectionObserver) = .empty,
-    check_dirty: bool = false,
+    pending: Pending = .{},
     delivery_scheduled: bool = false,
 
     // Deliveries closer together than INTERSECTION_QUIET_MS form one burst.
@@ -71,7 +71,37 @@ pub const Intersection = struct {
 pub const Resize = struct {
     // List of active ResizeObservers (i.e. those with >= 1 observation)
     observers: std.ArrayList(*ResizeObserver) = .empty,
-    dirty: bool = false,
+    pending: Pending = .{},
+};
+
+// What a layout observer's next check has to look at.
+const Pending = struct {
+    // An observe(), a scroll, the viewport, the rules: check
+    forced: bool = false,
+
+    // A DOM change, which may have moved no box: check only if one moved
+    changed: bool = false,
+
+    // StyleManager.geometryVersion at the last check
+    checked_version: usize = 0,
+
+    checks: if (lp.IS_TEST) u32 else void = if (lp.IS_TEST) 0 else {},
+
+    fn any(self: *const Pending) bool {
+        return self.forced or self.changed;
+    }
+
+    // Whether a check is due at `version`, which this then counts as done
+    fn take(self: *Pending, version: usize) bool {
+        const due = self.forced or (self.changed and version != self.checked_version);
+        self.forced = false;
+        self.changed = false;
+        self.checked_version = version;
+        if (comptime lp.IS_TEST) {
+            if (due) self.checks += 1;
+        }
+        return due;
+    }
 };
 
 // The frame's rendering update.
@@ -182,23 +212,39 @@ pub const RENDERING_SLOW_MS = 100;
 const RENDERING_STREAK = 3;
 const RENDERING_STREAK_GAP_MS = 2 * RENDERING_SLOW_MS;
 
-/// Something that can move a target changed: the DOM, an observe(), a scroll,
-/// the viewport.
+/// An observe(), a scroll, the viewport: the targets have to be checked.
 pub fn scheduleIntersectionChecks(frame: *Frame) void {
     if (frame._intersection.observers.items.len == 0) {
         return;
     }
-    frame._intersection.check_dirty = true;
+    frame._intersection.pending.forced = true;
     scheduleRendering(frame);
 }
 
-/// Something that can resize a box changed: the DOM, an observe(), the rules.
+/// An observe(), the rules: the targets have to be checked.
 pub fn scheduleResizeChecks(frame: *Frame) void {
     if (frame._resize.observers.items.len == 0) {
         return;
     }
-    frame._resize.dirty = true;
+    frame._resize.pending.forced = true;
     scheduleRendering(frame);
+}
+
+/// A DOM change, which can move or resize a box. Most don't, and the checks
+/// then skip the targets (see Pending.take).
+pub fn layoutChanged(frame: *Frame, comptime which: enum { all, resize }) void {
+    var any = false;
+    if (which == .all and frame._intersection.observers.items.len != 0) {
+        frame._intersection.pending.changed = true;
+        any = true;
+    }
+    if (frame._resize.observers.items.len != 0) {
+        frame._resize.pending.changed = true;
+        any = true;
+    }
+    if (any) {
+        scheduleRendering(frame);
+    }
 }
 
 fn scheduleRendering(frame: *Frame) void {
@@ -255,9 +301,9 @@ pub fn intersectionScrolled(frame: *Frame) void {
 const RESIZE_DEPTH_LIMIT = 16;
 
 fn deliverResizes(frame: *Frame, local: *const js.Local) void {
+    const style_manager = &frame._style_manager;
     var depth: u32 = 0;
-    while (frame._resize.dirty) : (depth += 1) {
-        frame._resize.dirty = false;
+    while (frame._resize.pending.take(style_manager.geometryVersion())) : (depth += 1) {
         if (depth == RESIZE_DEPTH_LIMIT) {
             log.debug(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
             return;
@@ -307,7 +353,7 @@ fn runSlowRendering(ctx: *anyopaque) !?u32 {
 }
 
 fn performRendering(frame: *Frame) void {
-    if (!frame._resize.dirty and !frame._intersection.check_dirty) {
+    if (!frame._resize.pending.any() and !frame._intersection.pending.any()) {
         return;
     }
 
@@ -323,10 +369,9 @@ fn performRendering(frame: *Frame) void {
     deliverResizes(frame, &ls.local);
 
     // After the resizes: what their callbacks moved is part of this frame
-    if (!frame._intersection.check_dirty) {
+    if (!frame._intersection.pending.take(frame._style_manager.geometryVersion())) {
         return;
     }
-    frame._intersection.check_dirty = false;
     checkIntersections(frame) catch |err| {
         log.err(.frame, "frame.schedIntersectChecks", .{ .err = err, .type = frame._type, .url = frame.url });
     };
