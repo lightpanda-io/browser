@@ -159,7 +159,7 @@ pub fn observe(self: *ResizeObserver, target: *Element, options_: ?Options, fram
         try Frame.observers.registerResizeObserver(frame, self);
     }
 
-    Frame.observers.scheduleResizeDelivery(frame);
+    Frame.observers.scheduleResizeChecks(frame);
 }
 
 fn unobserve(self: *ResizeObserver, target: *Element, frame: *Frame) void {
@@ -181,19 +181,6 @@ pub fn disconnect(self: *ResizeObserver, frame: *Frame) void {
     }
     self._observations.clearRetainingCapacity();
     Frame.observers.unregisterResizeObserver(frame, self);
-}
-
-// True if any observed box's size changed since the last delivery. Runs
-// once per batch of DOM changes (via Frame.observers): the layout it reads
-// is cached until a change invalidates it.
-pub fn sizeChanged(self: *const ResizeObserver, frame: *Frame) bool {
-    for (self._observations.items) |obs| {
-        const size = Boxes.of(obs.target, frame).observed(obs.box);
-        if (size.width != obs.last.width or size.height != obs.last.height) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // Gather the observations whose size changed since the last delivery and, if

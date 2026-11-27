@@ -71,19 +71,16 @@
   }
 </script>
 
-<script id="delivered_in_microtask" type=module>
+<script id="delivered_at_rendering_update" type=module>
   {
-    // The spec delivers during the next rendering update, after its
-    // animation frame callbacks.
+    // The spec delivers during the next rendering update, not in a microtask
     const state = await testing.async();
     const target = document.getElementById('target');
     let count = 0;
     const observer = new ResizeObserver(() => { count += 1; });
     observer.observe(target);
     await Promise.resolve();
-    testing.diverges('Lightpanda delivers in a microtask, not at the next rendering update', () => {
-      testing.expectEqual(1, count);
-    });
+    testing.expectEqual(0, count);
     await testing.nextFrame();
     observer.disconnect();
 

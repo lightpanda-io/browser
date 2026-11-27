@@ -237,7 +237,7 @@ pub fn documentStateChanged(state: DocumentState, frame: *Frame) void {
 /// rebuilt. An observed size can change without any element changing.
 pub fn rulesChanged(frame: *Frame) void {
     styleChanged(frame);
-    observers.scheduleResizeDelivery(frame);
+    observers.scheduleResizeChecks(frame);
 }
 
 /// The host's children leave the flat tree until a slot takes them.
