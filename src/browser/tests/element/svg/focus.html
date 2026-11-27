@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../testing.js"></script>
+
+<svg id=root>
+  <a id=link href="#"><text>link</text></a>
+  <circle id=circle r=1></circle>
+  <rect id=skipped tabindex="-1"></rect>
+  <g id=ordered tabindex="2"></g>
+  <path id=invalid tabindex="x"></path>
+  <text id=focused autofocus>text</text>
+</svg>
+
+<script id=tabIndex>
+{
+  testing.expectEqual(-1, $('#root').tabIndex);
+  testing.expectEqual(0, $('#link').tabIndex);
+  testing.expectEqual(-1, $('#circle').tabIndex);
+  testing.expectEqual(-1, $('#skipped').tabIndex);
+  testing.expectEqual(2, $('#ordered').tabIndex);
+  testing.expectEqual(-1, $('#invalid').tabIndex);
+
+  const circle = $('#circle');
+  circle.tabIndex = 0;
+  testing.expectEqual(0, circle.tabIndex);
+  testing.expectEqual('0', circle.getAttribute('tabindex'));
+
+  circle.removeAttribute('tabindex');
+  testing.expectEqual(-1, circle.tabIndex);
+}
+</script>
+
+<script id=autofocus>
+{
+  testing.expectEqual(false, $('#circle').autofocus);
+  testing.expectEqual(true, $('#focused').autofocus);
+
+  const circle = $('#circle');
+  circle.autofocus = true;
+  testing.expectEqual('', circle.getAttribute('autofocus'));
+  circle.autofocus = false;
+  testing.expectEqual(false, circle.hasAttribute('autofocus'));
+}
+</script>
