@@ -44,6 +44,7 @@ const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
+const DocumentTimeline = @import("animation/DocumentTimeline.zig");
 const Selection = @import("Selection.zig");
 const ModelContext = @import("ModelContext.zig");
 const Sanitizer = @import("Sanitizer.zig");
@@ -90,6 +91,7 @@ _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _implementation: ?*DOMImplementation = null,
 _fonts: ?*FontFaceSet = null,
+_timeline: ?*DocumentTimeline = null,
 _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 // an execCommand is running: a nested one is refused
@@ -575,6 +577,13 @@ fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
     const impl = try frame._factory.create(DOMImplementation{ ._document = self });
     self._implementation = impl;
     return impl;
+}
+
+pub fn getTimeline(self: *Document, frame: *Frame) !*DocumentTimeline {
+    if (self._timeline) |timeline| return timeline;
+    const timeline = try frame._factory.create(DocumentTimeline{ ._document = self });
+    self._timeline = timeline;
+    return timeline;
 }
 
 fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
@@ -2258,6 +2267,7 @@ pub const JsApi = struct {
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const fonts = bridge.accessor(Document.getFonts, null, .{});
+    pub const timeline = bridge.accessor(Document.getTimeline, null, .{});
     pub const modelContext = bridge.accessor(Document.getModelContext, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{});

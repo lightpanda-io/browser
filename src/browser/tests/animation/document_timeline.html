@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=exists>
+  testing.expectEqual('object', typeof document.timeline);
+  testing.expectTrue(document.timeline instanceof DocumentTimeline);
+  // the same object every time
+  testing.expectTrue(document.timeline === document.timeline);
+</script>
+
+<script id=currentTime>
+  {
+    // currentTime is measured from the document's time origin. Chrome only
+    // advances it once per animation frame, so don't bound it from below by
+    // an earlier performance.now() read.
+    const t1 = document.timeline.currentTime;
+    testing.expectEqual('number', typeof t1);
+    testing.expectTrue(t1 >= 0 && t1 <= performance.now());
+    testing.expectTrue(document.timeline.currentTime >= t1);
+  }
+</script>
+
+<script id=constructor>
+  {
+    const t = new DocumentTimeline();
+    testing.expectTrue(t !== document.timeline);
+    testing.expectEqual('number', typeof t.currentTime);
+
+    // currentTime is offset by originTime, and may be negative.
+    const offset = new DocumentTimeline({ originTime: 100 });
+    const base = document.timeline.currentTime;
+    const shifted = offset.currentTime;
+    testing.expectTrue(shifted >= base - 100 && shifted <= performance.now() - 100);
+    testing.expectTrue(new DocumentTimeline({ originTime: 1e9 }).currentTime < 0);
+  }
+</script>
+
+<script id=animation_timeline>
+  {
+    // animate() uses the element's node document's timeline.
+    const a = document.createElement('div').animate(null, { duration: 50 });
+    testing.expectTrue(a.timeline === document.timeline);
+
+    const doc = new DOMParser().parseFromString('<p>x</p>', 'text/html');
+    const b = doc.querySelector('p').animate(null, { duration: 50 });
+    testing.expectTrue(b.timeline === doc.timeline);
+
+    const t = new DocumentTimeline();
+    a.timeline = t;
+    testing.expectTrue(a.timeline === t);
+    a.timeline = null;
+    testing.expectEqual(null, a.timeline);
+    testing.expectError('TypeError', () => { a.timeline = {}; });
+    a.cancel();
+    b.cancel();
+  }
+</script>
+
+<script id=inactive>
+  {
+    // A document without a browsing context has an inactive timeline.
+    const doc = new DOMParser().parseFromString('<p>x</p>', 'text/html');
+    testing.expectTrue(doc.timeline instanceof DocumentTimeline);
+    testing.expectEqual(null, doc.timeline.currentTime);
+  }
+</script>
+
+<script id=real_world>
+  {
+    // elevenlabs.io: a marquee reads the timeline next to getAnimations() in a
+    // React layout effect; when document.timeline was undefined this threw and
+    // React replaced the whole page with its error screen.
+    const el = document.createElement('div');
+    const animations = el.getAnimations({ subtree: true }) ?? [];
+    const now = document.timeline.currentTime;
+    testing.expectEqual(0, animations.length);
+    testing.expectEqual('number', typeof now);
+  }
+</script>

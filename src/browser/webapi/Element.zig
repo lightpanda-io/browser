@@ -1582,8 +1582,9 @@ pub fn getAnimations(_: *const Element) []*Animation {
     return &.{};
 }
 
-pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, frame: *Frame) !*Animation {
-    const animation = try Animation.init(frame);
+pub fn animate(self: *Element, _: ?js.Object, _: ?js.Object, frame: *Frame) !*Animation {
+    const timeline = try self.asNode().getDocument(frame).getTimeline(frame);
+    const animation = try Animation.init(timeline, frame);
     try animation.play(frame);
     return animation;
 }
