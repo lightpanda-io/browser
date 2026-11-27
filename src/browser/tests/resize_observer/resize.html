@@ -113,6 +113,34 @@
   });
 </script>
 
+<script id="text_grows_ancestor" type=module>
+  // Text two levels down grows its ancestors, which have no declared height.
+  // Above the page, so the growth doesn't flip a scrollbar.
+  const state = await testing.async();
+  const outer = document.createElement('div');
+  outer.style.cssText = 'position: absolute; left: 0; top: -5000px; width: 100px';
+  const text = outer.appendChild(document.createElement('section')).appendChild(document.createElement('p')).appendChild(document.createTextNode('one'));
+  document.body.appendChild(outer);
+
+  const heights = [];
+  const observer = new ResizeObserver((entries) => {
+    heights.push(entries[0].contentRect.height);
+    if (heights.length === 1) {
+      setTimeout(() => { text.data = 'word '.repeat(100); });
+    } else {
+      observer.disconnect();
+      outer.remove();
+      state.resolve();
+    }
+  });
+  observer.observe(outer);
+
+  await state.done(() => {
+    testing.expectEqual(2, heights.length);
+    testing.expectTrue(heights[1] > heights[0]);
+  });
+</script>
+
 <script id="intersection_sees_resize_callback" type=module>
   // A rendering update runs the ResizeObservers before computing the
   // intersections: what a resize callback moves, the same frame reports.

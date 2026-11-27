@@ -1969,19 +1969,81 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
             return false;
         }
     }
-    if (self.reads_empty and emptinessFlips(parent, child)) {
-        // parent's :empty, and through `:empty + x` and `:empty ~ x` its later
-        // siblings
-        boxes.restyled(parent);
-        if (self.dropSubtree(parent, memos, &budget) == false) {
+    if (self.reads_empty and countsForEmpty(child) and othersCountForEmpty(parent, child) == false) {
+        return self.emptinessChanged(parent, memos, &budget, &boxes);
+    }
+    return true;
+}
+
+/// `text`'s data changed. Like treeChanged, returns false when we weren't able
+/// to selectively invalidate caches.
+pub fn textChanged(self: *StyleManager, text: *Node.CData, was_empty: bool) bool {
+    if (self.dirty) {
+        self.layout_bumps += 1;
+        return true;
+    }
+    const node = text.asNode();
+    const parent = node._parent orelse return false;
+    if (self.reads_form and inFormValue(parent)) {
+        // A textarea's or option's text is its value: validity
+        return false;
+    }
+
+    var memos: Memos = .empty;
+    var budget: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (group.memo.count() != 0 and group.fresh(self.frame)) {
+            memos.insert(@field(Memo, field));
+            budget += group.memo.count();
+        }
+    }
+    if (budget == 0) {
+        self.layout_bumps += 1;
+        return true;
+    }
+
+    var boxes: BoxScope = .init(self, &memos, &budget);
+    boxes.childMoved(parent, node, node.previousSibling(), node.nextSibling());
+
+    const is_empty = text.getLength() == 0;
+    if (self.reads_empty and was_empty != is_empty and othersCountForEmpty(parent, node) == false) {
+        if (self.has.any) {
+            // a :has() argument reading :empty
             return false;
         }
-        var sibling = parent.nextSibling();
-        while (sibling) |s| : (sibling = s.nextSibling()) {
-            boxes.restyled(s);
-            if (self.dropSubtree(s, memos, &budget) == false) {
-                return false;
-            }
+        return self.emptinessChanged(parent, memos, &budget, &boxes);
+    }
+    return true;
+}
+
+// Whether `parent` holds a form control's value: a textarea's default value,
+// an option's text (its value without a value attribute).
+fn inFormValue(parent: *Node) bool {
+    var node: ?*Node = parent;
+    while (node) |n| : (node = n._parent) {
+        const el = n.is(Element) orelse return false;
+        switch (el.getTag()) {
+            .textarea, .option => return true,
+            .select, .optgroup, .datalist => return false,
+            else => {},
+        }
+    }
+    return false;
+}
+
+// parent's :empty flipped: parent, and through `:empty + x` and `:empty ~ x`
+// its later siblings
+fn emptinessChanged(self: *StyleManager, parent: *Node, memos: Memos, budget: *usize, boxes: *BoxScope) bool {
+    boxes.restyled(parent);
+    if (self.dropSubtree(parent, memos, budget) == false) {
+        return false;
+    }
+    var sibling = parent.nextSibling();
+    while (sibling) |s| : (sibling = s.nextSibling()) {
+        boxes.restyled(s);
+        if (self.dropSubtree(s, memos, budget) == false) {
+            return false;
         }
     }
     return true;
@@ -2457,17 +2519,14 @@ fn movedRoot(parent: *Node, reach: MovedReach) *Node {
     return top._parent orelse top;
 }
 
-fn emptinessFlips(parent: *Node, child: *Node) bool {
-    if (countsForEmpty(child) == false) {
-        return false;
-    }
+fn othersCountForEmpty(parent: *Node, child: *Node) bool {
     var it = parent.childrenIterator();
     while (it.next()) |other| {
         if (other != child and countsForEmpty(other)) {
-            return false;
+            return true;
         }
     }
-    return true;
+    return false;
 }
 
 // What makes an element not :empty (see selector/List.zig)
@@ -11127,6 +11186,87 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     try testing.expectEqual(version, frame.page.style_version);
 }
 
+test "StyleManager: memo: a text write moves only the boxes around it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p>x</p><i></i></div><section><b></b></section><form><textarea required>a</textarea></form><!--c-->");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(":empty + i { visibility: hidden } textarea:invalid { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    const i = p.asNode().nextSibling().?.as(Element);
+    const section = div.asNode().nextSibling().?.as(Element);
+    const b = section.asNode().firstChild().?.as(Element);
+    const form = section.asNode().nextSibling().?;
+    const textarea = form.firstChild().?.as(Element);
+    const comment = form.nextSibling().?.is(Node.CData).?;
+    const text = p.asNode().firstChild().?.is(Node.CData).?;
+
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(b));
+    const version = frame.page.style_version;
+    const cascades = sm.visibility.cascades;
+    const cacheAll = struct {
+        fn run(style_manager: *StyleManager, els: []const *Element) void {
+            for (els) |el| {
+                style_manager.setCacheLayout(el, .content_height, 5);
+                style_manager.setCacheLayout(el, .box_width, 100);
+            }
+        }
+    }.run;
+
+    // Longer: p and what grows with it, not its sibling's subtree or the
+    // width it was given. No style memo reads it.
+    cacheAll(sm, &.{ p, i, div, section, b });
+    const hit_version = sm.hitVersion();
+    try text.setData("xx", frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expect(sm.hitVersion() != hit_version);
+    try testing.expectEqual(null, sm.getCachedLayout(p, .content_height));
+    try testing.expectEqual(null, sm.getCachedLayout(div, .content_height));
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(p, .box_width));
+    try testing.expectEqual(@as(?f64, 5), sm.getCachedLayout(i, .content_height));
+    try testing.expectEqual(@as(?f64, 5), sm.getCachedLayout(section, .content_height));
+    try testing.expectEqual(@as(?f64, 5), sm.getCachedLayout(b, .content_height));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(b));
+    try testing.expectEqual(cascades, sm.visibility.cascades);
+
+    // Emptied: p's :empty flips, and with it i's match; section keeps its
+    // styles and boxes
+    cacheAll(sm, &.{ p, i, div, section, b });
+    try text.setData("", frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(null, sm.getCachedLayout(i, .content_height));
+    try testing.expectEqual(@as(?f64, 5), sm.getCachedLayout(b, .content_height));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(b));
+    try text.insertData(text.getLength(), "y", frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
+
+    // A comment moves nothing
+    const kept_hit = sm.hitVersion();
+    try comment.setData("d", frame);
+    try testing.expectEqual(kept_hit, sm.hitVersion());
+
+    // A textarea's text is its value, which :invalid reads. An element in
+    // it keeps it from flipping :empty.
+    const value = textarea.asNode().firstChild().?;
+    _ = try textarea.asNode().insertBefore((try doc.createElement("b", null, frame)).asNode(), value, frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(textarea));
+    try value.is(Node.CData).?.setData("", frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(textarea));
+}
+
 test "StyleManager: memo: an inherited inline write drops the element's subtree" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -11845,8 +11985,13 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                 },
                 else => if (node.isConnected()) {
                     if (node.firstChild()) |first| {
-                        if (first._type == .cdata) {
-                            _ = try node.removeChild(first, frame);
+                        if (first.is(Node.CData)) |text| {
+                            // Removed, or rewritten: emptied, or enough to wrap
+                            switch (random.uintLessThan(u8, 3)) {
+                                0 => _ = try node.removeChild(first, frame),
+                                1 => try text.setData(if (text.getLength() == 0) "text" else "", frame),
+                                else => try text.insertData(text.getLength(), " more text that wraps", frame),
+                            }
                         } else {
                             _ = try node.insertBefore(try doc.createTextNode("text"), first, frame);
                         }

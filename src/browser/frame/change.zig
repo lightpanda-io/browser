@@ -160,14 +160,27 @@ pub fn fragmentParsed(parent: *Node, frame: *Frame) void {
     domChanged(frame);
 }
 
-/// Text data can flip `:empty` but never a live collection, so only the style
-/// stamp moves. Its box can grow or shrink, which only ResizeObserver reads.
+/// Text data can flip its parent's `:empty` but never a live collection. It can
+/// also move boxes.
 pub fn textChanged(cdata: *CData, old: String, frame: *Frame) void {
-    _ = old;
-    if (detachedHandled(cdata.asNode(), frame) == false) {
-        styleChanged(frame);
-        observers.layoutChanged(frame, .resize);
+    switch (cdata._type) {
+        // Not rendered, never counts for :empty
+        .comment, .processing_instruction => return,
+        .text, .cdata_section => {},
     }
+    if (old.eql(cdata._data)) {
+        // Rewritten with the same text
+        return;
+    }
+    const node = cdata.asNode();
+    if (detachedHandled(node, frame)) {
+        return;
+    }
+    const owner = node.ownerFrame(frame) orelse return;
+    if (owner._style_manager.textChanged(cdata, old.str().len == 0) == false) {
+        styleChanged(frame);
+    }
+    layoutObserversChanged(frame);
 }
 
 pub const State = enum {

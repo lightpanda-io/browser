@@ -344,3 +344,31 @@
     testing.expectEqual([false, 1, false, 1, false], result);
   });
 </script>
+
+<script id=moved_by_text type=module>
+  // Text above the target in its flow grows by enough lines to push it below
+  // the viewport, then shrinks back: no box written to, but the target moves.
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const wrapper = box(0);
+    wrapper.style.height = 'auto';
+    const text = wrapper.appendChild(document.createElement('div')).appendChild(document.createTextNode('one'));
+    const target = wrapper.appendChild(document.createElement('div'));
+    target.style.height = '10px';
+    const { seen, observer } = watch(target);
+
+    await testing.nextFrame();
+    text.data = 'word '.repeat(2000);
+    await testing.nextFrame();
+    text.data = 'one';
+    await testing.nextFrame();
+    observer.disconnect();
+    wrapper.remove();
+    return seen;
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([1, false, 1], result);
+  });
+</script>
