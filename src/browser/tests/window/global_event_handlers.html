@@ -120,9 +120,9 @@
   testing.expectEqual(null, document.body.onpagehide);
 
   const frameset = document.createElement('frameset');
-  frameset.onunload = fn;
-  testing.expectEqual(fn, window.onunload);
-  window.onunload = null;
+  frameset.onhashchange = fn;
+  testing.expectEqual(fn, window.onhashchange);
+  window.onhashchange = null;
 }
 </script>
 
