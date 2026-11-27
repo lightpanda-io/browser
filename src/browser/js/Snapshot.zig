@@ -435,9 +435,6 @@ fn countExternalReferences() comptime_int {
     // +1 for the illegal constructor callback shared by various types
     count += 1;
 
-    // +1 for the upgrade constructor shared by built-in element interfaces
-    count += 1;
-
     // +1 for the noop function shared by various types
     count += 1;
 
@@ -448,6 +445,10 @@ fn countExternalReferences() comptime_int {
 
     inline for (JsApis) |JsApi| {
         if (@hasDecl(JsApi, "constructor")) {
+            count += 1;
+        }
+
+        if (comptime usesBuiltinConstructor(JsApi)) {
             count += 1;
         }
 
@@ -522,9 +523,6 @@ fn collectExternalReferences() *const ExternalReferences {
     references[idx] = @bitCast(@intFromPtr(&illegalConstructorCallback));
     idx += 1;
 
-    references[idx] = @bitCast(@intFromPtr(HtmlElement.JsApi.upgrade_constructor.func));
-    idx += 1;
-
     references[idx] = @bitCast(@intFromPtr(&bridge.Function.noopFunction));
     idx += 1;
 
@@ -536,6 +534,11 @@ fn collectExternalReferences() *const ExternalReferences {
     inline for (JsApis) |JsApi| {
         if (@hasDecl(JsApi, "constructor")) {
             references[idx] = @bitCast(@intFromPtr(JsApi.constructor.func));
+            idx += 1;
+        }
+
+        if (comptime usesBuiltinConstructor(JsApi)) {
+            references[idx] = @bitCast(@intFromPtr(HtmlElement.BuiltinConstructor(JsApi.bridge.type).constructor.func));
             idx += 1;
         }
 
@@ -742,8 +745,9 @@ fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.Fun
         if (@hasDecl(JsApi, "constructor") and !@hasDecl(JsApi.Meta, "constructor_alias")) {
             break :blk .{ JsApi.constructor.func, JsApi.constructor.arity };
         }
-        if (inheritsFromHtmlElement(JsApi)) {
-            break :blk .{ HtmlElement.JsApi.upgrade_constructor.func, @as(c_int, HtmlElement.JsApi.upgrade_constructor.arity) };
+        if (usesBuiltinConstructor(JsApi)) {
+            const builtin = HtmlElement.BuiltinConstructor(JsApi.bridge.type).constructor;
+            break :blk .{ builtin.func, builtin.arity };
         }
         break :blk .{ &illegalConstructorCallback, @as(c_int, 0) };
     };
@@ -799,9 +803,12 @@ fn generateLegacyFactoryFunction(comptime JsApi: type, isolate: *v8.Isolate, int
     return func;
 }
 
-// hard-coded special case for HtmlElement which can be extended but not
-// instantiated.
-fn inheritsFromHtmlElement(comptime JsApi: type) bool {
+// A builtin html element interface (HTMLDivElement) without a constructor of
+// its own: see HtmlElement.BuiltinConstructor. HTMLElement has its own.
+fn usesBuiltinConstructor(comptime JsApi: type) bool {
+    if (@hasDecl(JsApi, "constructor") and !@hasDecl(JsApi.Meta, "constructor_alias")) {
+        return false;
+    }
     if (JsApi.bridge.type == HtmlElement) {
         return false;
     }

@@ -133,17 +133,25 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
     return Frame.node_factory.constructCustomElement(frame, new_target);
 }
 
-// Shared constructor callback for builtin html element interfaces. These types
-// cannot be instantinated (e.g. new HTMLDivElement), but a custom element can
-// be extended, so super() has to create them. All of these types have their
-// constructors routed here.
-pub fn upgradeConstruct(frame: *Frame) !*Element {
-    const node = frame._upgrading_element orelse return error.TypeError;
-    if (frame._upgrading_consumed) {
-        return error.TypeError;
-    }
-    frame._upgrading_consumed = true;
-    return node.is(Element) orelse return error.TypeError;
+// Constructor of a builtin html element interface (HTMLDivElement, ...).
+// `new HTMLDivElement()` is illegal, but a customized built-in extends one, so
+// super() has to create the element. Each interface gets its own instance,
+// so the direct path knows which interface super() reached.
+pub fn BuiltinConstructor(comptime Interface: type) type {
+    return struct {
+        pub const constructor = js.Bridge(Interface).constructor(builtinConstruct, .{ .new_target = true });
+
+        fn builtinConstruct(new_target: js.Function, frame: *Frame) !*Element {
+            if (frame._upgrading_element) |node| {
+                if (frame._upgrading_consumed) {
+                    return error.TypeError;
+                }
+                frame._upgrading_consumed = true;
+                return node.is(Element) orelse return error.TypeError;
+            }
+            return Frame.node_factory.constructCustomizedBuiltIn(frame, new_target, Interface);
+        }
+    };
 }
 
 fn attachInternals(self: *HtmlElement, frame: *Frame) !*ElementInternals {
@@ -1234,7 +1242,6 @@ pub const JsApi = struct {
     pub const enterKeyHint = reflect.enumerated("enterkeyhint", &.{ "enter", "done", "go", "next", "previous", "search", "send" }, .{});
 
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
-    pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
     pub const dataset = bridge.accessor(_dataset, null, .{});
     fn _dataset(self: *HtmlElement, frame: *Frame) !*DOMStringMap {

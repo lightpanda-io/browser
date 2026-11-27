@@ -1286,6 +1286,9 @@ fn createHtmlMediaElementT(document: *const Node.Document, comptime E: type, nam
     const element = media_element.asElement();
     element._namespace = namespace;
     try populateElementAttributes(frame, element, attribute_iterator);
+    if (document._frame != null) {
+        try Element.Html.Custom.initBuiltIn(element, frame);
+    }
     const node = element.asNode();
     try Element.Html.Media.Build.created(node, frame);
     return node;
@@ -1374,18 +1377,11 @@ fn parserAttributeName(frame: *Frame, qname: Parser.QualName) ![]const u8 {
 // registry by function identity and allocate a detached Custom element with
 // the registered tag name.
 pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element {
-    var it = frame.window._custom_elements._definitions.iterator();
-    const definition = while (it.next()) |entry| {
-        if (entry.value_ptr.*.constructor.isEqual(new_target)) {
-            break entry.value_ptr.*;
-        }
-    } else return error.IllegalConstructor;
+    const definition = findDefinition(frame, new_target) orelse return error.IllegalConstructor;
 
-    // Customized built-ins (`class Foo extends HTMLDivElement`, etc.) would
-    // need to allocate the extended HTML type rather than Custom. Not yet
-    // supported via direct `new` — upgrade path still works for those.
-    if (definition.isCustomizedBuiltIn()) {
-        return error.IllegalConstructor;
+    // `class extends HTMLElement`, defined with `{extends: "abbr"}`.
+    if (definition.extends) |tag| {
+        return createCustomizedBuiltIn(frame, definition, tag, Element.Html.Generic);
     }
 
     const tag_name = try String.init(frame.page_arena, definition.name, .{});
@@ -1397,6 +1393,48 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
     if (definition.form_associated) {
         try element.is(Element.Html.Custom).?.registerFormAssociated(frame);
     }
+    return element;
+}
+
+// class MyButton extends HTMLButtonElement
+// new MyButton() <- this
+// (only valid when defined with {extends: "button"})`
+// `Interface` is the builtin whose constructor  super() reached.
+pub fn constructCustomizedBuiltIn(frame: *Frame, new_target: JS.Function, comptime Interface: type) !*Element {
+    const definition = findDefinition(frame, new_target) orelse return error.IllegalConstructor;
+    // An autonomous definition has to extend HTMLElement itself.
+    const tag = definition.extends orelse return error.TypeError;
+    return createCustomizedBuiltIn(frame, definition, tag, Interface);
+}
+
+fn findDefinition(frame: *Frame, new_target: JS.Function) ?*CustomElementDefinition {
+    var it = frame.window._custom_elements._definitions.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.*.constructor.isEqual(new_target)) {
+            return entry.value_ptr.*;
+        }
+    }
+    return null;
+}
+
+fn createCustomizedBuiltIn(frame: *Frame, definition: *CustomElementDefinition, tag: Element.Tag, comptime Interface: type) !*Element {
+    // An interface with subtypes (HTMLMediaElement) is no element's own.
+    if (comptime @hasField(Interface, "_type")) {
+        return error.TypeError;
+    }
+    const node = try createElementNS(frame.document, .html, @tagName(tag), null);
+    const element = node.as(Element);
+    // `extends` has to name an element of the interface super() reached.
+    const matches = if (comptime Interface.Proto == Element.Html)
+        element.is(Interface) != null
+    else if (element.is(Interface.Proto)) |parent|
+        parent.is(Interface) != null
+    else
+        false;
+    if (!matches) {
+        return error.TypeError;
+    }
+    try frame.setCustomizedBuiltInDefinition(element, definition);
     return element;
 }
 
