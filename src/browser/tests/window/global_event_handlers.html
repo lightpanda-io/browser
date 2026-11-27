@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <form id=form><select id=select><option>a<option>b</select></form>
@@ -40,13 +41,13 @@
     testing.expectEqual([false, false, false], [n in window, n in document, n in document.documentElement]);
   }
 
-  // the content attribute isn't a handler either, but listeners still run
+  // the content attribute is still a handler
   window.seenTouch = [];
   const div = document.createElement('div');
   div.setAttribute('ontouchstart', 'seenTouch.push("attr")');
   div.addEventListener('touchstart', () => seenTouch.push('listener'));
   div.dispatchEvent(new TouchEvent('touchstart'));
-  testing.expectEqual(['listener'], seenTouch);
+  testing.expectEqual(['attr', 'listener'], seenTouch);
 }
 </script>
 
@@ -119,9 +120,9 @@
   testing.expectEqual(null, document.body.onpagehide);
 
   const frameset = document.createElement('frameset');
-  frameset.onunload = fn;
-  testing.expectEqual(fn, window.onunload);
-  window.onunload = null;
+  frameset.onhashchange = fn;
+  testing.expectEqual(fn, window.onhashchange);
+  window.onhashchange = null;
 }
 </script>
 

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=onerrorBasicCallback>
@@ -136,8 +137,12 @@
   window.onerror = "not a function";
   testing.expectEqual(null, window.onerror);
 
+  // [LegacyTreatNonObjectAsNull]: Chrome stores any object, callable or not
   window.onerror = {};
-  testing.expectEqual(null, window.onerror);
+  testing.diverges('non-callable object handlers are dropped', () => {
+    testing.expectEqual(null, window.onerror);
+  });
+  window.onerror = null;
 
   window.onerror = 123;
   testing.expectEqual(null, window.onerror);
