@@ -39,6 +39,12 @@ pub const SqliteCache = @This();
 pool: Pool,
 allocator: std.mem.Allocator,
 entry_limit: u32,
+conn_with_caches: []ConnWithCache,
+
+const ConnWithCache = struct {
+    conn: *Sqlite.c.sqlite3,
+    stmts: Sqlite.StmtCache = .{},
+};
 
 // When the schema changes, change this value, and the DB will be deleted and
 // re-created with the schema
@@ -151,10 +157,36 @@ fn open(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !
         try createSchema(conn);
     }
 
-    var cache: SqliteCache = .{ .allocator = allocator, .pool = pool, .entry_limit = entry_limit };
+    const conn_caches = try allocator.alloc(ConnWithCache, pool.conns.len);
+    for (conn_caches, pool.conns, 0..) |*cc, conn, i| {
+        cc.* = .{ .conn = conn.conn };
+
+        errdefer {
+            for (conn_caches[0 .. i + 1]) |*conn_cache| {
+                conn_cache.stmts.deinit(allocator);
+            }
+            allocator.free(conn_caches);
+        }
+
+        inline for (.{ select_sql, insert_sql }) |sql| {
+            const stmt = try conn.prepareCached(&cc.stmts, allocator, sql);
+            try stmt.reset();
+        }
+    }
+
+    var cache: SqliteCache = .{
+        .allocator = allocator,
+        .pool = pool,
+        .entry_limit = entry_limit,
+        .conn_with_caches = conn_caches,
+    };
     cache.maintenance(lp.datetime.timestamp(.real));
 
-    log.info(.cache, "sqlite cache initialized", .{ .path = path, .entry_limit = entry_limit, .version = schema_version });
+    log.info(.cache, "sqlite cache initialized", .{
+        .path = path,
+        .entry_limit = entry_limit,
+        .version = schema_version,
+    });
     return cache;
 }
 
@@ -183,7 +215,20 @@ fn createSchema(conn: Sqlite.Conn) !void {
 }
 
 pub fn deinit(self: *SqliteCache) void {
+    for (self.conn_with_caches) |*cc| {
+        cc.stmts.deinit(self.allocator);
+    }
+    self.allocator.free(self.conn_with_caches);
     self.pool.deinit(self.allocator);
+}
+
+fn cacheFor(self: *SqliteCache, conn: Sqlite.Conn) *Sqlite.StmtCache {
+    for (self.conn_with_caches) |*cc| {
+        if (cc.conn == conn.conn) {
+            return &cc.stmts;
+        }
+    }
+    unreachable; // conn always comes from self.pool
 }
 
 /// Removes expired entries and enforces size limit.
@@ -217,11 +262,18 @@ pub fn maintenance(self: *SqliteCache, now: u64) void {
     log.debug(.cache, "maintenance", .{ .purged = purged, .evicted = conn.changes() });
 }
 
+const select_sql =
+    \\ select status, stored_at, age_at_store, max_age, must_revalidate,
+    \\     content_type, etag, last_modified, vary_headers, headers,
+    \\     script_cache, body
+    \\ from cache where url = $1
+;
+
 pub fn get(self: *SqliteCache, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    return readEntry(conn, arena, body_allocator, req) catch |err| switch (err) {
+    return readEntry(conn, self.cacheFor(conn), self.allocator, arena, body_allocator, req) catch |err| switch (err) {
         error.CorruptEntry => {
             discardCorrupt(conn, req.url);
             return .miss;
@@ -230,17 +282,22 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, body_allocator: std.mem
     };
 }
 
-fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
-    var entry = try conn.row(
-        \\ select status, stored_at, age_at_store, max_age, must_revalidate,
-        \\     content_type, etag, last_modified, vary_headers, headers,
-        \\     script_cache, body
-        \\ from cache where url = $1
-    , .{req.url}) orelse {
+fn readEntry(
+    conn: Sqlite.Conn,
+    stmts: *Sqlite.StmtCache,
+    stmt_allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    body_allocator: std.mem.Allocator,
+    req: CacheGetRequest,
+) !CacheGetResult {
+    const entry = try conn.prepareCached(stmts, stmt_allocator, select_sql);
+    defer entry.reset() catch {};
+
+    try entry.bind(.{req.url});
+    if (!(try entry.step())) {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
         return .miss;
-    };
-    defer entry.deinit();
+    }
 
     const status = std.math.cast(u16, entry.get(i64, 0)) orelse return error.CorruptEntry;
     const stored_at = std.math.cast(u64, entry.get(i64, 1)) orelse return error.CorruptEntry;
@@ -291,6 +348,13 @@ fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.me
     return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
 }
 
+const insert_sql =
+    \\ insert or replace into cache
+    \\     (url, status, stored_at, age_at_store, max_age, must_revalidate,
+    \\     content_type, etag, last_modified, vary_headers, headers, body)
+    \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+;
+
 pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
     assertLowercaseNames(req.headers);
 
@@ -303,12 +367,10 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    try conn.exec(
-        \\ insert or replace into cache
-        \\     (url, status, stored_at, age_at_store, max_age, must_revalidate,
-        \\     content_type, etag, last_modified, vary_headers, headers, body)
-        \\ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    , .{
+    const stmt = try conn.prepareCached(self.cacheFor(conn), self.allocator, insert_sql);
+    defer stmt.reset() catch {};
+
+    try stmt.bind(.{
         req.url,
         @as(i64, @intCast(req.status)),
         req.stored_at,
@@ -322,6 +384,7 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
         Blob{ .data = encoded.written() },
         Blob{ .data = body },
     });
+    try stmt.stepToCompletion();
 
     log.debug(.cache, "put", .{ .url = req.url, .body_len = body.len });
 }

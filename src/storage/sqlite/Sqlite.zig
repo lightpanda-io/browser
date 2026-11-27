@@ -111,6 +111,16 @@ pub const Conn = struct {
         return .{ .stmt = stmt.?, .conn = self.conn };
     }
 
+    pub fn prepareCached(self: Conn, cache: *StmtCache, allocator: std.mem.Allocator, sql: []const u8) !Statement {
+        if (cache.get(sql)) |stmt| {
+            return .{ .stmt = stmt, .conn = self.conn };
+        }
+
+        const statement = try self.prepare(sql);
+        try cache.put(allocator, sql, statement.stmt);
+        return statement;
+    }
+
     const BeginKind = enum { deferred, immediate, exclusive };
     pub fn begin(self: Conn, kind: BeginKind) !void {
         switch (kind) {
@@ -144,7 +154,29 @@ pub const Conn = struct {
     }
 };
 
-const Statement = struct {
+// Prepared statements keyed by their SQL text, for a single connection.
+pub const StmtCache = struct {
+    map: std.StringHashMapUnmanaged(*c.sqlite3_stmt) = .empty,
+
+    pub fn get(self: StmtCache, sql: []const u8) ?*c.sqlite3_stmt {
+        return self.map.get(sql);
+    }
+
+    pub fn put(self: *StmtCache, allocator: std.mem.Allocator, sql: []const u8, stmt: *c.sqlite3_stmt) !void {
+        try self.map.put(allocator, sql, stmt);
+    }
+
+    // Finalizes every statement it's holding and frees the map itself.
+    pub fn deinit(self: *StmtCache, allocator: std.mem.Allocator) void {
+        var it = self.map.valueIterator();
+        while (it.next()) |stmt| {
+            _ = c.sqlite3_finalize(stmt.*);
+        }
+        self.map.deinit(allocator);
+    }
+};
+
+pub const Statement = struct {
     conn: *c.sqlite3,
     stmt: *c.sqlite3_stmt,
 
@@ -216,7 +248,7 @@ const Statement = struct {
         return true;
     }
 
-    fn stepToCompletion(self: Statement) !void {
+    pub fn stepToCompletion(self: Statement) !void {
         const stmt = self.stmt;
         while (true) {
             switch (c.sqlite3_step(stmt)) {
