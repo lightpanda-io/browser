@@ -196,9 +196,19 @@ pub const LockRequest = struct {
         return null;
     }
 
+    // The task that would have run the callback was dropped with the rest of
+    // its scheduler: the realm that made the request was closed (its window, or
+    // its iframe removed), or is being destroyed.
     fn cancelled(ctx: *anyopaque) void {
         const self: *LockRequest = @ptrCast(@alignCast(ctx));
         if (self.finished) return;
+
+        // This request goes with the others of its realm, if the manager
+        // lists it.
+        self.manager.dropGone(self.exec);
+        if (self.finished) return;
+
+        // It doesn't list one that was to be told the lock isn't available.
         self.finished = true;
         self.deinit();
     }
@@ -258,9 +268,12 @@ pub fn request(
     cb3: ?js.Function,
     exec: *Execution,
 ) !js.Promise {
-    if (self.detached()) {
+    // The realm making the request is the one that runs its callback, so its
+    // document has to be fully active as well.
+    if (inactive(self._exec) or inactive(exec.handle())) {
         return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidStateError } });
     }
+    self.dropGone(null);
 
     const resolver = exec.js.local.?.createPromiseResolver();
     const promise = resolver.promise();
@@ -385,10 +398,11 @@ pub fn request(
 }
 
 // https://w3c.github.io/web-locks/#dom-lockmanager-query
-pub fn query(self: *const LockManager, exec: *Execution) !js.Promise {
-    if (self.detached()) {
+pub fn query(self: *LockManager, exec: *Execution) !js.Promise {
+    if (inactive(self._exec)) {
         return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidStateError } });
     }
+    self.dropGone(null);
 
     var held: std.ArrayList(LockInfo) = .empty;
     var pending: std.ArrayList(LockInfo) = .empty;
@@ -435,36 +449,66 @@ fn releaseLock(self: *LockManager, lock_request: *LockRequest) void {
     }
     defer lock_request.deinit();
 
-    var i: usize = 0;
-    while (i < self._locks.items.len) {
-        const lr = self._locks.items[i];
-        if (lr.state != .pending or !lr.name.eql(lock_request.name)) {
-            i += 1;
-            continue;
-        }
+    self.dropGone(null);
+    self.grantPending(lock_request.name);
+}
 
-        // The realm that queued it is gone, so its callback can't run and
-        // would never release the lock.
-        if (lr.exec.js() == null) {
-            _ = self._locks.orderedRemove(i);
-            lr.finished = true;
-            lr.deinit();
-            continue;
-        }
-
+// Grants the pending requests for `name`, in the order they were made, up to
+// the first one that a held lock conflicts with.
+fn grantPending(self: *LockManager, name: lp.String) void {
+    for (self._locks.items) |lr| {
+        if (lr.state != .pending or !lr.name.eql(name)) continue;
         if (self.heldConflicts(lr.name, lr.options.mode)) break;
 
         lr.state = .held;
         lr.scheduleFireCallback();
-        i += 1;
     }
 }
 
-// https://w3c.github.io/web-locks/#dom-lockmanager-request step 2: the
-// document of the manager's global isn't fully active anymore. Its requests
-// went with it.
-fn detached(self: *const LockManager) bool {
-    return self._exec.global() == null;
+// Drops the requests of the realms that are gone. Their callbacks can't run,
+// so they would never release a lock, or leave a queue. What they were
+// blocking is then granted.
+//
+// `resetting` is a realm whose scheduler is dropping its tasks.
+fn dropGone(self: *LockManager, maybe_resetting: ?js.ExecutionHandle) void {
+    const locks = self._locks.items;
+    var kept: usize = 0;
+    for (locks) |lr| {
+        const same_realm = if (maybe_resetting) |resetting|
+            resetting.anchor == lr.exec.anchor
+        else
+            false;
+
+        if (same_realm or gone(lr.exec)) {
+            lr.finished = true;
+            lr.deinit();
+            continue;
+        }
+        locks[kept] = lr;
+        kept += 1;
+    }
+    if (kept == locks.len) {
+        return;
+    }
+    self._locks.shrinkRetainingCapacity(kept);
+
+    for (self._locks.items) |lr| switch (lr.state) {
+        .pending => self.grantPending(lr.name),
+        else => {},
+    };
+}
+
+inline fn gone(exec: js.ExecutionHandle) bool {
+    return exec.js() == null or inactive(exec);
+}
+
+// The document of a realm isn't fully active anymore.
+fn inactive(exec: js.ExecutionHandle) bool {
+    const global = exec.global() orelse return true;
+    return switch (global) {
+        .frame => |frame| frame.window._closed,
+        .worker => false,
+    };
 }
 
 pub const JsApi = struct {
