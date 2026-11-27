@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<script>
+  const index = Array.from({ length: parent.frames.length }, (_, i) => i)
+    .find((i) => parent.frames[i] === window.self);
+  parent.postMessage({
+    name: window.name,
+    byName: parent.frames[window.name] === window.self,
+    byIndex: index !== undefined,
+    length: parent.frames.length,
+  }, '*');
+</script>

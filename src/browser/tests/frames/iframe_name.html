@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<div id=shadowed></div>
+<iframe id=f_named name=named srcdoc="<p>named</p>"></iframe>
+<iframe id=f_shadow name=shadowed srcdoc="<p>shadow</p>"></iframe>
+<iframe id=f_unnamed srcdoc="<p>unnamed</p>"></iframe>
+
+<script id="name_attribute_is_the_window_name">
+  testing.onload(() => {
+    testing.expectEqual('named', $('#f_named').contentWindow.name);
+    testing.expectEqual('', $('#f_unnamed').contentWindow.name);
+  });
+</script>
+
+<script id="name_is_read_when_the_frame_is_created">
+  {
+    const iframe = document.createElement('iframe');
+    iframe.name = 'before_insert';
+    document.documentElement.appendChild(iframe);
+    testing.expectEqual('before_insert', iframe.contentWindow.name);
+
+    // Chrome reads the attribute only when it creates the frame
+    iframe.name = 'renamed';
+    testing.expectEqual('before_insert', iframe.contentWindow.name);
+    testing.expectTrue(window.before_insert === iframe.contentWindow);
+    testing.expectEqual(undefined, window.renamed);
+
+    iframe.removeAttribute('name');
+    testing.expectEqual('before_insert', iframe.contentWindow.name);
+    iframe.remove();
+  }
+</script>
+
+<script id="the_name_survives_a_navigation" type=module>
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  iframe.name = 'navme';
+  iframe.src = 'support/frame_lookup.html';
+  await new Promise((resolve) => {
+    iframe.onload = resolve;
+    document.documentElement.appendChild(iframe);
+  });
+  await new Promise((resolve) => {
+    iframe.onload = resolve;
+    iframe.src = 'about:blank';
+  });
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('about:blank', iframe.contentWindow.location.href);
+    testing.expectEqual('navme', iframe.contentWindow.name);
+    testing.expectTrue(window.navme === iframe.contentWindow);
+  });
+</script>
+
+<script id="window_and_frames_look_up_a_frame_by_name">
+  testing.onload(() => {
+    const f = $('#f_named').contentWindow;
+    testing.expectTrue(window.named === f);
+    testing.expectTrue(window['named'] === f);
+    testing.expectTrue(window.frames.named === f);
+    testing.expectTrue(window.frames['named'] === f);
+    testing.expectEqual(undefined, window.frames.no_such_frame);
+  });
+</script>
+
+<script id="a_frame_name_wins_over_an_element_id">
+  testing.onload(() => {
+    testing.expectTrue(window.shadowed === $('#f_shadow').contentWindow);
+    testing.expectEqual('shadowed', window.shadowed.name);
+  });
+</script>
+
+<script id="a_removed_frame_is_no_longer_found">
+  {
+    const iframe = document.createElement('iframe');
+    iframe.name = 'short_lived';
+    document.documentElement.appendChild(iframe);
+    testing.expectTrue(window.short_lived === iframe.contentWindow);
+
+    iframe.remove();
+    testing.expectEqual(undefined, window.short_lived);
+  }
+</script>
+
+<script id="a_child_finds_itself_through_its_parent" type=module>
+  const state = await testing.async();
+  const ALT_BASE = testing.BASE_URL.replace('127.0.0.1', 'localhost');
+  const ALT_ORIGIN = testing.ORIGIN.replace('127.0.0.1', 'localhost');
+
+  function load(src, name, origin) {
+    return new Promise((resolve) => {
+      const onmsg = (e) => {
+        if (e.origin !== origin || e.data.name !== name) return;
+        window.removeEventListener('message', onmsg);
+        resolve(e.data);
+      };
+      window.addEventListener('message', onmsg);
+      const iframe = document.createElement('iframe');
+      iframe.name = name;
+      iframe.src = src;
+      document.documentElement.appendChild(iframe);
+    });
+  }
+
+  // localhost is cross-origin to the 127.0.0.1 test page, 127.0.0.1 is same-origin.
+  const cross = await load(ALT_BASE + 'frames/support/frame_lookup.html', 'cross_child', ALT_ORIGIN);
+  const same = await load(testing.BASE_URL + 'frames/support/frame_lookup.html', 'same_child', testing.ORIGIN);
+  state.resolve();
+
+  await state.done(() => {
+    for (const seen of [cross, same]) {
+      testing.expectTrue(seen.byName);
+      testing.expectTrue(seen.byIndex);
+      testing.expectTrue(seen.length > 0);
+    }
+  });
+</script>
