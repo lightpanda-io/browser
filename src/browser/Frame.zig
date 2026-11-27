@@ -529,9 +529,9 @@ pub fn deinit(self: *Frame) void {
         container.detach();
     }
 
-    if (self._queued_navigation) |qn| {
-        qn.release();
-    }
+    // The parent's load isn't completed for it, as cancelling would: when we
+    // still have a navigation queued here, the parent is being torn down too.
+    _ = self.dropQueuedNavigation();
 
     while (self._message_ports.first) |node| {
         const port: *MessagePort = @alignCast(@fieldParentPtr("_node", node));
@@ -1549,13 +1549,9 @@ fn loadEventsAborted(self: *const Frame) bool {
 }
 
 pub fn cancelQueuedNavigation(self: *Frame) void {
-    const qn = self._queued_navigation orelse return;
-    const queued = self.page.queued_navigation;
-    if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
-        _ = queued.swapRemove(idx);
+    if (self.dropQueuedNavigation() == false) {
+        return;
     }
-    qn.release();
-    self._queued_navigation = null;
 
     // Our own load is aborted and the replacement that would have completed it
     // is now gone, so _documentIsComplete will never reach the parent. Release
@@ -1563,6 +1559,20 @@ pub fn cancelQueuedNavigation(self: *Frame) void {
     if (self.document._load_aborted) {
         self.releaseParentLoadDelay();
     }
+}
+
+// Releases the queued navigation, if there's one, and takes us out of the
+// page's queue. The batch that the session is going through can still list us:
+// it skips a frame that has no navigation.
+fn dropQueuedNavigation(self: *Frame) bool {
+    const qn = self._queued_navigation orelse return false;
+    self._queued_navigation = null;
+    const queued = self.page.queued_navigation;
+    if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
+        _ = queued.swapRemove(idx);
+    }
+    qn.release();
+    return true;
 }
 
 // Stop delaying the parent's load event without dispatching the iframe
