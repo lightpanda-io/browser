@@ -505,6 +505,12 @@ fn cancelIdleCallback(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
+// https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+// When `location.muted` (set by V8 from the originating script's opaque
+// origin — see js.Local.compileWithCache's `muted` param), the page only
+// ever sees "Script error." with no location/stack/error object, same as
+// other browsers. Our own logging and the CDP notification still get the
+// real details.
 pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     // Per spec's "in error reporting mode": an exception thrown while an
     // error is being reported (e.g. by an "error" listener) is not reported
@@ -520,15 +526,17 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     frame.js.call_depth = call_depth + 1;
     defer frame.js.call_depth = call_depth;
 
+    const message = err.toStringSlice() catch "Unknown error";
+
     frame.page.recordJsError(error.JsException);
-    frame.page.status.noteException(err.toStringSlice() catch "");
+    frame.page.status.noteException(message);
 
     const location = err.errorLocation(frame.call_arena) catch js.Value.ErrorLocation{};
 
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error")) {
         log.warn(.page_error, "uncaught exception", .{
-            .message = err.toStringSlice() catch "Unknown error",
+            .message = message,
             .url = location.url,
             .line = location.line,
             .column = location.column,
@@ -540,9 +548,17 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     self._reporting_error = true;
     defer self._reporting_error = false;
 
-    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
+    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), if (location.muted) .{
+        .@"error" = null,
+        .message = "Script error.",
+        .filename = "",
+        .lineno = 0,
+        .colno = 0,
+        .bubbles = false,
+        .cancelable = true,
+    } else .{
         .@"error" = try err.persist(),
-        .message = err.toStringSlice() catch "Unknown error",
+        .message = message,
         .filename = location.url,
         .lineno = location.line,
         .colno = location.column,
@@ -561,11 +577,14 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     });
 
     if (!event._prevent_default) {
+        // Logged from err/location, not error_event: for a muted script the
+        // event's fields are sanitized to "Script error.", but our own log
+        // and the CDP notification should still show the real details.
         log.warn(.page_error, "uncaught exception", .{
-            .message = error_event._message,
-            .url = error_event._filename,
-            .line = error_event._line_number,
-            .column = error_event._column_number,
+            .message = message,
+            .url = location.url,
+            .line = location.line,
+            .column = location.column,
         });
         notifyExceptionThrown(err, location, .exception, frame);
     }

@@ -1526,11 +1526,11 @@ const JavascriptUrlTask = struct {
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        const script = ls.local.compile(self.source, "javascript:") catch |err| {
+        const result = ls.local.compile(self.source, "javascript:", .{}) catch |err| {
             log.debug(.browser, "javascript-url compile", .{ .err = err, .type = frame._type, .url = frame.url });
             return null;
         };
-        _ = script.run() catch |err| {
+        _ = result.script.run() catch |err| {
             log.debug(.browser, "javascript-url run", .{ .err = err, .type = frame._type, .url = frame.url });
         };
         return null;

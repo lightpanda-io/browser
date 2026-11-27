@@ -702,7 +702,7 @@ test "js: a string longer than V8 accepts fails with RangeError instead of crash
         try testing.expectError(error.InvalidStringLength, local.zigValueToJs(str, .{}));
         try testing.expectError(error.InvalidStringLength, local.zigValueToJs(String.OneByte{ .bytes = str }, .{}));
         try testing.expectError(error.InvalidStringLength, local.parseJSON(str));
-        try testing.expectError(error.InvalidStringLength, local.compile(str, null));
+        try testing.expectError(error.InvalidStringLength, local.compile(str, null, .{}));
 
         var state = State{ .len = len };
         const res = try driver_fn.call([]const u8, .{local.newCallback(State.text, &state)});

@@ -321,6 +321,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .frame = frame,
     } };
 
+    const settings = corsSettings(element, kind == .module);
+
     if (mode != .normal) {
         var preloaded = self.takePreload(remote_url);
         if (preloaded == null and kind == .module) {
@@ -391,10 +393,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.encoding = pre.encoding;
                 script.script_cache = pre.script_cache;
                 script.status = pre.status;
+                script.muted = pre.muted;
                 script.complete = true;
             } else {
-                const settings = corsSettings(script_element.asElement(), kind == .module);
-
                 const transfer = try self.base.client.newRequest(.{
                     .url = remote_url,
                     .method = .GET,
@@ -418,6 +419,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.setContentType(response.content_type);
                 script.script_cache = response.script_cache;
                 script.status = response.status;
+                script.muted = settings.request_mode == .no_cors and response.cross_origin;
                 script.complete = true;
             }
             handover = true;
@@ -444,8 +446,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
     const transfer = blk: {
         errdefer self.base.scriptList(script).remove(&script.node);
-
-        const settings = corsSettings(script_element.asElement(), kind == .module);
 
         const transfer = try frame.newRequest(.{
             .ctx = script,
@@ -849,4 +849,71 @@ test "ScriptManager: a failed preload is consumed, not refetched" {
         \\window.classic_error && window.module_error && window.import_error &&
         \\!window.failed_classic_ran && !window.failed_module_ran
     , 2000);
+}
+
+// https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+// A classic script fetched cross-origin without a `crossorigin` attribute
+// is fetched in no-cors mode: its response is opaque, so an uncaught
+// exception must be reported to window.onerror as "Script error." with no
+// location, stack, or error object.
+test "ScriptManager: a cross-origin classic script's exceptions are muted" {
+    testing.silenceLog(&.{.page_error});
+
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\window.caught = null;
+        \\window.addEventListener('error', (e) => {
+        \\  window.caught = { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, error: e.error };
+        \\});
+        \\const s = document.createElement('script');
+        \\s.src = 'http://localhost:9582/src/browser/tests/throws.js';
+        \\document.head.appendChild(s);
+    , null);
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForScript(page.frame_id, "window.caught !== null", 2000);
+
+    const caught = try ls.local.exec("JSON.stringify({ ...window.caught, error: window.caught.error == null })", null);
+    try testing.expectEqual(
+        "{\"message\":\"Script error.\",\"filename\":\"\",\"lineno\":0,\"colno\":0,\"error\":true}",
+        try caught.toStringSlice(),
+    );
+}
+
+test "ScriptManager: a same-origin classic script's exceptions are not muted" {
+    testing.silenceLog(&.{.page_error});
+
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\window.caught = null;
+        \\window.addEventListener('error', (e) => {
+        \\  window.caught = { message: e.message, filename: e.filename, error: e.error };
+        \\});
+        \\const s = document.createElement('script');
+        \\s.src = 'http://127.0.0.1:9582/src/browser/tests/throws.js';
+        \\document.head.appendChild(s);
+    , null);
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForScript(page.frame_id, "window.caught !== null", 2000);
+
+    const caught = try ls.local.exec("JSON.stringify({ ...window.caught, error: window.caught.error == null })", null);
+    try testing.expectEqual(
+        "{\"message\":\"Error: boom\",\"filename\":\"http://127.0.0.1:9582/src/browser/tests/throws.js\",\"error\":false}",
+        try caught.toStringSlice(),
+    );
 }

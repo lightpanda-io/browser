@@ -98,7 +98,8 @@ test "Script: persisted unbound script re-binds and re-runs" {
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    const script = try ls.local.compile("1 + 2", "rebind_test");
+    const result = try ls.local.compile("1 + 2", "rebind_test", .{});
+    const script = result.script;
     try testing.expectEqual(3, try (try script.run()).toI32());
 
     var unbound = script.getUnboundScript().persist(ls.local.isolate);
@@ -118,16 +119,16 @@ test "Script: code cache round-trips and rejects a source mismatch" {
 
     const src = "function add(a, b) { return a + b; } add(40, 2);";
 
-    const produced = try ls.local.compile(src, "cache_test");
+    const produced = (try ls.local.compile(src, "cache_test", .{})).script;
     const bytes = try produced.getUnboundScript().createCodeCache(testing.allocator);
     defer testing.allocator.free(bytes);
     try testing.expect(bytes.len > 0);
 
-    const hit = try ls.local.compileWithCache(src, "cache_test", .{}, bytes);
+    const hit = try ls.local.compile(src, "cache_test", .{ .cached_data = bytes });
     try testing.expectEqual(false, hit.cache_rejected);
     try testing.expectEqual(42, try (try hit.script.run()).toI32());
 
-    const miss = try ls.local.compileWithCache("1 + 1;", "cache_test", .{}, bytes);
+    const miss = try ls.local.compile("1 + 1;", "cache_test", .{ .cached_data = bytes });
     try testing.expectEqual(true, miss.cache_rejected);
     try testing.expectEqual(2, try (try miss.script.run()).toI32());
 }

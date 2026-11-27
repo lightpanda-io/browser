@@ -665,6 +665,12 @@ pub const Script = struct {
     // Where a parser-inserted inline script is in its document.
     text_position: js.Local.SourcePosition = .{},
 
+    // https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+    // Set for classic scripts fetched cross-origin in "no-cors" mode: their
+    // response is opaque, so uncaught exceptions are reported to window.onerror
+    // as "Script error." with no location/stack/error object.
+    muted: bool = false,
+
     pub const Source = union(enum) {
         @"inline": []const u8,
         // Taken from the transfer (Transfer.takeBody), freed in deinit.
@@ -796,6 +802,13 @@ pub const Script = struct {
         }
 
         self.setContentType(transfer.contentType());
+
+        // https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+        // mutedErrors is true if response was CORS-cross-origin, i.e. fetched
+        // in no-cors mode and actually cross-origin. Based on the response
+        // (which redirects can't reset), not the request URL, matching how
+        // Fetch.zig decides a response is opaque.
+        self.muted = transfer.req.request_mode == .no_cors and transfer._cors_cross_origin;
 
         lp.assert(self.source.remote.items().len == 0, "ScriptManagerBase.Header buffer", .{ .len = self.source.remote.items().len });
 
@@ -1057,7 +1070,7 @@ pub const Script = struct {
     fn runClassic(self: *Script, local: *const js.Local, text: []const u8) !void {
         const sc = self.script_cache orelse {
             // wasn't in the cache and isn't cacheable
-            const result = try local.compileWithCache(text, self.url, self.text_position, null);
+            const result = try local.compile(text, self.url, .{ .position = self.text_position, .muted = self.muted });
             _ = try result.script.run();
             return;
         };
@@ -1073,10 +1086,12 @@ pub const Script = struct {
             // the text changes without the cache entry being invalidated.
             // That's unlikely, but treating the script as uncacheable avoids
             // the complexity for a rare edge case.
-            return local.eval(text, self.url);
+            const result = try local.compile(text, self.url, .{ .muted = self.muted });
+            _ = try result.script.run();
+            return;
         }
 
-        const result = try local.compileWithCache(text, self.url, .{}, sc.bytes);
+        const result = try local.compile(text, self.url, .{ .cached_data = sc.bytes, .muted = self.muted });
         _ = try result.script.run();
 
         if (sc.bytes != null) {
