@@ -47,6 +47,7 @@ pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
         allocator,
         .{ .path = cache_path },
         config.httpCacheEntryLimit(),
+        config.experimentalFeatures().privatecache,
     ) catch |err| {
         log.err(.cache, "failed to init", .{
             .kind = "SqliteCache",
@@ -161,6 +162,7 @@ pub const ResponseDirectives = struct {
     no_cache: bool = false,
     private: bool = false,
     public: bool = false,
+    must_revalidate: bool = false,
     max_age: ?u64 = null,
     s_maxage: ?u64 = null,
 
@@ -187,6 +189,8 @@ pub const ResponseDirectives = struct {
                 directives.private = true;
             } else if (std.ascii.eqlIgnoreCase(name, "public")) {
                 directives.public = true;
+            } else if (std.ascii.eqlIgnoreCase(name, "must-revalidate")) {
+                directives.must_revalidate = true;
             } else if (std.ascii.eqlIgnoreCase(name, "max-age")) {
                 directives.max_age = parseDeltaSeconds(argument);
             } else if (std.ascii.eqlIgnoreCase(name, "s-maxage")) {
@@ -207,6 +211,7 @@ pub const CacheGetRequest = struct {
 pub const CachePutRequest = struct {
     url: [:0]const u8,
     content_type: []const u8,
+    private: bool,
 
     status: u16,
     stored_at: u64,
@@ -341,7 +346,6 @@ const ResponseHeaders = struct {
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
     has_set_cookie: bool = false,
-    has_authorization: bool = false,
 
     fn parse(headers: []const Http.Header) ResponseHeaders {
         var self: ResponseHeaders = .{};
@@ -374,8 +378,6 @@ const ResponseHeaders = struct {
                         self.directives = .parse(h.value);
                     } else if (std.mem.eql(u8, h.name, "last-modified")) {
                         self.last_modified = h.value;
-                    } else if (std.mem.eql(u8, h.name, "authorization")) {
-                        self.has_authorization = true;
                     }
                 },
                 else => {},
@@ -423,12 +425,12 @@ fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u6
     return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
-fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: bool) !?CachePutRequest {
+fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, private_cache: bool) !?CachePutRequest {
     const url = candidate.url;
     const status = candidate.status;
     const response: ResponseHeaders = .parse(candidate.headers);
 
-    if (status == 206 or (status >= 300 and status < 400)) {
+    if (status == 206 or status == 401 or status == 407 or (status >= 300 and status < 400)) {
         // TODO
         // Could be cached, but HttpClient doesn't handle this correctly, it
         // just writes the response instead of actually processing it.
@@ -436,14 +438,31 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
         return null;
     }
 
-    if (response.has_set_cookie and set_cookie == false) {
-        log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
-        return null;
+    var private: bool = false;
+
+    if (response.has_set_cookie) {
+        if (private_cache) {
+            private = true;
+        } else {
+            log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
+            return null;
+        }
     }
 
-    if (response.has_authorization) {
-        log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
-        return null;
+    // RFC 9111 §3.5: a shared cache may store a response to a request that
+    // had an Authorization header only if the response is marked public,
+    // s-maxage, or must-revalidate. Lookups for such requests are otherwise
+    // unrestricted; an origin answering per-user sends Vary: Authorization.
+    const request_has_authorization = for (candidate.request_headers) |h| {
+        if (std.mem.eql(u8, h.name, "authorization")) break true;
+    } else false;
+
+    if (request_has_authorization) {
+        const d = response.directives;
+        if (!(d.public or d.s_maxage != null or d.must_revalidate)) {
+            log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
+            return null;
+        }
     }
 
     if (response.vary) |v| if (std.mem.eql(u8, v, "*")) {
@@ -454,20 +473,29 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
     const cc: CacheControl = blk: {
         const directives = response.directives;
         // "private" bars shared cache, which is how our caching works - tied
-        // to the app while the cookie jar is on the Session. Safer not to cache.
-        if (directives.no_store or directives.private) {
+        // to the app while the cookie jar is on the Session.
+        if (directives.no_store) {
             break :blk null;
         }
+
+        if (directives.private) {
+            if (private_cache) {
+                private = true;
+            } else {
+                break :blk null;
+            }
+        }
+
         const timestamp = candidate.timestamp;
         if (explicitFreshness(timestamp, directives, response.expires, response.date)) |cc| {
-            if (cc.max_age == 0 and cc.must_revalidate == false) {
+            if (cc.max_age == 0 and !cc.must_revalidate) {
                 // Already stale on arrival, with nothing to revalidate it against.
                 break :blk null;
             }
             break :blk cc;
         }
 
-        if (heuristicallyCacheable(status) == false and directives.public == false) {
+        if (!heuristicallyCacheable(status) and !directives.public) {
             // Need a cacheable status and a public cache to use heuristic caching
             break :blk null;
         }
@@ -495,11 +523,12 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
     return .{
         .url = try arena.dupeSentinel(u8, url, 0),
         .content_type = if (candidate.content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
+        .private = if (private_cache) private else false,
         .status = status,
         .stored_at = candidate.timestamp,
         .age_at_store = if (response.age) |a| parseDeltaSeconds(a) orelse 0 else 0,
         .cache_control = cc,
-        .headers = if (set_cookie) try withoutSetCookie(arena, candidate.headers) else candidate.headers,
+        .headers = if (private_cache) try withoutSetCookie(arena, candidate.headers) else candidate.headers,
         .request_headers = candidate.request_headers,
         .etag = if (response.etag) |e| try arena.dupe(u8, e) else null,
         .last_modified = if (response.last_modified) |lm| try arena.dupe(u8, lm) else null,
@@ -777,10 +806,21 @@ test "Cache: tryCache with Set-Cookie" {
     try testing.expectEqual(1, stripped.headers.len);
     try testing.expectEqual("cache-control", stripped.headers[0].name);
 
-    // private and no-store aren't stored either way
-    for ([_][]const u8{ "private, max-age=300", "no-store, max-age=300" }) |cc| {
-        var private: TestResponse = .{ .cache_control = cc, .set_cookie = "a=1", .set_cookie_mode = true };
-        try testing.expectEqual(null, try private.run(arena.allocator()));
+    // no-store is never stored, either way
+    {
+        var no_store: TestResponse = .{ .cache_control = "no-store, max-age=300", .set_cookie = "a=1", .set_cookie_mode = true };
+        try testing.expectEqual(null, try no_store.run(arena.allocator()));
+        no_store.set_cookie_mode = false;
+        try testing.expectEqual(null, try no_store.run(arena.allocator()));
+    }
+
+    // "private" bars a shared cache, but a private cache may store it
+    {
+        var private: TestResponse = .{ .cache_control = "private, max-age=300", .set_cookie = "a=1", .set_cookie_mode = true };
+        const result = (try private.run(arena.allocator())).?;
+        try testing.expectEqual(true, result.private);
+        try testing.expectEqual(1, result.headers.len);
+
         private.set_cookie_mode = false;
         try testing.expectEqual(null, try private.run(arena.allocator()));
     }
@@ -792,7 +832,7 @@ test "Cache: renew strips a 304's Set-Cookie" {
         defer arena.deinit();
 
         var cache: Cache = .{
-            .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0) },
+            .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0, false) },
             .set_cookie = mode,
         };
         defer cache.deinit();
