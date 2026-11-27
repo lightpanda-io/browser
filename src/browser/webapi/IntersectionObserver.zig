@@ -692,11 +692,11 @@ fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
     try testing.expect(frame._intersection.last_delivery_ms != 0);
 }
 
-// Checks run INTERSECTION_CHECK_MS after the change, and nested zero-delay
+// Checks run RENDERING_MS after the change, and nested zero-delay
 // timers are clamped to 4ms past a nesting depth of five, so a chain needs real
 // time to pass between ticks.
 fn tick(frame: *Frame) !void {
-    lp.io.sleep(.fromMilliseconds(Frame.observers.INTERSECTION_CHECK_MS), .awake) catch {};
+    lp.io.sleep(.fromMilliseconds(Frame.observers.RENDERING_MS), .awake) catch {};
     frame.js.env.runMicrotasks();
     try frame.js.env.runMacrotasks();
 }
@@ -819,24 +819,24 @@ test "WebApi: IntersectionObserver checks slow down only for a page that keeps c
     _ = try ls.local.exec("new IntersectionObserver(() => {}).observe(document.createElement('div'))", null);
     try tick(frame);
 
-    const state = &frame._intersection;
+    const state = &frame._rendering;
     const now = lp.datetime.milliTimestamp(.boot);
 
     // A one-off change from work that doesn't hold the page's settle (here,
     // none at all) is checked at the next frame, before "done".
-    state.check_streak = 0;
+    state.streak = 0;
     Frame.observers.scheduleIntersectionChecks(frame);
-    try testing.expectEqual(true, state.prompt_check_scheduled);
+    try testing.expectEqual(true, state.prompt_scheduled);
     try testing.expectEqual(true, frame.js.scheduler.blocksCompletion());
     try tick(frame);
 
     // Checks running back to back: the same change waits for the slow pace,
     // without holding "done".
-    state.check_streak = 10;
-    state.last_check_ms = now;
+    state.streak = 10;
+    state.last_ms = now;
     Frame.observers.scheduleIntersectionChecks(frame);
-    try testing.expectEqual(false, state.prompt_check_scheduled);
-    try testing.expectEqual(true, state.slow_check_scheduled);
+    try testing.expectEqual(false, state.prompt_scheduled);
+    try testing.expectEqual(true, state.slow_scheduled);
     try testing.expectEqual(false, frame.js.scheduler.blocksCompletion());
 
     // Work that holds the settle is checked at the next frame whatever.
@@ -844,7 +844,7 @@ test "WebApi: IntersectionObserver checks slow down only for a page that keeps c
     const scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
     Frame.observers.scheduleIntersectionChecks(frame);
     scope.exit();
-    try testing.expectEqual(true, state.prompt_check_scheduled);
+    try testing.expectEqual(true, state.prompt_scheduled);
 }
 
 test "WebApi: IntersectionObserver" {

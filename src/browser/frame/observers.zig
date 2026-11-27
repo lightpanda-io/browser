@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // Per-frame MutationObserver, IntersectionObserver and ResizeObserver
-// bookkeeping: registration, the scheduling of the microtask deliveries, and
+// bookkeeping: registration, the scheduling of their deliveries, and
 // broadcasting DOM mutations to the registered observers. The state lives on
-// the Frame (frame._mutation / frame._intersection / frame._resize); these
-// functions operate on it.
+// the Frame (frame._mutation / frame._intersection / frame._resize /
+// frame._rendering); these functions operate on it.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -58,11 +58,6 @@ pub const Intersection = struct {
     observers: std.ArrayList(*IntersectionObserver) = .empty,
     check_dirty: bool = false,
     delivery_scheduled: bool = false,
-    slow_check_scheduled: bool = false,
-    prompt_check_scheduled: bool = false,
-
-    check_streak: u8 = 0,
-    last_check_ms: u64 = 0,
 
     // Deliveries closer together than INTERSECTION_QUIET_MS form one burst.
     // Frame.init re-initializes the whole struct, so a navigation starts fresh.
@@ -76,9 +71,16 @@ pub const Intersection = struct {
 pub const Resize = struct {
     // List of active ResizeObservers (i.e. those with >= 1 observation)
     observers: std.ArrayList(*ResizeObserver) = .empty,
-    check_scheduled: bool = false,
-    delivery_scheduled: bool = false,
-    delivery_depth: u32 = 0,
+    dirty: bool = false,
+};
+
+// The frame's rendering update.
+pub const Rendering = struct {
+    prompt_scheduled: bool = false,
+    slow_scheduled: bool = false,
+
+    streak: u8 = 0,
+    last_ms: u64 = 0,
 };
 
 // Releases the frame's references to its registered observers. Called from
@@ -170,53 +172,67 @@ pub fn scheduleIntersectionDelivery(frame: *Frame) !void {
     try frame.js.queueIntersectionDelivery();
 }
 
-// IOs are computed once per rendering opportunity, i.e. the same 5ms frequency.
-pub const INTERSECTION_CHECK_MS = 5;
+// The layout observers are checked once per rendering opportunity, i.e. the
+// same 5ms frequency as requestAnimationFrame.
+pub const RENDERING_MS = 5;
 
-// IO is expensive. We hook into the attribution system and on a stream of
+// Checks are expensive. We hook into the attribution system and on a stream of
 // non-holding triggers, we only check every 100ms.
-pub const INTERSECTION_SLOW_CHECK_MS = 100;
-const INTERSECTION_STREAK = 3;
-const INTERSECTION_STREAK_GAP_MS = 2 * INTERSECTION_SLOW_CHECK_MS;
+pub const RENDERING_SLOW_MS = 100;
+const RENDERING_STREAK = 3;
+const RENDERING_STREAK_GAP_MS = 2 * RENDERING_SLOW_MS;
 
 /// Something that can move a target changed: the DOM, an observe(), a scroll,
 /// the viewport.
 pub fn scheduleIntersectionChecks(frame: *Frame) void {
-    const state = &frame._intersection;
-    if (state.observers.items.len == 0) {
+    if (frame._intersection.observers.items.len == 0) {
         return;
     }
-    state.check_dirty = true;
-    if (state.prompt_check_scheduled) {
+    frame._intersection.check_dirty = true;
+    scheduleRendering(frame);
+}
+
+/// Something that can resize a box changed: the DOM, an observe(), the rules.
+pub fn scheduleResizeChecks(frame: *Frame) void {
+    if (frame._resize.observers.items.len == 0) {
+        return;
+    }
+    frame._resize.dirty = true;
+    scheduleRendering(frame);
+}
+
+fn scheduleRendering(frame: *Frame) void {
+    const state = &frame._rendering;
+    if (state.prompt_scheduled) {
         return;
     }
 
     const now = lp.datetime.milliTimestamp(.boot);
-    const streaking = state.check_streak >= INTERSECTION_STREAK and now - state.last_check_ms <= INTERSECTION_STREAK_GAP_MS;
+    const streaking = state.streak >= RENDERING_STREAK and now - state.last_ms <= RENDERING_STREAK_GAP_MS;
     if (!streaking or js.Attribution.isTracked(frame.js.attribution.current())) {
-        frame.js.scheduler.add(frame, runPromptIntersectionCheck, INTERSECTION_CHECK_MS, .{
-            .name = "IntersectionObserver.checks",
+        frame.js.scheduler.add(frame, runPromptRendering, RENDERING_MS, .{
+            .name = "observers.rendering",
             .kind = .observer,
         }) catch |err| {
-            log.err(.frame, "scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.err(.frame, "scheduleRendering", .{ .err = err, .type = frame._type, .url = frame.url });
             return;
         };
-        state.prompt_check_scheduled = true;
+        state.prompt_scheduled = true;
         return;
     }
 
-    if (state.slow_check_scheduled) {
+    if (state.slow_scheduled) {
         return;
     }
-    frame.js.scheduler.add(frame, runSlowIntersectionCheck, INTERSECTION_SLOW_CHECK_MS, .{
-        .name = "IntersectionObserver.slowChecks",
+    frame.js.scheduler.add(frame, runSlowRendering, RENDERING_SLOW_MS, .{
+        .name = "observers.slowRendering",
         .kind = .observer,
         .blocks_done = false,
     }) catch |err| {
-        log.err(.frame, "scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+        log.err(.frame, "scheduleRendering", .{ .err = err, .type = frame._type, .url = frame.url });
         return;
     };
-    state.slow_check_scheduled = true;
+    state.slow_scheduled = true;
 }
 
 /// The frame's viewport moved (a scroll) or changed size.
@@ -234,133 +250,83 @@ pub fn intersectionScrolled(frame: *Frame) void {
     }
 }
 
-pub fn scheduleResizeDelivery(frame: *Frame) void {
-    if (frame._resize.observers.items.len == 0) {
-        return;
-    }
-    if (frame._resize.delivery_scheduled) {
-        return;
-    }
-    frame._resize.delivery_scheduled = true;
-    frame.js.queueResizeDelivery() catch |err| {
-        frame._resize.delivery_scheduled = false;
-        log.err(.frame, "frame.scheduleResizeDelivery", .{ .err = err, .type = frame._type, .url = frame.url });
-    };
-}
+// A callback that keeps resizing what it observes would otherwise hold the
+// frame forever.
+const RESIZE_DEPTH_LIMIT = 16;
 
-// Called on every DOM change, a full delivery is too expensive to call here.
-// What we can do is schedule a check.
-pub fn scheduleResizeChecks(frame: *Frame) void {
-    if (frame._resize.observers.items.len == 0) {
-        return;
-    }
-    if (frame._resize.check_scheduled or frame._resize.delivery_scheduled) {
-        // check is already scheduled OR delivery is already scheduled
-        return;
-    }
-    frame._resize.check_scheduled = true;
-    frame.js.queueResizeChecks() catch |err| {
-        frame._resize.check_scheduled = false;
-        log.err(.frame, "frame.scheduleResizeChecks", .{ .err = err, .type = frame._type, .url = frame.url });
-    };
-}
-
-pub fn performScheduledResizeChecks(frame: *Frame) void {
-    if (!frame._resize.check_scheduled) {
-        return;
-    }
-
-    frame._resize.check_scheduled = false;
-    if (frame._resize.delivery_scheduled) {
-        return;
-    }
-
-    // Check if we should schedule a delivery. If you're wondering why we're
-    // scheduling within a schedule, it's because this can be expensive and we
-    // want to coalesce as many of these into a single call as possible.
-    for (frame._resize.observers.items) |observer| {
-        if (observer.sizeChanged(frame)) {
-            scheduleResizeDelivery(frame);
+fn deliverResizes(frame: *Frame, local: *const js.Local) void {
+    var depth: u32 = 0;
+    while (frame._resize.dirty) : (depth += 1) {
+        frame._resize.dirty = false;
+        if (depth == RESIZE_DEPTH_LIMIT) {
+            log.debug(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
             return;
         }
-    }
-}
 
-pub fn deliverResizes(frame: *Frame) void {
-    if (!frame._resize.delivery_scheduled) {
-        return;
-    }
-    frame._resize.delivery_scheduled = false;
-
-    // guard against a callback that keeps mutating the layout, and thus causes
-    // an endless stram of deliveries.
-    frame._resize.delivery_depth += 1;
-    defer if (!frame._resize.delivery_scheduled) {
-        frame._resize.delivery_depth = 0;
-    };
-    if (frame._resize.delivery_depth > 16) {
-        log.debug(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
-        frame._resize.delivery_depth = 0;
-        return;
-    }
-
-    // snapshot and acquireRef because a the callback for observer A could
-    // disconnect, which would then wipe our reference from under us.
-    const observers = frame.call_arena.dupe(*ResizeObserver, frame._resize.observers.items) catch |err| {
-        log.err(.frame, "deliverResizes.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
-        return;
-    };
-
-    for (observers) |observer| {
-        observer.acquireRef();
-    }
-    defer for (observers) |observer| {
-        observer.releaseRef(frame.page);
-    };
-
-    const attribution = frame.js.attribution;
-    const task_scope = attribution.enterNew(.observer, .{ .label = "ResizeObserver" });
-    defer task_scope.exit();
-
-    for (observers) |observer| {
-        observer.deliverEntries(frame) catch |err| {
-            log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
-            if (err == error.ExecutionTerminated) {
-                return;
-            }
+        // snapshot and acquireRef because a the callback for observer A could
+        // disconnect, which would then wipe our reference from under us.
+        const observers = frame.call_arena.dupe(*ResizeObserver, frame._resize.observers.items) catch |err| {
+            log.err(.frame, "deliverResizes.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
+            return;
         };
+        for (observers) |observer| {
+            observer.acquireRef();
+        }
+        defer for (observers) |observer| {
+            observer.releaseRef(frame.page);
+        };
+
+        const attribution = frame.js.attribution;
+        const task_scope = attribution.enterNew(.observer, .{ .label = "ResizeObserver" });
+        defer task_scope.exit();
+
+        for (observers) |observer| {
+            observer.deliverEntries(frame) catch |err| {
+                log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
+                if (err == error.ExecutionTerminated) {
+                    return;
+                }
+            };
+        }
+        local.runMicrotasks();
     }
 }
 
-fn runPromptIntersectionCheck(ctx: *anyopaque) !?u32 {
+fn runPromptRendering(ctx: *anyopaque) !?u32 {
     const frame: *Frame = @ptrCast(@alignCast(ctx));
-    frame._intersection.prompt_check_scheduled = false;
-    performIntersectionChecks(frame);
+    frame._rendering.prompt_scheduled = false;
+    performRendering(frame);
     return null;
 }
 
-fn runSlowIntersectionCheck(ctx: *anyopaque) !?u32 {
+fn runSlowRendering(ctx: *anyopaque) !?u32 {
     const frame: *Frame = @ptrCast(@alignCast(ctx));
-    frame._intersection.slow_check_scheduled = false;
-    performIntersectionChecks(frame);
+    frame._rendering.slow_scheduled = false;
+    performRendering(frame);
     return null;
 }
 
-fn performIntersectionChecks(frame: *Frame) void {
-    const state = &frame._intersection;
-    if (!state.check_dirty) {
+fn performRendering(frame: *Frame) void {
+    if (!frame._resize.dirty and !frame._intersection.check_dirty) {
         return;
     }
-    state.check_dirty = false;
 
+    const state = &frame._rendering;
     const now = lp.datetime.milliTimestamp(.boot);
-    state.check_streak = if (now - state.last_check_ms <= INTERSECTION_STREAK_GAP_MS) state.check_streak +| 1 else 1;
-    state.last_check_ms = now;
+    state.streak = if (now - state.last_ms <= RENDERING_STREAK_GAP_MS) state.streak +| 1 else 1;
+    state.last_ms = now;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
+    deliverResizes(frame, &ls.local);
+
+    // After the resizes: what their callbacks moved is part of this frame
+    if (!frame._intersection.check_dirty) {
+        return;
+    }
+    frame._intersection.check_dirty = false;
     checkIntersections(frame) catch |err| {
         log.err(.frame, "frame.schedIntersectChecks", .{ .err = err, .type = frame._type, .url = frame.url });
     };
@@ -391,7 +357,7 @@ fn performIntersectionChecks(frame: *Frame) void {
 // 1.1s on a network stall.
 //
 // Each check is its own task, so even a chain that re-observes from inside its
-// callback advances one delivery per INTERSECTION_CHECK_MS: the per-burst count
+// callback advances one delivery per RENDERING_MS: the per-burst count
 // stops it within about 5s, before the clock would. At 20x the busiest healthy
 // page it is not a tuning knob.
 pub const INTERSECTION_RUNAWAY_MS = 10_000;
