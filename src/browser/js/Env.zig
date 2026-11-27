@@ -640,7 +640,8 @@ fn reportRejectedPromise(ctx: *Context, promise: js.Promise, reason: js.Value) v
         return;
     }
 
-    const location = reason.errorLocation(ctx.call_arena) catch js.Value.ErrorLocation{};
+    const thrown: js.Thrown = .{ .value = reason };
+    const location = thrown.errorLocation(ctx.call_arena) catch js.Value.ErrorLocation{};
     log.warn(.page_error, "unhandled rejection", .{
         .reason = reason.toStringSlice() catch "Unknown reason",
         .url = location.url,
@@ -995,7 +996,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
 // *should* have a TryCatch at every Zig-initiated call, so this is almost
 // certainly from a queueMicrotask callback. report it.
 // If you remove this, V8 will print errors to stdout on its own.
-fn messageCallback(_: ?*const v8.Message, data: ?*const v8.Value) callconv(.c) void {
+fn messageCallback(message: ?*const v8.Message, data: ?*const v8.Value) callconv(.c) void {
     const v8_isolate = v8.v8__Isolate__GetCurrent().?;
     const isolate = js.Isolate{ .handle = v8_isolate };
     const ctx, const v8_context = Context.fromIsolate(isolate) orelse return;
@@ -1007,7 +1008,12 @@ fn messageCallback(_: ?*const v8.Message, data: ?*const v8.Value) callconv(.c) v
         .call_arena = ctx.call_arena,
     };
 
-    ctx.global.reportError(.{ .local = &local, .handle = data orelse return }) catch |err| {
+    // `data` is the exception; `message` was captured where it was thrown.
+    const thrown: js.Thrown = .{
+        .value = .{ .local = &local, .handle = data orelse return },
+        .message = message,
+    };
+    ctx.global.reportException(thrown) catch |err| {
         log.debug(.js, "report uncaught exception", .{ .err = err });
     };
 }

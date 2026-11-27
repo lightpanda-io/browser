@@ -917,3 +917,37 @@ test "ScriptManager: a same-origin classic script's exceptions are not muted" {
         try caught.toStringSlice(),
     );
 }
+
+// Muting follows the script that threw, not the thrown value: a value with
+// no stack of its own (here an Error-like object, thrown from a timer) is
+// still muted.
+test "ScriptManager: a cross-origin classic script's Error-like exceptions are muted" {
+    testing.silenceLog(&.{.page_error});
+
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\window.caught = null;
+        \\window.addEventListener('error', (e) => {
+        \\  window.caught = { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, error: e.error };
+        \\});
+        \\const s = document.createElement('script');
+        \\s.src = 'http://localhost:9582/src/browser/tests/throws_error_like.js';
+        \\document.head.appendChild(s);
+    , null);
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForScript(page.frame_id, "window.caught !== null", 2000);
+
+    const caught = try ls.local.exec("JSON.stringify({ ...window.caught, error: window.caught.error == null })", null);
+    try testing.expectEqual(
+        "{\"message\":\"Script error.\",\"filename\":\"\",\"lineno\":0,\"colno\":0,\"error\":true}",
+        try caught.toStringSlice(),
+    );
+}

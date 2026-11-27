@@ -109,11 +109,21 @@ pub const GlobalScope = union(enum) {
     }
 
     // HTML "report an exception": fires the global's "error" event (and its
-    // onerror handler) for an exception no script caught.
+    // onerror handler) for an exception no script caught. Without a throw
+    // site, the location comes from the value (see Window.reportError).
     pub fn reportError(self: GlobalScope, err: JS.Value) !void {
         return switch (self) {
             .frame => |frame| frame.window.reportError(err, frame),
             .worker => |worker| worker.reportError(err),
+        };
+    }
+
+    // Like reportError, with the message captured where the exception was
+    // thrown (see JS.TryCatch.thrown).
+    pub fn reportException(self: GlobalScope, thrown: JS.Thrown) !void {
+        return switch (self) {
+            .frame => |frame| frame.window.reportException(thrown, frame),
+            .worker => |worker| worker.reportException(thrown),
         };
     }
 

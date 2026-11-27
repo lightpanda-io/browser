@@ -53,6 +53,7 @@ pub const Array = @import("Array.zig");
 pub const String = @import("String.zig");
 pub const Object = @import("Object.zig");
 pub const TryCatch = @import("TryCatch.zig");
+pub const Thrown = @import("Thrown.zig");
 pub const Function = @import("Function.zig");
 pub const Promise = @import("Promise.zig");
 pub const RegExp = @import("RegExp.zig");

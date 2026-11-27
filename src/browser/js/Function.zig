@@ -147,8 +147,8 @@ pub fn callWithThisReport(self: *const Function, this: anytype, args: anytype) !
         if (err != error.TryCatchRethrow) {
             return err;
         }
-        const exc = try_catch.exceptionValue() orelse return;
-        try self.local.ctx.global.reportError(exc);
+        const thrown = try_catch.thrown() orelse return;
+        try self.local.ctx.global.reportException(thrown);
     };
 }
 
