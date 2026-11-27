@@ -47,7 +47,7 @@ fn known(err: anyerror) ?[]const u8 {
         error.SslInvalidcertstatus,
         => "net::ERR_CERT_AUTHORITY_INVALID",
         error.SslPinnedpubkeynotmatch => "net::ERR_SSL_PINNED_KEY_NOT_IN_CERT_CHAIN",
-        error.UrlBlocked, error.RobotsBlocked => "net::ERR_BLOCKED_BY_CLIENT",
+        error.UrlBlocked, error.RobotsBlocked, error.RobotsUnreachable => "net::ERR_BLOCKED_BY_CLIENT",
         // A destination on the Fetch bad-port list.
         error.UnsafePort => "net::ERR_UNSAFE_PORT",
         error.OperationTimedout => "net::ERR_TIMED_OUT",
@@ -76,6 +76,8 @@ test "server.net_error: netError" {
     try testing.expectEqualSlices(u8, "net::ERR_CONNECTION_REFUSED", netError(error.CouldntConnect));
     try testing.expectEqualSlices(u8, "net::ERR_TIMED_OUT", netError(error.OperationTimedout));
     try testing.expectEqualSlices(u8, "net::ERR_BLOCKED_BY_CLIENT", netError(error.UrlBlocked));
+    try testing.expectEqualSlices(u8, "net::ERR_BLOCKED_BY_CLIENT", netError(error.RobotsBlocked));
+    try testing.expectEqualSlices(u8, "net::ERR_BLOCKED_BY_CLIENT", netError(error.RobotsUnreachable));
     try testing.expectEqualSlices(u8, "net::ERR_ACCESS_DENIED", netError(error.AccessDenied));
     try testing.expectEqualSlices(u8, "net::ERR_ABORTED", netError(error.TransferCanceled));
     try testing.expectEqualSlices(u8, "net::ERR_FAILED", netError(error.SomethingElse));
