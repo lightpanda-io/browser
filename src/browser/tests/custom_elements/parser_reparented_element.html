@@ -38,4 +38,45 @@
     testing.expectEqual('TABLE', target.firstChild.tagName);
   }
 </script>
+
+<!-- The adoption agency clones <b> for the misnested </b>. The clone's
+     attributeChangedCallback moves it into #marker, the furthest block, whose
+     children then get reparented into the clone: the clone itself must be left
+     out, or it becomes its own ancestor. -->
+<script>
+  class MoveIntoMarker extends HTMLElement {
+    static get observedAttributes() { return ['x']; }
+    attributeChangedCallback() {
+      const marker = document.getElementById('marker');
+      if (!marker || window.moved_into_marker) return;
+      window.moved_into_marker = true;
+      marker.appendChild(this);
+    }
+  }
+  customElements.define('move-into-marker', MoveIntoMarker, { extends: 'b' });
+</script>
+<div id=cycle_target><b is=move-into-marker x=1><p id=marker></b></div>
+<script id=adoption_agency_no_cycle>
+  {
+    const target = document.getElementById('cycle_target');
+    for (const node of target.querySelectorAll('*')) {
+      let depth = 0;
+      let a = node;
+      while (a && depth < 100) {
+        a = a.parentNode;
+        depth += 1;
+      }
+      testing.expectEqual(null, a);
+    }
+    testing.expectEqual(true, document.getElementById('marker').isConnected);
+
+    // The spec tree, as Gecko builds it (the WPT
+    // append-children-to-new-parent-cycle comes from Gecko's fix).
+    testing.diverges('Chrome skips the adoption agency when the formatting element is a customized built-in', () => {
+      testing.expectEqual(true, window.moved_into_marker);
+      testing.expectEqual('<b is="move-into-marker" x="1"></b><p id="marker"><b is="move-into-marker" x="1"></b></p>', target.innerHTML);
+      testing.expectEqual(true, document.getElementById('marker').firstChild instanceof MoveIntoMarker);
+    });
+  }
+</script>
 </body>

@@ -962,6 +962,18 @@ fn _reparentChildrenCallback(self: *Parser, node_pn: *ParsedNode, new_parent_pn:
         }
         new_parent_pn.placed = true;
     }
+
+    // A custom element reaction on new_parent can have moved it under one of
+    // node's children. When this is detected, it is removed and left out.
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=2055869
+    var ancestor = new_parent;
+    while (ancestor._parent) |parent| : (ancestor = parent) {
+        if (parent == node) {
+            self.frame.removeNode(node, ancestor, .{ .reconnect_to = null });
+            break;
+        }
+    }
+
     try self.frame.appendAllChildren(node, new_parent);
 }
 
