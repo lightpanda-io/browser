@@ -60,6 +60,7 @@ fn Object(comptime class_name: [:0]const u8) type {
 
             pub const Meta = struct {
                 pub const name = class_name;
+                pub const experimental = .webgl;
 
                 pub var class_id: bridge.ClassId = undefined;
                 pub const optional_identity = true;

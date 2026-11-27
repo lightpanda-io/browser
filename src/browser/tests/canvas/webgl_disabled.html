@@ -16,11 +16,11 @@
 }
 </script>
 
-<script id=interfaces_stay>
+<script id=no_interfaces>
 {
-  // Like Chrome and Firefox with WebGL off: the interfaces exist, getContext is null
-  testing.expectEqual('function', typeof WebGLRenderingContext);
-  testing.expectEqual('function', typeof WebGL2RenderingContext);
-  testing.expectEqual('function', typeof WebGLBuffer);
+  // Only built when the flag is on: they'd cost every context ~95 KB
+  testing.expectEqual('undefined', typeof WebGLRenderingContext);
+  testing.expectEqual('undefined', typeof WebGL2RenderingContext);
+  testing.expectEqual('undefined', typeof WebGLBuffer);
 }
 </script>

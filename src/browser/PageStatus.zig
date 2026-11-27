@@ -69,6 +69,8 @@ missing_globals: MissingGlobals = .{},
 const global_features = std.StaticStringMap(Unsupported).initComptime(.{
     .{ "ImageBitmap", .canvas2d },
     .{ "createImageBitmap", .canvas2d },
+    .{ "WebGLRenderingContext", .webgl },
+    .{ "WebGL2RenderingContext", .webgl },
 });
 
 // A bit of a hack. Say we want to report that canvas was used, but some sites
@@ -249,11 +251,12 @@ test "PageStatus: missing globals from uncaught ReferenceErrors" {
 
     const status = &page.frame().?.page.status;
     try testing.expectEqual(5, status.js_errors);
-    try testing.expectEqual(2, status.unsupported.get(.canvas2d));
+    try testing.expectEqual(1, status.unsupported.get(.canvas2d));
+    try testing.expectEqual(1, status.unsupported.get(.webgl));
 
     const json = try std.json.Stringify.valueAlloc(testing.allocator, status.missing_globals, .{});
     defer testing.allocator.free(json);
-    try testing.expectEqual("[\"createImageBitmap\",\"someUndefinedThing\",\"ImageBitmap\"]", json);
+    try testing.expectEqual("[\"createImageBitmap\",\"someUndefinedThing\",\"WebGL2RenderingContext\"]", json);
 }
 
 test "PageStatus: failed and blocked sub-resources" {

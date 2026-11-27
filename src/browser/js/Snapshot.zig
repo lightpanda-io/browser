@@ -323,6 +323,10 @@ fn createSnapshotContext(
 
     inline for (ContextApis) |JsApi| {
         @setEvalBranchQuota(10_000);
+        // Built per context, only when its feature is on (see Env.exposeExperimental)
+        if (comptime @hasDecl(JsApi.Meta, "experimental")) {
+            continue;
+        }
         const template_index = comptime bridge.JsApiLookup.getId(JsApi);
         const func = v8.v8__FunctionTemplate__GetFunction(templates[template_index], context);
         if (@hasDecl(JsApi.Meta, "name") and comptime isNamespace(JsApi) == false) {

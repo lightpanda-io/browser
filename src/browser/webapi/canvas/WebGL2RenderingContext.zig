@@ -36,6 +36,7 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "WebGL2RenderingContext";
+        pub const experimental = .webgl;
 
         pub var class_id: bridge.ClassId = undefined;
     };
