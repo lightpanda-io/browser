@@ -112,3 +112,32 @@
     testing.expectTrue(heights[2] > heights[1]);
   });
 </script>
+
+<script id="intersection_sees_resize_callback" type=module>
+  // A rendering update runs the ResizeObservers before computing the
+  // intersections: what a resize callback moves, the same frame reports.
+  // Above the page, so the move doesn't flip a scrollbar (resizing the other
+  // tests' targets in that callback's frame is a loop error in Chrome).
+  const state = await testing.async();
+  const t = document.createElement('div');
+  t.style.cssText = 'position: absolute; left: 0; top: -5000px; width: 50px; height: 50px';
+  document.body.appendChild(t);
+
+  const order = [];
+  const ro = new ResizeObserver(() => {
+    order.push('resize');
+    t.style.top = '0px';
+  });
+  const io = new IntersectionObserver((entries) => {
+    order.push(entries[0].isIntersecting);
+    ro.disconnect();
+    io.disconnect();
+    state.resolve();
+  });
+  ro.observe(t);
+  io.observe(t);
+
+  await state.done(() => {
+    testing.expectEqual(['resize', true], order);
+  });
+</script>

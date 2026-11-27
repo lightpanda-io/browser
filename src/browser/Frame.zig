@@ -171,6 +171,7 @@ _message_ports: std.DoublyLinkedList = .{},
 _resize: observers.Resize = .{},
 _mutation: observers.Mutation = .{},
 _intersection: observers.Intersection = .{},
+_rendering: observers.Rendering = .{},
 
 _css_animations: css_animations.State = .{},
 
