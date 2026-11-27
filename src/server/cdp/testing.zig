@@ -68,7 +68,7 @@ pub const TestContext = struct {
 
     pub fn cdp(self: *TestContext) *CDP {
         if (!self.cdp_initialized) {
-            self.cdp_.init(base.test_app, self.cdp_socket, &self.inbox) catch |err| @panic(@errorName(err));
+            self.cdp_.init(base.test_app, self.cdp_socket, &self.inbox, null) catch |err| @panic(@errorName(err));
             self.cdp_initialized = true;
             self.driver = .init(.{ .cdp = &self.cdp_ }, &self.inbox);
             self.driver.attach();

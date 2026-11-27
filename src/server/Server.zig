@@ -30,11 +30,13 @@ const BiDi = @import("bidi/BiDi.zig");
 const WS = @import("WS.zig");
 const http = @import("http.zig");
 const Link = @import("Link.zig");
+const Pages = @import("Pages.zig");
 const Driver = @import("Driver.zig");
 
 const Inbox = @import("../Inbox.zig");
 const http_command = @import("bidi/http_command.zig");
 const repeat = @import("../string.zig").repeat;
+const uuidv4 = @import("../id.zig").uuidv4;
 
 const log = lp.log;
 const posix = std.posix;
@@ -84,6 +86,10 @@ http_connection_pool: Connection.Pool,
 workers: DoublyLinkedList,
 worker_pool: Worker.Pool,
 
+// Guests across all workers. Each holds a socket, so they count towards
+// max_connections, and --cdp-max-connections caps them.
+guest_count: usize = 0,
+
 // HTTP sessions by id, what /session/{id} resolves. Sized to the pool at
 // init, so no allocation per request.
 sessions: std.AutoHashMapUnmanaged([36]u8, *Worker),
@@ -121,6 +127,9 @@ request_arena: std.heap.ArenaAllocator,
 
 // ws://host:port/session/ — what POST /session advertises, the id goes on the end
 bidi_session_url: []const u8,
+
+// ws://host:port/page/ — /json/list's page urls, {browser_id}/{page_id} goes on the end
+page_url: []const u8,
 
 json_version_response: []const u8,
 
@@ -162,6 +171,9 @@ pub fn init(app: *App, address: Address) !*Server {
 
     const bidi_session_url = try allocator.print("{s}session/", .{ws_url});
     errdefer allocator.free(bidi_session_url);
+
+    const page_url = try allocator.print("{s}page/", .{ws_url});
+    errdefer allocator.free(page_url);
 
     switch (address) {
         .ip => log.note(.note, "server running", .{
@@ -218,6 +230,7 @@ pub fn init(app: *App, address: Address) !*Server {
         .http_connection_pool = http_connection_pool,
         .json_version_response = json_version_response,
         .bidi_session_url = bidi_session_url,
+        .page_url = page_url,
         .max_connections = max_connections,
         .workers = .{},
         .worker_pool = worker_pool,
@@ -300,6 +313,7 @@ pub fn deinit(self: *Server) void {
     self.http_connection_pool.deinit();
     allocator.free(self.json_version_response);
     allocator.free(self.bidi_session_url);
+    allocator.free(self.page_url);
     closeListener(self.listener, self.unix_path);
     self.io_engine.deinit();
     allocator.destroy(self);
@@ -335,6 +349,7 @@ fn runOnce(self: *Server) bool {
             .read_write => |rw| switch (rw.target) {
                 .http => |conn| http.processEvent(self, conn, rw, now),
                 .worker => |worker| self.processWebSocketEvent(worker, rw),
+                .guest => |guest| self.processGuestEvent(guest, rw),
             },
             .signal => pending_signal = true,
             .shutdown => pending_shutdown = true,
@@ -452,7 +467,7 @@ fn setSocketOption(socket: posix.socket_t, level: i32, option: u32, value: anyty
 }
 
 fn liveConnections(self: *const Server) usize {
-    return self.http_connection_pool.live + self.worker_pool.live;
+    return self.http_connection_pool.live + self.worker_pool.live + self.guest_count;
 }
 
 // We want to accept a connection, but have reached the connection limit. See
@@ -536,6 +551,111 @@ pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Prot
     };
 }
 
+/// The CDP browser `id` names, if a connection can still join it (not when
+/// it's ending with the connection that started it).
+pub fn findBrowser(self: *Server, id: []const u8) ?*Worker {
+    var node = self.workers.first;
+    while (node) |n| : (node = n.next) {
+        const worker: *Worker = @fieldParentPtr("node", n);
+        if (worker.joinable() and std.mem.eql(u8, &worker.browser_id, id)) {
+            return worker;
+        }
+    }
+    return null;
+}
+
+pub fn guestsFull(self: *const Server) bool {
+    return self.guest_count >= self.app.config.maxConnections();
+}
+
+/// An HTTP connection is being upgraded to a CDP connection that joins one
+/// page (`target_id`) of a running worker's browser.
+pub fn attachGuest(self: *Server, worker: *Worker, conn: *Connection, target_id: [14]u8) void {
+    self.detachConnection(conn); // removes from the loop, the guest re-adds it
+
+    const guest = self.app.allocator.create(Guest) catch |err| {
+        log.err(.serve, "guest create", .{ .err = err });
+        sys_net.close(conn.socket);
+        return;
+    };
+    const link = Link.create(self.app, conn.socket, .cdp, &worker.inbox) catch |err| {
+        // create closed the socket
+        log.err(.serve, "link create", .{ .err = err });
+        self.app.allocator.destroy(guest);
+        return;
+    };
+
+    // The worker's side of the guest. Allocated here, before the loop reads
+    // the link, so that the worker can't fail to adopt it: from then on the
+    // link is only destroyed once the loop let go of it.
+    const cdp_guest = self.app.allocator.create(CDP.Guest) catch |err| {
+        log.err(.serve, "guest create", .{ .err = err });
+        link.destroy();
+        self.app.allocator.destroy(guest);
+        return;
+    };
+    cdp_guest.* = .{ .link = link, .target_id = target_id };
+    link.guest = cdp_guest;
+    guest.* = .{ .worker = worker, .guest = cdp_guest };
+
+    self.io_engine.monitorGuest(guest) catch |err| {
+        log.err(.serve, "guest monitor", .{ .err = err });
+        cdp_guest.destroy();
+        self.app.allocator.destroy(guest);
+        return;
+    };
+    worker.guests.append(&guest.node);
+    self.guest_count += 1;
+
+    // precedes anything read off the socket (the loop reads it later)
+    self.push(worker, .{ .guest = cdp_guest });
+}
+
+fn processGuestEvent(self: *Server, guest: *Guest, rw: IOEvent.ReadWrite) void {
+    if (rw.readable) {
+        const read = guest.guest.link.readAvailable(WS_READ_BUDGET) catch {
+            // EOF, a read error or bad framing: only this guest goes
+            return self.dropGuest(guest);
+        };
+        if (read.keep == false) {
+            // a close frame or bad JSON
+            return self.dropGuest(guest);
+        }
+        if (read.pushed) {
+            if (guest.worker.driver) |driver| {
+                driver.wakeup();
+            }
+        }
+    } else if (rw.hangup) {
+        return self.dropGuest(guest);
+    }
+}
+
+/// The loop lets go of a guest and tells the worker, which destroys the link
+/// (closing its socket): only once the socket is out of the poll set.
+fn dropGuest(self: *Server, guest: *Guest) void {
+    const worker = guest.worker;
+    const cdp_guest = guest.guest;
+    self.forgetGuest(guest);
+    self.push(worker, .{ .guest_gone = cdp_guest });
+    self.slotFreed();
+}
+
+// The worker is ending: stop reading its guests. It destroys the links it
+// adopted, the inbox those it didn't.
+fn releaseGuests(self: *Server, worker: *Worker) void {
+    while (worker.guests.first) |node| {
+        self.forgetGuest(@fieldParentPtr("node", node));
+    }
+}
+
+fn forgetGuest(self: *Server, guest: *Guest) void {
+    self.io_engine.remove(guest.guest.link.socket);
+    guest.worker.guests.remove(&guest.node);
+    self.app.allocator.destroy(guest);
+    self.guest_count -= 1;
+}
+
 // An HTTP connection is being upgraded to a WebSocket connection for use with
 // a *EXISTING* Worker. Some WebDrivers (e.g. Selenium) go this route.
 pub fn attachConnection(self: *Server, worker: *Worker, conn: *Connection) void {
@@ -578,7 +698,9 @@ pub fn spawnWorker(self: *Server, protocol: Driver.Protocol, origin: Worker.Orig
             .socket => null,
             .session => |session| session.id,
         },
+        .pages = .init(self.app.allocator),
     };
+    uuidv4(&worker.browser_id);
     self.workers.append(&worker.node);
     if (origin == .session) {
         lp.assert(self.protocols.webdriver, "spawnWorker session without webdriver", .{});
@@ -781,6 +903,7 @@ fn releaseLink(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) 
 fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) void {
     self.unmonitorLink(worker);
     worker.link = null;
+    self.releaseGuests(worker);
     if (worker.http_request) |parked| {
         // the worker stopped without answering (DELETE, shutdown, a failed init)
         worker.http_request = null;
@@ -808,6 +931,7 @@ fn releaseWorkerSlot(self: *Server, worker: *Worker) void {
     self.workers.remove(&worker.node);
     worker.driver = null;
     worker.inbox.deinit();
+    worker.pages.deinit();
     lp.metrics.serve_active_connections.decr(worker.protocol);
     self.worker_pool.release(worker);
     self.slotFreed();
@@ -925,6 +1049,7 @@ pub const IOEvent = union(enum) {
     pub const ReadWrite = struct {
         target: union(enum) {
             worker: *Worker,
+            guest: *Guest,
             http: *Connection,
         },
         hangup: bool,
@@ -1015,8 +1140,11 @@ const EPoll = struct {
     const WRITE_EVENTS = linux.EPOLL.OUT;
 
     // Poll data carries the owner: an http Connection as-is, a Worker with
-    // the low bit set (both are word-aligned, so the bit is free).
+    // the low bit set, a Guest with the next one (all are word-aligned, so
+    // both bits are free).
     const WS_TAG: usize = 1;
+    const GUEST_TAG: usize = 2;
+    const TAGS: usize = WS_TAG | GUEST_TAG;
 
     pub fn monitorHTTP(self: *const EPoll, conn: *Connection) !void {
         var event = linux.epoll_event{
@@ -1027,11 +1155,19 @@ const EPoll = struct {
     }
 
     fn monitorWebSocket(self: *const EPoll, worker: *Worker) !void {
+        return self.monitorRead(worker.link.?.socket, @intFromPtr(worker) | WS_TAG);
+    }
+
+    fn monitorGuest(self: *const EPoll, guest: *Guest) !void {
+        return self.monitorRead(guest.guest.link.socket, @intFromPtr(guest) | GUEST_TAG);
+    }
+
+    fn monitorRead(self: *const EPoll, socket: posix.socket_t, data: usize) !void {
         var event = linux.epoll_event{
-            .data = .{ .ptr = @intFromPtr(worker) | WS_TAG },
+            .data = .{ .ptr = data },
             .events = READ_EVENTS,
         };
-        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, worker.link.?.socket, &event);
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, socket, &event);
     }
 
     pub fn waitWritable(self: *const EPoll, conn: *Connection) !void {
@@ -1086,10 +1222,11 @@ const EPoll = struct {
                 else => |nptr| {
                     const flags = event.events;
                     return .{ .read_write = .{
-                        .target = if (nptr & WS_TAG == 0)
-                            .{ .http = @ptrFromInt(nptr) }
-                        else
-                            .{ .worker = @ptrFromInt(nptr & ~WS_TAG) },
+                        .target = switch (nptr & TAGS) {
+                            WS_TAG => .{ .worker = @ptrFromInt(nptr & ~TAGS) },
+                            GUEST_TAG => .{ .guest = @ptrFromInt(nptr & ~TAGS) },
+                            else => .{ .http = @ptrFromInt(nptr) },
+                        },
                         .readable = flags & linux.EPOLL.IN != 0,
                         .writable = flags & linux.EPOLL.OUT != 0,
                         .hangup = flags & (linux.EPOLL.RDHUP | linux.EPOLL.HUP | linux.EPOLL.ERR) != 0,
@@ -1110,8 +1247,11 @@ const KQueue = struct {
     const Kevent = std.c.Kevent;
 
     // Poll data carries the owner: an http Connection as-is, a Worker with
-    // the low bit set (both are word-aligned, so the bit is free).
+    // the low bit set, a Guest with the next one (all are word-aligned, so
+    // both bits are free).
     const WS_TAG: usize = 1;
+    const GUEST_TAG: usize = 2;
+    const TAGS: usize = WS_TAG | GUEST_TAG;
 
     // The listener carries 0. The two wake channels are EVFILT_USER events,
     // whose ident only has to be unique amongst user events, so it doubles as
@@ -1167,6 +1307,10 @@ const KQueue = struct {
 
     fn monitorWebSocket(self: *const KQueue, worker: *Worker) !void {
         return self.monitor(worker.link.?.socket, EVFILT.READ, @intFromPtr(worker) | WS_TAG);
+    }
+
+    fn monitorGuest(self: *const KQueue, guest: *Guest) !void {
+        return self.monitor(guest.guest.link.socket, EVFILT.READ, @intFromPtr(guest) | GUEST_TAG);
     }
 
     // A socket only ever has one of the two filters registered, so flipping is
@@ -1273,10 +1417,11 @@ const KQueue = struct {
                 else => |nptr| {
                     return .{
                         .read_write = .{
-                            .target = if (nptr & WS_TAG == 0)
-                                .{ .http = @ptrFromInt(nptr) }
-                            else
-                                .{ .worker = @ptrFromInt(nptr & ~WS_TAG) },
+                            .target = switch (nptr & TAGS) {
+                                WS_TAG => .{ .worker = @ptrFromInt(nptr & ~TAGS) },
+                                GUEST_TAG => .{ .guest = @ptrFromInt(nptr & ~TAGS) },
+                                else => .{ .http = @ptrFromInt(nptr) },
+                            },
                             .readable = event.filter == EVFILT.READ,
                             .writable = event.filter == EVFILT.WRITE,
                             // EV_EOF on a read filter can still come with buffered
@@ -1315,6 +1460,15 @@ pub const Worker = struct {
 
     // whether link's socket is in the poll set. Makes sure we don't double-remove
     monitored: bool = false,
+
+    // CDP connections that joined one of this worker's pages (Guest.node)
+    guests: DoublyLinkedList = .{},
+
+    // The id /page/{browser_id}/{page_id} names this browser by (CDP only),
+    // and its pages, which /json/list and /page/... use. The worker
+    // publishes the pages (see target.publishPages).
+    browser_id: [36]u8 = undefined,
+    pages: Pages,
 
     // HTTP WebDriver session id, null for cdp and bidi-only workers.
     session_id: ?[36]u8 = null,
@@ -1381,6 +1535,12 @@ pub const Worker = struct {
         };
     };
 
+    /// Whether a CDP connection can join this worker's browser: not when it's
+    /// ending with its first connection, or the server is shutting down.
+    pub fn joinable(self: *const Worker) bool {
+        return self.protocol == .cdp and self.link != null and self.linkDropping() == false and self.server.shutdown_begun == false;
+    }
+
     pub fn linkDropping(self: *const Worker) bool {
         // There's a window where the loop has stopped reading the link but the
         // worker hasn't handed it back yet. A driver that tries to re-establish
@@ -1415,7 +1575,7 @@ pub const Worker = struct {
                 };
                 const cdp = try allocator.create(CDP);
                 defer allocator.destroy(cdp);
-                try cdp.init(server.app, socket, &self.inbox);
+                try cdp.init(server.app, socket, &self.inbox, &self.pages);
                 defer cdp.deinit();
                 self.run(.init(.{ .cdp = cdp }, &self.inbox), &cdp.link);
             },
@@ -1478,6 +1638,17 @@ pub const Worker = struct {
         server.worker_mutex.unlock(lp.io);
         server.io_engine.signal();
     }
+};
+
+// The loop's side of a CDP connection that joined a page of another
+// connection's worker (/page/{browser_id}/{page_id}). The loop reads its
+// socket into the worker's inbox; the worker owns the link (CDP.Guest),
+// answers on it and destroys it.
+pub const Guest = struct {
+    worker: *Worker,
+    guest: *CDP.Guest,
+    // threads Worker.guests
+    node: DoublyLinkedList.Node = .{},
 };
 
 // Worker -> loop request, see worker_queue.
@@ -3317,6 +3488,237 @@ test "Client: close message" {
         // fin | close, masked | len, 4-byte mask
         &.{ 136, 128, 0, 0, 0, 0 },
     );
+}
+
+test "server: cdp join a page" {
+    var a = try createTestClient();
+    defer a.deinit();
+    const page = try startPage(&a);
+    _ = try cdpCommand(&a, 3, "Runtime.evaluate", "{\"expression\":\"window.shared = 42\"}", page.session_id, null);
+    const path = try pagePath(page.target_id);
+
+    // A second connection talks to the page without a session, as in Chrome.
+    var c = try createTestClient();
+    defer c.deinit();
+    try c.handshake(path);
+    var seen_by_c: std.ArrayList([]const u8) = .empty;
+    const read = try cdpCommand(&c, 1, "Runtime.evaluate", "{\"expression\":\"window.shared\",\"returnByValue\":true}", null, &seen_by_c);
+    try testing.expectEqual(42, read.get("result").?.object.get("value").?.integer);
+    _ = try cdpCommand(&c, 2, "Runtime.enable", "{}", null, &seen_by_c);
+    // events its commands raise are its own
+    _ = try cdpCommand(&c, 5, "DOM.getDocument", "{}", null, &seen_by_c);
+    _ = try cdpCommand(&c, 6, "DOM.requestChildNodes", "{\"nodeId\":1,\"depth\":-1}", null, &seen_by_c);
+    try testing.expect(try countEvents(seen_by_c.items, "DOM.setChildNodes", null) > 0);
+    for (seen_by_c.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, "\"sessionId\"") == null);
+    }
+
+    // the browser is the starter's, and the guest has no sessions past its own
+    try testing.expectError(error.CommandFailed, cdpCommand(&c, 3, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null));
+    try testing.expectError(error.CommandFailed, cdpCommand(&c, 4, "Runtime.evaluate", "{\"expression\":\"1\"}", page.session_id, null));
+
+    // pings are answered on the guest's own connection
+    try sys_net.writeAll(c.socket, &.{ 137, 128, 0, 0, 0, 0 });
+    try testing.expectEqual(.pong, (try c.readWebsocketMessage() orelse return error.NoMessage).type);
+
+    {
+        // a page that isn't there, answered like Chrome does
+        var u = try createTestClient();
+        defer u.deinit();
+        const res = try u.upgradeRequest(path[0 .. path.len - 1]);
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 "));
+    }
+
+    // The guest leaves; the browser carries on.
+    try sys_net.writeAll(c.socket, &.{ 136, 128, 0, 0, 0, 0 });
+    try expectClose(&c);
+    _ = try cdpCommand(&a, 4, "Runtime.evaluate", "{\"expression\":\"1\"}", page.session_id, null);
+
+    // A guest closes with its page.
+    var g = try createTestClient();
+    defer g.deinit();
+    try g.handshake(path);
+    _ = try cdpCommand(&g, 1, "Runtime.evaluate", "{\"expression\":\"1\"}", null, null);
+    _ = try cdpCommand(&a, 5, "Target.closeTarget", try testing.arena_allocator.print("{{\"targetId\":\"{s}\"}}", .{page.target_id}), null, null);
+    try expectClose(&g);
+}
+
+test "server: cdp several guests on one page" {
+    var a = try createTestClient();
+    defer a.deinit();
+    const page = try startPage(&a);
+    _ = try cdpCommand(&a, 3, "Network.enable", "{}", page.session_id, null);
+    const path = try pagePath(page.target_id);
+
+    var guests: [2]TestClient = undefined;
+    var joined: usize = 0;
+    defer for (guests[0..joined]) |*g| g.deinit();
+    for (&guests) |*g| {
+        g.* = try createTestClient();
+        joined += 1;
+        try g.handshake(path);
+        _ = try cdpCommand(g, 1, "Runtime.evaluate", "{\"expression\":\"1\"}", null, null);
+    }
+
+    // One guest navigates. Once it has loaded, everyone has had the page's
+    // events: the starter on its session, each guest once, without one.
+    var seen: [3]std.ArrayList([]const u8) = @splat(.empty);
+    _ = try cdpCommand(&guests[0], 7001, "Page.navigate", "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}", null, &seen[0]);
+    _ = try cdpCommand(&guests[0], 2, "LP.waitUntil", "{\"until\":\"load\",\"timeout\":3000}", null, &seen[0]);
+    _ = try cdpCommand(&guests[1], 2, "Runtime.evaluate", "{\"expression\":\"1\"}", null, &seen[1]);
+    _ = try cdpCommand(&a, 4, "Runtime.evaluate", "{\"expression\":\"1\"}", page.session_id, &seen[2]);
+    for ([_][]const u8{ "Page.frameNavigated", "Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished" }) |method| {
+        const count = try countEvents(seen[2].items, method, page.session_id);
+        try testing.expect(count > 0);
+        try testing.expectEqual(count, try countEvents(seen[0].items, method, null));
+        try testing.expectEqual(count, try countEvents(seen[1].items, method, null));
+    }
+    // the result went to the guest that asked only
+    for (seen[1..]) |others| {
+        for (others.items) |raw| {
+            try testing.expect(std.mem.find(u8, raw, "\"id\":7001") == null);
+        }
+    }
+
+    // a failed navigation is answered too
+    const failed = try cdpCommand(&guests[1], 3, "Page.navigate", "{\"url\":\"http://127.0.0.1:1/\"}", null, null);
+    try testing.expect(failed.get("errorText") != null);
+
+    // they go with the starter's session on the page
+    _ = try cdpCommand(&a, 5, "Target.detachFromTarget", try testing.arena_allocator.print("{{\"sessionId\":\"{s}\"}}", .{page.session_id}), null, null);
+    for (&guests) |*g| try expectClose(g);
+}
+
+test "server: cdp page guest gets what it enabled for itself" {
+    const arena = testing.arena_allocator;
+    var a = try createTestClient();
+    defer a.deinit();
+    const page = try startPage(&a);
+    var c = try createTestClient();
+    defer c.deinit();
+    try c.handshake(try pagePath(page.target_id));
+
+    // An intercepted request is paused, and continued, on the guest's socket.
+    _ = try cdpCommand(&c, 1, "Fetch.enable", "{}", null, null);
+    try c.bidiCommand("{\"id\":2,\"method\":\"Page.navigate\",\"params\":{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}}");
+    var seen: std.ArrayList([]const u8) = .empty;
+    const paused = try readUntil(&c, "Fetch.requestPaused", &seen);
+    const request_id = paused.get("params").?.object.get("requestId").?.string;
+    try testing.expect(paused.get("sessionId") == null);
+    _ = try cdpCommand(&c, 3, "Fetch.continueRequest", try arena.print("{{\"requestId\":\"{s}\"}}", .{request_id}), null, &seen);
+    _ = try cdpCommand(&c, 4, "LP.waitUntil", "{\"until\":\"load\",\"timeout\":3000}", null, &seen);
+    _ = try cdpCommand(&c, 6, "Fetch.disable", "{}", null, &seen);
+    try testing.expect(for (seen.items) |raw| {
+        if (std.mem.startsWith(u8, raw, "{\"id\":2,")) break true;
+    } else false);
+
+    // the starter saw the navigation, and none of the interception
+    var seen_by_a: std.ArrayList([]const u8) = .empty;
+    _ = try readUntil(&a, "Page.frameNavigated", &seen_by_a);
+    for (seen_by_a.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, "Fetch.") == null);
+    }
+
+    // A guest that leaves mid-navigation: its result has nowhere to go.
+    try c.bidiCommand("{\"id\":5,\"method\":\"Page.navigate\",\"params\":{\"url\":\"http://127.0.0.1:9582/src/browser/tests/hi.html\"}}");
+    try sys_net.writeAll(c.socket, &.{ 136, 128, 0, 0, 0, 0 });
+    seen_by_a.clearRetainingCapacity();
+    _ = try readUntil(&a, "Page.frameNavigated", &seen_by_a);
+    for (seen_by_a.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, "\"id\":5,") == null);
+    }
+}
+
+// Starts a browser on `c` with one page, attached.
+fn startPage(c: *TestClient) !struct { target_id: []const u8, session_id: []const u8 } {
+    try c.handshake("/");
+    const target_id = (try cdpCommand(c, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null)).get("targetId").?.string;
+    const attach = try testing.arena_allocator.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
+    const attached = try cdpCommand(c, 2, "Target.attachToTarget", attach, null, null);
+    return .{ .target_id = target_id, .session_id = attached.get("sessionId").?.string };
+}
+
+// The path of the page's webSocketDebuggerUrl in /json/list.
+fn pagePath(target_id: []const u8) ![]const u8 {
+    var l = try createTestClient();
+    defer l.deinit();
+    const res = try l.httpRequest("GET /json/list HTTP/1.1\r\n\r\n");
+    const list = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, responseBody(res), .{});
+    const origin = try testing.arena_allocator.print("ws://127.0.0.1:{d}", .{testing.test_cdp_port});
+    for (list.array.items) |entry| {
+        if (std.mem.eql(u8, entry.object.get("id").?.string, target_id)) {
+            const url = entry.object.get("webSocketDebuggerUrl").?.string;
+            return testing.arena_allocator.dupe(u8, url[origin.len..]);
+        }
+    }
+    return error.PageNotListed;
+}
+
+// How many of `messages` are `method` events for `session_id` (null: none).
+fn countEvents(messages: []const []const u8, method: []const u8, session_id: ?[]const u8) !usize {
+    const name = try testing.arena_allocator.print("\"method\":\"{s}\"", .{method});
+    var count: usize = 0;
+    for (messages) |raw| {
+        if (std.mem.find(u8, raw, name) == null) continue;
+        const sid = if (session_id) |id| std.mem.find(u8, raw, id) != null else std.mem.find(u8, raw, "\"sessionId\"") == null;
+        count += @intFromBool(sid);
+    }
+    return count;
+}
+
+// Reads up to a message containing `needle` and returns it. The ones before
+// it are appended to `seen` when given.
+fn readUntil(c: *TestClient, needle: []const u8, seen: ?*std.ArrayList([]const u8)) !std.json.ObjectMap {
+    while (true) {
+        const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+        const raw = try testing.arena_allocator.dupe(u8, msg.data);
+        if (msg.cleanup_fragment) {
+            c.reader.cleanup();
+        }
+        // every message is valid JSON
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, raw, .{});
+        if (std.mem.find(u8, raw, needle) != null) {
+            return value.object;
+        }
+        if (seen) |s| {
+            try s.append(testing.arena_allocator, raw);
+        }
+    }
+}
+
+// Reads up to the server closing the connection.
+fn expectClose(c: *TestClient) !void {
+    while (true) {
+        const msg = c.readWebsocketMessage() catch |err| switch (err) {
+            error.Closed => return,
+            else => return err,
+        } orelse return error.NoMessage;
+        if (msg.type == .close) {
+            return;
+        }
+        if (msg.cleanup_fragment) {
+            c.reader.cleanup();
+        }
+    }
+}
+
+// Sends a CDP command and returns its result. The messages read before the
+// response (events) are appended to `seen` when given. Everything lives in
+// testing.arena_allocator.
+fn cdpCommand(c: *TestClient, id: i64, method: []const u8, params: []const u8, session_id: ?[]const u8, seen: ?*std.ArrayList([]const u8)) !std.json.ObjectMap {
+    const arena = testing.arena_allocator;
+    const payload = if (session_id) |sid|
+        try arena.print("{{\"id\":{d},\"method\":\"{s}\",\"params\":{s},\"sessionId\":\"{s}\"}}", .{ id, method, params, sid })
+    else
+        try arena.print("{{\"id\":{d},\"method\":\"{s}\",\"params\":{s}}}", .{ id, method, params });
+    try c.bidiCommand(payload);
+
+    const reply = try readUntil(c, try arena.print("{{\"id\":{d},", .{id}), seen);
+    if (reply.get("error")) |err| {
+        std.debug.print("{s} failed: {s}\n", .{ method, err.object.get("message").?.string });
+        return error.CommandFailed;
+    }
+    return reply.get("result").?.object;
 }
 
 test "server: 404" {

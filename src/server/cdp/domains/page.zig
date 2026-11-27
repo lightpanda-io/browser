@@ -368,6 +368,7 @@ fn navigate(cmd: *CDP.Command) !void {
     const opts: Frame.NavigateOpts = .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
+        .cdp_guest_session_id = cmd.guestSessionId(),
         .kind = .{ .push = null },
         .referer = if (params.referrer) |source| try referrer.compute(frame.call_arena, policy, source, encoded_url) else null,
         .referrer_policy = policy,
@@ -465,6 +466,7 @@ fn doReload(cmd: *CDP.Command) !void {
     try session.initiateRootNavigation(frame._frame_id, reload_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
+        .cdp_guest_session_id = cmd.guestSessionId(),
         .kind = .reload,
         .force = if (params) |p| p.ignoreCache orelse false else false,
         .method = if (prev_nav) |p| p.method else .GET,
@@ -558,6 +560,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     const opts = Frame.NavigateOpts{
         .reason = .history,
         .cdp_id = cmd.input.id,
+        .cdp_guest_session_id = cmd.guestSessionId(),
         .kind = .{ .traverse = idx },
     };
 
@@ -682,15 +685,11 @@ pub fn frameNavigateFailed(target: *CDP.Target, event: *const Notification.Frame
     const session_id = target.session_id orelse return;
 
     const input_id = event.opts.cdp_id orelse return;
-    try target.cdp.sendJSON(.{
-        .id = input_id,
-        .result = .{
-            .frameId = &id.toFrameId(event.frame_id),
-            .loaderId = &id.toLoaderId(event.loader_id),
-            .errorText = network.errorText(event.err),
-        },
-        .sessionId = session_id,
-    }, .{});
+    try target.cdp.sendNavigateResult(input_id, event.opts.cdp_guest_session_id, session_id, .{
+        .frameId = &id.toFrameId(event.frame_id),
+        .loaderId = &id.toLoaderId(event.loader_id),
+        .errorText = network.errorText(event.err),
+    });
 }
 
 // Fired from Frame.deinit while the frame's JS is still alive.
@@ -745,14 +744,10 @@ pub fn frameNavigated(arena: Allocator, target: *CDP.Target, event: *const Notif
     // unfortunately have to put the input_id ito the NavigateOpts which gets
     // passed back into the notification.
     if (event.opts.cdp_id) |input_id| {
-        try cdp.sendJSON(.{
-            .id = input_id,
-            .result = .{
-                .frameId = frame_id,
-                .loaderId = loader_id,
-            },
-            .sessionId = session_id,
-        }, .{});
+        try cdp.sendNavigateResult(input_id, event.opts.cdp_guest_session_id, session_id, .{
+            .frameId = frame_id,
+            .loaderId = loader_id,
+        });
     }
 
     if (target.page_life_cycle_events) {

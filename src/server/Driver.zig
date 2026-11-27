@@ -123,6 +123,31 @@ pub fn onLink(self: *const Driver, l: *Link) void {
     }
 }
 
+// Worker Thread. A CDP connection joining this worker's browser.
+pub fn onGuest(self: *const Driver, guest: *CDP.Guest) void {
+    switch (self.impl) {
+        .cdp => |cdp| cdp.addGuest(guest),
+        // the loop only hands guests to CDP workers, and it is still reading
+        // this one's link, which is not ours to destroy
+        .bidi => lp.assert(false, "Driver.onGuest bidi", .{}),
+    }
+}
+
+// Worker Thread.
+pub fn onGuestPing(_: *const Driver, ping: Inbox.Message.GuestPing) void {
+    ping.link.sendPong(ping.body) catch |err| {
+        log.debug(.cdp, "guest pong", .{ .err = err });
+    };
+}
+
+// Worker Thread. A guest left; the worker carries on.
+pub fn onGuestGone(self: *const Driver, guest: *CDP.Guest) void {
+    switch (self.impl) {
+        .cdp => |cdp| cdp.removeGuest(guest),
+        .bidi => lp.assert(false, "Driver.onGuestGone bidi", .{}),
+    }
+}
+
 // Worker Thread. An HTTP WebDriver command; its connection waits on our answer.
 pub fn onHttp(self: *const Driver, command: http_command.Command) void {
     switch (self.impl) {

@@ -173,13 +173,27 @@ pub const Message = struct {
         // parked on the Server.Worker until the consumer responds.
         bidi_http: http_command.Command,
 
+        // A CDP connection joining one page of the worker's running browser
+        // (/page/{browser_id}/{page_id}). The worker's own link stays; this
+        // one is extra, and leaving doesn't end the worker.
+        // Owns its link; the consumer adopts it.
+        guest: *CDP.Guest,
+
+        // A ping on a guest's connection; the pong goes back on that link.
+        guest_ping: GuestPing,
+
+        // A guest's connection is gone. The loop has stopped reading it, so
+        // the consumer owns the link and destroys it.
+        guest_gone: *CDP.Guest,
+
         pub fn size(self: Payload) usize {
             return switch (self) {
                 .cdp => |c| c.raw.len,
                 .bidi, .ping => |b| b.len,
+                .guest_ping => |p| p.body.len,
                 // one at a time, it never backs up
                 .bidi_http => 0,
-                .close, .disconnect, .link, .quit => 0,
+                .close, .disconnect, .link, .quit, .guest, .guest_gone => 0,
             };
         }
     };
@@ -187,6 +201,13 @@ pub const Message = struct {
     pub const Cdp = struct {
         raw: []const u8,
         input: CDP.InputMessage,
+        // The guest it came from; null is the worker's own link.
+        guest: ?*CDP.Guest = null,
+    };
+
+    pub const GuestPing = struct {
+        link: *Link,
+        body: []u8,
     };
 
     pub fn deinit(self: *const Message) void {
@@ -196,7 +217,10 @@ pub const Message = struct {
     // For messages that never reached the consumer (Inbox.deinit).
     fn discard(self: *const Message) void {
         switch (self.payload) {
+            // an adopted guest is the consumer's to destroy (and its .guest
+            // came first, so an unadopted one went with that message)
             .link => |link| link.destroy(),
+            .guest => |guest| guest.destroy(),
             else => {},
         }
         self.deinit();
