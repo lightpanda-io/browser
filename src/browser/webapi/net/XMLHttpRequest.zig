@@ -35,7 +35,8 @@ const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
 
 const Headers = @import("Headers.zig");
-const BodyInit = @import("body_init.zig").BodyInit;
+const body_init = @import("body_init.zig");
+const BodyInit = body_init.BodyInit;
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 const XMLHttpRequestUpload = @import("XMLHttpRequestUpload.zig");
 
@@ -600,8 +601,8 @@ fn getResponseText(self: *const XMLHttpRequest) []const u8 {
     // TODO: per WHATWG XHR "get a text response", the bytes must be decoded
     // using the final encoding derived from the final MIME type
     // (_override_mime ?? _response_mime). Currently the raw bytes are
-    // returned and V8 treats them as UTF-8.
-    return self._response_data.items();
+    // returned and V8 treats them as UTF-8, minus a leading UTF-8 BOM.
+    return body_init.stripUtf8Bom(self._response_data.items());
 }
 
 pub fn getStatus(self: *const XMLHttpRequest) u16 {
@@ -625,7 +626,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
     // current bytes directly instead of caching a value that would go
     // stale as more data arrives.
     if (self._response_type == .default or self._response_type == .text) {
-        return .{ .text = self._response_data.items() };
+        return .{ .text = self.getResponseText() };
     }
 
     if (self._ready_state != .done) {
