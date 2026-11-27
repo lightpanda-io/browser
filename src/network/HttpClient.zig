@@ -7056,7 +7056,7 @@ test "HttpClient: privatecache caches Set-Cookie responses" {
 
     inline for (.{ .{ false, "skip" }, .{ true, "strip" } }) |mode| {
         var cache: Cache = .{
-            .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0, false) },
+            .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0, mode[0]) },
             .set_cookie = mode[0],
         };
         defer cache.deinit();

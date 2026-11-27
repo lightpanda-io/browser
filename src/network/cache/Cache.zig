@@ -806,10 +806,21 @@ test "Cache: tryCache with Set-Cookie" {
     try testing.expectEqual(1, stripped.headers.len);
     try testing.expectEqual("cache-control", stripped.headers[0].name);
 
-    // private and no-store aren't stored either way
-    for ([_][]const u8{ "private, max-age=300", "no-store, max-age=300" }) |cc| {
-        var private: TestResponse = .{ .cache_control = cc, .set_cookie = "a=1", .set_cookie_mode = true };
-        try testing.expectEqual(null, try private.run(arena.allocator()));
+    // no-store is never stored, either way
+    {
+        var no_store: TestResponse = .{ .cache_control = "no-store, max-age=300", .set_cookie = "a=1", .set_cookie_mode = true };
+        try testing.expectEqual(null, try no_store.run(arena.allocator()));
+        no_store.set_cookie_mode = false;
+        try testing.expectEqual(null, try no_store.run(arena.allocator()));
+    }
+
+    // "private" bars a shared cache, but a private cache may store it
+    {
+        var private: TestResponse = .{ .cache_control = "private, max-age=300", .set_cookie = "a=1", .set_cookie_mode = true };
+        const result = (try private.run(arena.allocator())).?;
+        try testing.expectEqual(true, result.private);
+        try testing.expectEqual(1, result.headers.len);
+
         private.set_cookie_mode = false;
         try testing.expectEqual(null, try private.run(arena.allocator()));
     }
