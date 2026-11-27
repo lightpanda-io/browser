@@ -366,7 +366,39 @@ fn toolsValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?McpT
     target.* = enabled;
 }
 
-pub const AiProvider = std.meta.Tag(zenai.provider.Client);
+/// What `--provider`, `/provider` and `.lp-agent.zon` name: every zenai client,
+/// plus `lightpanda`, which runs one of them through the Lightpanda Cloud
+/// gateway.
+pub const AiProvider = blk: {
+    const zenai_names = std.meta.fieldNames(zenai.provider.Tag);
+    const len = zenai_names.len + 1;
+    const Int = std.math.IntFittingRange(0, len - 1);
+    var names: [len][:0]const u8 = undefined;
+    for (zenai_names, 0..) |name, i| names[i] = name;
+    names[len - 1] = "lightpanda";
+    break :blk @Enum(Int, .exhaustive, &names, &std.simd.iota(Int, len));
+};
+
+comptime {
+    for (std.enums.values(zenai.provider.Tag)) |tag| {
+        if (@backingInt(tag) != @backingInt(@field(AiProvider, @tagName(tag)))) {
+            @compileError("AiProvider must list zenai's tags first, in order");
+        }
+    }
+}
+
+/// The zenai client for `provider`; null for `lightpanda`, whose client the
+/// gateway names.
+pub fn zenaiProvider(provider: AiProvider) ?zenai.provider.Tag {
+    // AiProvider is zenai's tags, in order, then `lightpanda`.
+    return if (provider == .lightpanda) null else @fromBackingInt(@intCast(@backingInt(provider)));
+}
+
+pub fn aiProvider(tag: zenai.provider.Tag) AiProvider {
+    return switch (tag) {
+        inline else => |t| @field(AiProvider, @tagName(t)),
+    };
+}
 
 /// Per-turn reasoning budget for `agent` mode, mirroring Claude's effort
 /// levels. Maps to each provider's native thinking/reasoning knob. Resolved

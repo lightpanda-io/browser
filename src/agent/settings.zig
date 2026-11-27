@@ -29,8 +29,9 @@ const Config = lp.Config;
 const picker = @import("picker.zig");
 const string = @import("../string.zig");
 const auth = @import("auth/auth.zig");
+const Cloud = lp.Cloud;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, or XAI_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
+pub const api_keys_hint = "LIGHTPANDA_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, or XAI_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
@@ -45,6 +46,8 @@ pub const ResolvedProvider = struct {
 /// deinit only after that client is gone.
 pub const Credential = struct {
     provider: Config.AiProvider,
+    /// The zenai client it runs on: the gateway's for `lightpanda`.
+    tag: zenai.provider.Tag,
     key: union(enum) {
         /// Unowned env-var pointer.
         env: [:0]const u8,
@@ -53,26 +56,31 @@ pub const Credential = struct {
         /// Subscription (bearer) auth; the key is the access token, refreshed
         /// between turns.
         session: auth.Session,
+        /// `lightpanda`: the agent endpoint the gateway names, holding the
+        /// token. Borrowed from the `Cloud` it was resolved with.
+        lightpanda: zenai.provider.Endpoint,
     },
 
-    /// What the AI client talks to: the env's for the provider, with
-    /// `base_url` (`--base-url`) over the env's and the subscription's account
-    /// id.
+    /// What the AI client talks to: the gateway's agent endpoint, else the
+    /// env's for the provider with `base_url` (`--base-url`) over the env's
+    /// and the subscription's account id.
     pub fn endpoint(self: *const Credential, base_url: ?[:0]const u8) zenai.provider.Endpoint {
-        var ep = zenai.provider.fromEnv(lp.environ(), self.provider).endpoint(self.keySlice());
+        if (self.key == .lightpanda) return self.key.lightpanda;
+        var ep = zenai.provider.fromEnv(lp.environ(), self.tag).endpoint(self.keySlice());
         if (ep.backend == .codex) ep.backend.codex.account_id = self.accountId();
         if (base_url) |u| ep.base_url = u;
         return ep;
     }
 
     pub fn defaultModel(self: *const Credential) []const u8 {
-        return zenai.provider.defaultModel(self.provider);
+        return if (self.key == .lightpanda) self.key.lightpanda.defaultModel() else zenai.provider.defaultModel(self.tag);
     }
 
     pub fn keySlice(self: *const Credential) [:0]const u8 {
         return switch (self.key) {
             .env, .owned => |k| k,
             .session => |*s| s.tokens.access_token,
+            .lightpanda => |l| l.key,
         };
     }
 
@@ -88,6 +96,7 @@ pub const Credential = struct {
             .env => {},
             .owned => |k| allocator.free(k),
             .session => |*s| s.deinit(),
+            .lightpanda => {},
         }
     }
 };
@@ -158,9 +167,9 @@ pub fn hasDetectableKey(opts: Config.Agent, remembered: ?Remembered) bool {
 
 /// Precedence: `--provider` > remembered (if its credential is still there) >
 /// first detected. Null means nothing to use (the reason is already printed).
-pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
+pub fn resolveCredentials(allocator: std.mem.Allocator, cloud: ?*const Cloud, opts: Config.Agent, remembered: ?Remembered, allow_pick: bool) !?ResolvedProvider {
     if (opts.provider) |p| {
-        const credential = try credentialFor(allocator, p) orelse {
+        const credential = try credentialFor(allocator, cloud, p) orelse {
             std.debug.print("Missing credentials for --provider {s}: set {s}, or pass --no-llm for the basic REPL.\n", .{ @tagName(p), keyHint(p) });
             return error.MissingApiKey;
         };
@@ -171,7 +180,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     // to detection, which then skips it.
     var failed: ?Config.AiProvider = null;
     if (remembered) |r| if (r.provider) |p| {
-        const credential = credentialFor(allocator, p) catch |err| switch (err) {
+        const credential = credentialFor(allocator, cloud, p) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => blk: {
                 failed = p;
@@ -189,7 +198,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     };
     if (found.len == 0) {
         for (zenai.provider.local_providers) |local| if (detectLocalProvider(allocator, local, opts.base_url)) |key| {
-            return .{ .credential = .{ .provider = local, .key = .{ .env = key } }, .source = .detected };
+            return .{ .credential = .{ .provider = Config.aiProvider(local), .tag = local, .key = .{ .env = key } }, .source = .detected };
         };
         std.debug.print(
             \\No API key detected. Set {s}, or run a local Ollama, llama.cpp or LLMD server with a loaded model.
@@ -198,42 +207,54 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
         , .{api_keys_hint});
         return null;
     }
+    // A Lightpanda login wins over keys set for other reasons.
+    if (found[0] == .lightpanda) {
+        if (found.len > 1) {
+            std.debug.print("Using Lightpanda Cloud over {s}; pass --provider {s} to use it instead.\n", .{ @tagName(found[1]), @tagName(found[1]) });
+        } else {
+            std.debug.print("Using Lightpanda Cloud.\n", .{});
+        }
+        return try detected(allocator, cloud, found[0], .detected);
+    }
     // Non-interactive callers (--list-models, one-shot tasks, pipes) must not
     // block on a prompt.
     if (!allow_pick or found.len == 1 or !picker.interactiveTty()) {
-        return try detected(allocator, found[0], .detected);
+        return try detected(allocator, cloud, found[0], .detected);
     }
 
     var names: [detection_order.len][:0]const u8 = undefined;
     for (found, 0..) |p, i| names[i] = @tagName(p);
     std.debug.print("\n", .{});
     const idx = picker.promptNumberedChoice("  Select a provider:", names[0..found.len], 0) catch {
-        return try detected(allocator, found[0], .detected);
+        return try detected(allocator, cloud, found[0], .detected);
     };
-    return try detected(allocator, found[idx], .picked);
+    return try detected(allocator, cloud, found[idx], .picked);
 }
 
-fn detected(allocator: std.mem.Allocator, p: Config.AiProvider, source: @FieldType(ResolvedProvider, "source")) !ResolvedProvider {
-    const credential = try credentialFor(allocator, p) orelse return error.MissingApiKey;
+fn detected(allocator: std.mem.Allocator, cloud: ?*const Cloud, p: Config.AiProvider, source: @FieldType(ResolvedProvider, "source")) !ResolvedProvider {
+    const credential = try credentialFor(allocator, cloud, p) orelse return error.MissingApiKey;
     return .{ .credential = credential, .source = source };
 }
 
-/// The credential for `p` without prompting: a gcloud token for Vertex
-/// project mode, a stored subscription (over an API key), else the env key. Null when there is none; on error the reason is printed.
+/// The credential for `p` without prompting: the Lightpanda gateway, a gcloud
+/// token for Vertex project mode, a stored subscription (over an API key),
+/// else the env key. Null when there is none; on error the reason is printed.
 /// Local servers get their placeholder key unprobed.
-pub fn credentialFor(allocator: std.mem.Allocator, p: Config.AiProvider) !?Credential {
-    if (p == .vertex and vertexProjectMode()) {
-        return .{ .provider = p, .key = .{ .owned = try gcloudAccessToken(allocator) } };
+pub fn credentialFor(allocator: std.mem.Allocator, cloud: ?*const Cloud, p: Config.AiProvider) !?Credential {
+    const tag = Config.zenaiProvider(p) orelse return gatewayCredential(cloud);
+    if (tag == .vertex and vertexProjectMode()) {
+        return .{ .provider = p, .tag = tag, .key = .{ .owned = try gcloudAccessToken(allocator) } };
     }
-    if (try subscriptionCredential(allocator, p)) |c| return c;
-    const key = zenai.provider.envApiKey(lp.environ(), p) orelse return null;
-    return .{ .provider = p, .key = .{ .env = key } };
+    if (try subscriptionCredential(allocator, p, tag)) |c| return c;
+    const key = zenai.provider.envApiKey(lp.environ(), tag) orelse return null;
+    return .{ .provider = p, .tag = tag, .key = .{ .env = key } };
 }
 
 /// What to set up for `p` when `credentialFor` finds nothing.
 pub fn keyHint(p: Config.AiProvider) []const u8 {
-    if (p == .vertex) return "VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud)";
-    return zenai.provider.envVarName(p);
+    const tag = Config.zenaiProvider(p) orelse return Cloud.token_env_var_name ++ " (an API token with model access, from the Lightpanda console)";
+    if (tag == .vertex) return "VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT (project mode, token via gcloud)";
+    return zenai.provider.envVarName(tag);
 }
 
 /// Whether `credentialFor(p)` has something to use, cheaply: no gcloud call,
@@ -241,16 +262,22 @@ pub fn keyHint(p: Config.AiProvider) []const u8 {
 /// with GOOGLE_GENAI_USE_VERTEXAI, so a GOOGLE_CLOUD_PROJECT set for other
 /// reasons doesn't pick Vertex.
 pub fn available(p: Config.AiProvider) bool {
-    if (zenai.provider.envApiKey(lp.environ(), p) != null) return true;
+    const tag = Config.zenaiProvider(p) orelse return Cloud.token() != null;
+    if (zenai.provider.envApiKey(lp.environ(), tag) != null) return true;
     return switch (p) {
         .vertex => zenai.provider.useVertex(lp.environ()) and vertexProjectMode(),
-        else => auth.subscriptionAvailable(p),
+        else => auth.subscriptionAvailable(tag),
     };
 }
 
-/// Auto-detection order: zenai's env-detectable providers. Local servers
-/// need a probe, so they're left out.
-const detection_order = zenai.provider.default_candidates;
+/// Auto-detection order: a Lightpanda login first, then zenai's
+/// env-detectable providers. Local servers need a probe, so they're left out.
+const detection_order = blk: {
+    var order: [zenai.provider.default_candidates.len + 1]Config.AiProvider = undefined;
+    order[0] = .lightpanda;
+    for (zenai.provider.default_candidates, order[1..]) |tag, *p| p.* = Config.aiProvider(tag);
+    break :blk order;
+};
 
 pub const ProviderBuf = [detection_order.len]Config.AiProvider;
 
@@ -266,16 +293,30 @@ pub fn availableProviders(buf: *ProviderBuf) []Config.AiProvider {
 
 /// A stored subscription session for `provider`; null when it has none. The
 /// session owns the key.
-fn subscriptionCredential(allocator: std.mem.Allocator, provider: Config.AiProvider) !?Credential {
-    const session = (try auth.sessionFor(allocator, provider)) orelse return null;
+fn subscriptionCredential(allocator: std.mem.Allocator, provider: Config.AiProvider, tag: zenai.provider.Tag) !?Credential {
+    const session = (try auth.sessionFor(allocator, tag)) orelse return null;
     // Name the credential in effect: a set-but-ignored API key would otherwise
     // be a silent surprise.
-    if (zenai.provider.envApiKey(lp.environ(), provider) != null) {
-        std.debug.print("{s}: using your {s}; {s} is set but the subscription takes priority.\n", .{ @tagName(provider), session.descriptor.label, zenai.provider.envVarName(provider) });
+    if (zenai.provider.envApiKey(lp.environ(), tag) != null) {
+        std.debug.print("{s}: using your {s}; {s} is set but the subscription takes priority.\n", .{ @tagName(provider), session.descriptor.label, zenai.provider.envVarName(tag) });
     } else {
         std.debug.print("{s}: using your {s}.\n", .{ @tagName(provider), session.descriptor.label });
     }
-    return .{ .provider = provider, .key = .{ .session = session } };
+    return .{ .provider = provider, .tag = tag, .key = .{ .session = session } };
+}
+
+/// The agent endpoint `cloud` names; null without LIGHTPANDA_TOKEN.
+fn gatewayCredential(cloud: ?*const Cloud) !?Credential {
+    if (Cloud.token() == null) return null;
+    const c = cloud orelse {
+        std.debug.print("Could not reach Lightpanda Cloud at {s}.\n", .{Cloud.gatewayUrl()});
+        return error.GatewayUnavailable;
+    };
+    const endpoint = c.agent catch |err| {
+        std.debug.print("Lightpanda Cloud serves the agent over '{s}', which this version can't speak; update lightpanda.\n", .{c.config.agent.protocol});
+        return err;
+    };
+    return .{ .provider = .lightpanda, .tag = endpoint.tag(), .key = .{ .lightpanda = endpoint } };
 }
 
 pub const remembered_path = ".lp-agent.zon";
@@ -384,7 +425,7 @@ pub fn reconcileModel(
 ) ![]u8 {
     // A subscription provider can't list models via the provider API; trust the
     // desired model as-is rather than error against `/models`.
-    if (auth.descriptorFor(credential.provider) != null) return try allocator.dupe(u8, desired);
+    if (auth.descriptorFor(credential.tag) != null) return try allocator.dupe(u8, desired);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();

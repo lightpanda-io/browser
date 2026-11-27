@@ -299,7 +299,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const banner_before = will_repl and (!resolve or settings.hasDetectableKey(opts, remembered));
     if (banner_before) welcome.print(resolve);
 
-    var resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
+    var resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, app.loadedCloud(), opts, remembered, will_repl) else null;
     // Before the ai_client errdefer, so on unwind the client goes first.
     errdefer if (resolved) |*r| r.credential.deinit(allocator);
 
@@ -325,7 +325,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         model = resolved_model;
     };
 
-    const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
+    const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.tag else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
     browser_tools.search.engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
@@ -1080,7 +1080,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     // Re-selecting vertex (token refresh) or a subscription provider (the
     // keep/login/logout menu) falls through instead of no-op'ing.
     const vertex_project = provider == .vertex and settings.vertexProjectMode();
-    const sub_desc = auth.descriptorFor(provider);
+    const sub_desc = if (Config.zenaiProvider(provider)) |tag| auth.descriptorFor(tag) else null;
     if (self.credential) |current| if (provider == current.provider and !vertex_project and sub_desc == null) {
         self.terminal.printInfo("provider: {s}", .{@tagName(provider)});
         return;
@@ -1091,18 +1091,18 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
             self.promptStoredSubscription(desc, stored) orelse return
         else
             self.subscriptionLogin(desc) orelse return;
-        self.setProvider(.{ .provider = provider, .key = .{ .session = owned } }) catch |err| {
+        self.setProvider(.{ .provider = provider, .tag = desc.provider, .key = .{ .session = owned } }) catch |err| {
             owned.deinit();
             self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
         };
         return;
     }
     // A local server's key is a placeholder, so probe the server instead.
-    if (zenai.provider.info(provider).local and settings.detectLocalProvider(self.allocator, provider, self.model_base_url) == null) {
-        self.terminal.printError("no {s} server with a loaded model at {s}", .{ @tagName(provider), self.model_base_url orelse zenai.provider.defaultBaseUrl(provider).? });
+    if (Config.zenaiProvider(provider)) |tag| if (zenai.provider.info(tag).local and settings.detectLocalProvider(self.allocator, tag, self.model_base_url) == null) {
+        self.terminal.printError("no {s} server with a loaded model at {s}", .{ @tagName(provider), self.model_base_url orelse zenai.provider.defaultBaseUrl(tag).? });
         return;
-    }
-    var credential = (settings.credentialFor(self.allocator, provider) catch |err| {
+    };
+    var credential = (settings.credentialFor(self.allocator, self.ts.browser.app.loadedCloud(), provider) catch |err| {
         self.terminal.printError("{s} unavailable: {s} (details above)", .{ @tagName(provider), @errorName(err) });
         return;
     }) orelse {
@@ -1153,7 +1153,7 @@ fn promptStoredSubscription(self: *Agent, desc: *const auth.Descriptor, stored: 
         return null;
     };
     self.terminal.printInfo("{s} logged out.", .{desc.label});
-    if (self.credential) |c| if (c.provider == desc.provider) self.disableProvider();
+    if (self.credential) |c| if (c.provider == Config.aiProvider(desc.provider)) self.disableProvider();
     return null;
 }
 
@@ -1207,12 +1207,12 @@ fn setProvider(self: *Agent, credential: settings.Credential) !void {
     self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
-    if (auth.descriptorFor(credential.provider)) |d| {
+    if (auth.descriptorFor(credential.tag)) |d| {
         self.terminal.printInfo("provider: {s} ({s})", .{ @tagName(credential.provider), d.label });
     } else {
         self.terminal.printInfo("provider: {s}", .{@tagName(credential.provider)});
     }
-    if (zenai.provider.omitsEffort(credential.provider) and self.effort != .null) {
+    if (zenai.provider.omitsEffort(credential.tag) and self.effort != .null) {
         self.effort = .null;
         self.terminal.printInfo("effort: null ({s} default)", .{@tagName(credential.provider)});
     }
@@ -2074,6 +2074,7 @@ fn recordSlashToolCall(
 /// Format the client's last failure into `api_error_buf`: HTTP status+message,
 /// or the raw error name when there's no status (transport/parse failures).
 fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []const u8 {
+    if (lp.Cloud.describeError(&self.api_error_buf, client.lastHeaders())) |m| return m;
     const e = client.lastError();
     const status = e.status orelse return @errorName(err);
     const owned_key = if (self.credential) |c| c.key == .owned else false;
@@ -2491,14 +2492,21 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         });
         return error.ConflictingFlags;
     }
-    var resolved = (try settings.resolveCredentials(allocator, opts, null, false)) orelse return error.MissingProvider;
+    const app_dir = auth.dataDir(allocator);
+    defer if (app_dir) |d| allocator.free(d);
+    var cloud = lp.Cloud.load(allocator, app_dir) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.GatewayUnavailable => null,
+    };
+    defer if (cloud) |*c| c.deinit();
+    var resolved = (try settings.resolveCredentials(allocator, if (cloud) |*c| c else null, opts, null, false)) orelse return error.MissingProvider;
     defer resolved.credential.deinit(allocator);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     // A subscription provider can't list models via the provider API; use the
     // free models.dev catalog.
-    const ids: []const []const u8 = if (auth.descriptorFor(resolved.credential.provider)) |desc|
+    const ids: []const []const u8 = if (auth.descriptorFor(resolved.credential.tag)) |desc|
         models_dev.modelIds(arena.allocator(), desc.models_dev_id, auth.dataDir(arena.allocator()))
     else
         zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.endpoint(opts.base_url), .{}) catch |err| {
@@ -2567,7 +2575,7 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
     const arena = self.model_completion_arena.allocator();
     // A subscription provider can't hit the provider's `/models` endpoint, so
     // list from the free, unauthenticated models.dev catalog instead.
-    const ids = if (auth.descriptorFor(cred.provider)) |desc|
+    const ids = if (auth.descriptorFor(cred.tag)) |desc|
         models_dev.modelIds(arena, desc.models_dev_id, self.app_dir)
     else
         zenai.provider.listChatModelIds(
