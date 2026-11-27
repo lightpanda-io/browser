@@ -175,8 +175,9 @@ class_subjects: std.ArrayList(Compounds) = .empty,
 // ([class*=x]): any change to it can change what that matches. Null: none.
 class_attribute: ?ClassUse = null,
 
-// Those compounds' attribute selectors: a class change that matches each one
-// as before changes none of them. Past the limit, any change counts.
+// Those compounds' attribute selectors, each match once: a class change that
+// matches each one as before changes none of them. Past the limit, any
+// change counts.
 class_attribute_selectors: std.ArrayList(Selector.Attribute) = .empty,
 class_attribute_unlisted: bool = false,
 has: HasKeys = .{},
@@ -1519,6 +1520,33 @@ fn noteClassUse(self: *StyleManager, use: *ClassUse, first: bool, reach: ClassRe
 
 const max_class_attribute_selectors = 256;
 
+// Sites repeat a few: Tailwind Typography puts [class~=not-prose] in every
+// .prose rule, over a thousand of them
+fn listClassAttributeSelector(self: *StyleManager, attr: Selector.Attribute) Allocator.Error!void {
+    for (self.class_attribute_selectors.items) |listed| {
+        if (sameClassMatch(listed, attr)) {
+            return;
+        }
+    }
+    if (self.class_attribute_selectors.items.len == max_class_attribute_selectors) {
+        self.class_attribute_unlisted = true;
+        return;
+    }
+    try self.class_attribute_selectors.append(self.arena.allocator(), attr);
+}
+
+// Whether two [class...] selectors match the same strings (see
+// classAttributeMatchChanged): the name is class in both
+fn sameClassMatch(a: Selector.Attribute, b: Selector.Attribute) bool {
+    if (a.value_case != b.value_case or std.meta.activeTag(a.matcher) != std.meta.activeTag(b.matcher)) {
+        return false;
+    }
+    return switch (a.matcher) {
+        .presence => true,
+        inline else => |value, tag| std.mem.eql(u8, value, @field(b.matcher, @tagName(tag))),
+    };
+}
+
 // `subject` is the reach of the selector's subject compound: .subtree for a
 // rule's selector, the enclosing compound's for an :is() argument. `own`:
 // that compound is the rule's subject, `rule_subject` (null: not known).
@@ -1550,11 +1578,7 @@ fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, r
                     self.class_attribute = .{ .reach = reach, .boxes = boxes, .subjects = ClassUse.any_subject };
                 }
                 try self.noteClassUse(&self.class_attribute.?, first, reach, subject, boxes);
-                if (self.class_attribute_selectors.items.len < max_class_attribute_selectors) {
-                    try self.class_attribute_selectors.append(self.arena.allocator(), attr);
-                } else {
-                    self.class_attribute_unlisted = true;
-                }
+                try self.listClassAttributeSelector(attr);
             },
             .pseudo_class => |pseudo| switch (pseudo) {
                 .not, .is, .where => |selectors| for (selectors) |selector| {
@@ -10642,6 +10666,43 @@ test "StyleManager: memo: a class that is only an ancestor's drops the subjects 
     try testing.expectEqual(4, sm.walked - walked);
     try testing.expectEqual(true, sm.hasDisplayNone(second));
     try testing.expectEqual(version, frame.page.style_version);
+}
+
+test "StyleManager: memo: a class attribute selector repeated is listed once" {
+    const arena = testing.arena_allocator;
+    for ([_]bool{ true, false }) |repeated| {
+        const frame = try testing.createFrame();
+        defer testing.test_session.closeAllPages();
+        const sm = &frame._style_manager;
+
+        const doc = frame.document;
+        const html = (try doc.createElement("html", null, frame)).asNode();
+        _ = try doc.asNode().appendChild(html, frame);
+        const body = (try doc.createElement("body", null, frame)).asNode();
+        _ = try html.appendChild(body, frame);
+        try Frame.parse.htmlAsChildren(frame, body, "<div class=a><p></p></div>");
+        const div = body.firstChild().?.as(Element);
+
+        // Like Tailwind Typography's .prose rules, or as many different ones
+        var sheet: std.ArrayList(u8) = .empty;
+        for (0..300) |i| {
+            if (repeated) {
+                try sheet.print(arena, ".r{d} :not([class~=not-prose]) {{ display: none }}\n", .{i});
+            } else {
+                try sheet.print(arena, ".r{d} :not([class~=not-prose{d}]) {{ display: none }}\n", .{ i, i });
+            }
+        }
+        const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+        try style_el.asNode().setTextContent(sheet.items, frame);
+        _ = try body.appendChild(style_el.asNode(), frame);
+        try testing.expectEqual(false, sm.hasDisplayNone(div));
+
+        try testing.expectEqual(!repeated, sm.class_attribute_unlisted);
+        try testing.expectEqual(@as(usize, if (repeated) 1 else max_class_attribute_selectors), sm.class_attribute_selectors.items.len);
+        // A class none of them reads: listed, it matches each as before
+        try testing.expectEqual(!repeated, sm.classAttributeMatchChanged(div, "a", "b"));
+        try testing.expectEqual(true, sm.classAttributeMatchChanged(div, "a", "a not-prose"));
+    }
 }
 
 test "StyleManager: memo: a class attribute selector reaches where it sits" {
