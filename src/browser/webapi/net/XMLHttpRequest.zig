@@ -644,8 +644,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
         .json => blk: {
             const local = exec.js.local.?;
 
-            // per spec, we need to strip a JSON's body leading BOM
-            const json_text = if (std.mem.startsWith(u8, data, "\u{FEFF}")) data[3..] else data;
+            const json_text = body_init.stripUtf8Bom(data);
 
             var try_catch: js.TryCatch = undefined;
             try_catch.init(local);
