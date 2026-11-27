@@ -319,6 +319,14 @@ fn Records(comptime T: type) type {
             return true;
         }
 
+        // Puts back el's entry, which remove took: its chunk is there
+        fn restore(self: *Self, el: *const Element, value: T) void {
+            const e = self.entry(el).?;
+            std.debug.assert(e.stamp != self.generation);
+            self.len += 1;
+            e.* = .{ .stamp = self.generation, .value = value };
+        }
+
         // `index` is el's, from claimSlot
         fn put(self: *Self, allocator: Allocator, index: u32, value: T) !void {
             const i = index >> chunk_shift;
@@ -783,9 +791,13 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     try self.collectAttributeNames(selector, false, deep);
     self.siblings.addNext(nextReach(selector), deep);
     var boxes = BoxReach.of(props).widest(.of(important));
+    var groups = declaredGroups(props).unionWith(declaredGroups(important));
     if (unresolved) |blocks| {
         for (blocks) |by_group| {
-            for (by_group) |block| {
+            for (by_group, 0..) |block, i| {
+                if (block.len != 0) {
+                    groups.insert(group_memos[i]);
+                }
                 for (block) |declaration| {
                     // What it resolves to isn't known: any z-index, any box
                     boxes = boxes.widest(.ofMemos(propertyReach(declaration.id)));
@@ -796,7 +808,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
             }
         }
     }
-    try self.collectClassReach(selector, .subtree, true, matched.rightmost(), boxes);
+    try self.collectClassReach(selector, .subtree, true, matched.rightmost(), .{ .boxes = boxes, .groups = groups, .values = true });
     for ([_]?ZIndex{ props.geometry.z_index, important.geometry.z_index }) |z| {
         if ((z orelse .auto) != .auto) {
             self.z_index_rules = true;
@@ -1490,23 +1502,42 @@ const ClassUse = struct {
     // style then changes, and what inherits from it.
     subjects: u32,
 
+    // Every rule it's in has it in the subject's own compound, and declares
+    // values, not a custom property (which what's under the subject reads):
+    // it changes the element's values, and what inherits them, nothing else.
+    own_values: bool,
+
+    // The groups its rules declare values of, all of them together
+    groups: Memos,
+
     const any_subject = std.math.maxInt(u32);
+};
+
+// What a rule's declarations do to the elements it matches, for the classes
+// in its selector (see ClassUse)
+const RuleEffect = struct {
+    boxes: BoxReach,
+    groups: Memos,
+    // false: it declares custom properties, which what's under its subject reads
+    values: bool,
 };
 
 // A use of `use`'s class, in a compound reaching `reach`, in a rule whose
 // subject is `subject`; null when the class is the subject's own, or the
 // subject isn't known.
-fn noteClassUse(self: *StyleManager, use: *ClassUse, first: bool, reach: ClassReach, subject: ?Selector.Compound, boxes: BoxReach) Allocator.Error!void {
+fn noteClassUse(self: *StyleManager, use: *ClassUse, first: bool, reach: ClassReach, subject: ?Selector.Compound, effect: RuleEffect, own_values: bool) Allocator.Error!void {
     const allocator = self.arena.allocator();
     if (first) {
-        use.* = .{ .reach = reach, .boxes = boxes, .subjects = ClassUse.any_subject };
+        use.* = .{ .reach = reach, .boxes = effect.boxes, .subjects = ClassUse.any_subject, .own_values = own_values, .groups = effect.groups };
         if (subject != null) {
             use.subjects = @intCast(self.class_subjects.items.len);
             try self.class_subjects.append(allocator, .{});
         }
     } else {
         use.reach = use.reach.widest(reach);
-        use.boxes = use.boxes.widest(boxes);
+        use.boxes = use.boxes.widest(effect.boxes);
+        use.own_values = use.own_values and own_values;
+        use.groups = use.groups.unionWith(effect.groups);
     }
     if (use.subjects == ClassUse.any_subject) {
         return;
@@ -1550,7 +1581,7 @@ fn sameClassMatch(a: Selector.Attribute, b: Selector.Attribute) bool {
 // `subject` is the reach of the selector's subject compound: .subtree for a
 // rule's selector, the enclosing compound's for an :is() argument. `own`:
 // that compound is the rule's subject, `rule_subject` (null: not known).
-fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach, own: bool, rule_subject: ?Selector.Compound, boxes: BoxReach) Allocator.Error!void {
+fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach, own: bool, rule_subject: ?Selector.Compound, effect: RuleEffect) Allocator.Error!void {
     const segments = selector.segments();
     for (0..segments.len + 1) |i| {
         const compound = if (i == 0) selector.first() else segments[i - 1].compound();
@@ -1560,36 +1591,37 @@ fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: 
             .descendant, .child => .subtree,
             .next_sibling, .subsequent_sibling => .parent_subtree,
         };
-        try self.collectCompoundClassReach(compound, reach, own and i == segments.len, rule_subject, boxes);
+        try self.collectCompoundClassReach(compound, reach, own and i == segments.len, rule_subject, effect);
     }
 }
 
-fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach, own: bool, rule_subject: ?Selector.Compound, boxes: BoxReach) Allocator.Error!void {
+fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach, own: bool, rule_subject: ?Selector.Compound, effect: RuleEffect) Allocator.Error!void {
     const subject = if (own) null else rule_subject;
+    const own_values = own and reach == .subtree and effect.values;
     for (compound.parts) |part| {
         switch (part) {
             .class => |class| {
                 const gop = try self.class_reach.getOrPut(self.arena.allocator(), class);
-                try self.noteClassUse(gop.value_ptr, gop.found_existing == false, reach, subject, boxes);
+                try self.noteClassUse(gop.value_ptr, gop.found_existing == false, reach, subject, effect, own_values);
             },
             .attribute => |attr| if (attr.name.eql(comptime .wrap("class"))) {
                 const first = self.class_attribute == null;
                 if (first) {
-                    self.class_attribute = .{ .reach = reach, .boxes = boxes, .subjects = ClassUse.any_subject };
+                    self.class_attribute = .{ .reach = reach, .boxes = effect.boxes, .subjects = ClassUse.any_subject, .own_values = own_values, .groups = effect.groups };
                 }
-                try self.noteClassUse(&self.class_attribute.?, first, reach, subject, boxes);
+                try self.noteClassUse(&self.class_attribute.?, first, reach, subject, effect, own_values);
                 try self.listClassAttributeSelector(attr);
             },
             .pseudo_class => |pseudo| switch (pseudo) {
                 .not, .is, .where => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, reach, own, rule_subject, boxes);
+                    try self.collectClassReach(selector, reach, own, rule_subject, effect);
                 },
                 // A sibling's class changes which index the element has
                 .nth_child_of, .nth_last_child_of => |of| for (of.selectors) |selector| {
-                    try self.collectClassReach(selector, reach.widest(.parent_subtree), false, null, boxes);
+                    try self.collectClassReach(selector, reach.widest(.parent_subtree), false, null, effect);
                 },
                 .has => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, .full, false, null, boxes);
+                    try self.collectClassReach(selector, .full, false, null, effect);
                 },
                 .focus => self.focus_reach = if (self.focus_reach) |current| current.widest(reach) else reach,
                 .focus_within => self.focus_within_reach = if (self.focus_within_reach) |current| current.widest(reach) else reach,
@@ -1612,12 +1644,16 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
     var reach: ?ClassReach = null;
     var moves: BoxReach = .none;
     var subjects: ClassSubjects = .{};
+    var own_values = true;
+    var groups: Memos = .empty;
     // [class*=x] reads the string, [class] its presence
     if (self.class_attribute) |use| {
         if (self.classAttributeMatchChanged(el, old, new)) {
             reach = use.reach;
             moves = use.boxes;
             subjects.add(self, use);
+            own_values = use.own_values;
+            groups = use.groups;
         }
     }
     inline for (.{ .{ old, new }, .{ new, old } }) |pair| {
@@ -1633,12 +1669,37 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
                 reach = if (reach) |current| current.widest(use.reach) else use.reach;
                 moves = moves.widest(use.boxes);
                 subjects.add(self, use);
+                own_values = own_values and use.own_values;
+                groups = groups.unionWith(use.groups);
             }
         }
     }
     const scope = reach orelse return true;
     if (scope == .full) {
         return false;
+    }
+    if (own_values) {
+        // Only el's values can change, and those that did are stored: what
+        // reads them goes, as for an inline write of the properties that
+        // changed. Unless the layout does: below drops only the boxes el
+        // moves, an inline write all of them.
+        if (self.ownValuesChanged(el, groups)) |changed| scoped: {
+            if (changed.reach.contains(.layout)) {
+                break :scoped;
+            }
+            const dropped = self.dropInheritors(el, &changed);
+            if (dropped == false) {
+                break :scoped;
+            }
+            if (changed.moves_box) {
+                self.inline_bumps += 1;
+                self.origin_memo = null;
+            }
+            if (changed.reach.contains(.heights)) {
+                self.heightWritten(el);
+            }
+            return true;
+        }
     }
     if (moves == .hit) {
         self.inline_bumps += 1;
@@ -1707,6 +1768,131 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
     if (moves == .layout) {
         // droppedCovers answers for the boxes too, and these were kept
         self.recordDropped(root);
+    }
+    return true;
+}
+
+const OwnChange = struct {
+    // The memos reading the values that changed
+    reach: Memos = .empty,
+    // Whether one of them places a box (see BoxReach.of): a hit reads the
+    // others as it goes
+    moves_box: bool = false,
+};
+
+// What changed in el's values in `groups`, el's classes having changed, and
+// with them only what rules declaring those groups match (see
+// ClassUse.own_values). el's entries hold the new values: what inherits them
+// is the caller's to drop. Null, nothing replaced, when a group read this
+// version doesn't hold el, or its parent for an inherited one: what was read
+// from the old values isn't known.
+fn ownValuesChanged(self: *StyleManager, el: *Element, groups: Memos) ?OwnChange {
+    const frame = self.frame;
+    const parent = el.asNode().flatTreeParentElement(frame);
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        // Not read since the last full style change: nothing holds its values
+        if (groups.contains(@field(Memo, field)) and group.fresh(frame)) {
+            const G = @TypeOf(group.*);
+            if (group.memo.contains(el) == false) {
+                return null;
+            }
+            if (G.Cascaded != G.Computed and parent != null and group.memo.contains(parent.?) == false) {
+                return null;
+            }
+        }
+    }
+
+    var change: OwnChange = .{};
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (groups.contains(@field(Memo, field)) and group.fresh(frame)) {
+            const G = @TypeOf(group.*);
+            const old = G.load(group.memo.get(el).?);
+            _ = group.memo.remove(el);
+            // Refilled the way a read does, through its group's one caller:
+            // another call site would take the fill out of line from it
+            const new = switch (comptime @field(Memo, field)) {
+                .visibility => self.visibilityProps(el),
+                .geometry => self.geometryProps(el),
+                .touch_action => self.touchActionProps(el),
+                .text => self.text.ownProps(self.arena.allocator(), el, frame),
+                .flow => self.flowProps(el),
+                .grid => self.gridProps(el),
+                .layout, .heights => comptime unreachable,
+            };
+            const Bits = @typeInfo(G.Computed).@"struct".backing_integer.?;
+            if (@as(Bits, @bitCast(old)) != @as(Bits, @bitCast(new))) {
+                inline for (@typeInfo(G.Computed).@"struct".field_names) |name| {
+                    if (std.meta.eql(@field(old, name), @field(new, name)) == false) {
+                        change.reach = change.reach.unionWith(comptime fieldReach(field, name));
+                        if (comptime fieldMovesBox(field, name)) {
+                            change.moves_box = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return change;
+}
+
+// What inherits el's values in the inherited groups `change` reaches goes:
+// they're el's old ones. el keeps its new entries. False, nothing dropped,
+// when one couldn't be stored: what's under it can't be told apart then.
+// Not Records.put: a second caller would take it out of the fills' loops.
+fn dropInheritors(self: *StyleManager, el: *Element, change: *const OwnChange) bool {
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (change.reach.contains(@field(Memo, field)) and group.memo.contains(el) == false) {
+            return false;
+        }
+    }
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        const G = @TypeOf(group.*);
+        if (G.Cascaded != G.Computed and change.reach.contains(@field(Memo, field))) {
+            const new = group.memo.get(el).?;
+            self.dropInherited(&group.memo, el.asNode());
+            group.memo.restore(el, new);
+        }
+    }
+    return true;
+}
+
+// The memos reading a group's computed field: property_reach, for the
+// properties it's computed from.
+fn fieldReach(comptime group: []const u8, comptime field: []const u8) Memos {
+    @setEvalBranchQuota(10_000);
+    var memos: Memos = .initOne(@field(Memo, group));
+    if (fieldMovesBox(group, field) == false) {
+        return memos;
+    }
+    // A vertical inset is applied on every read (see property_reach)
+    for ([_][]const u8{ "top", "bottom" }) |name| {
+        if (std.mem.eql(u8, field, name)) {
+            return memos;
+        }
+    }
+    for ([_][]const u8{ "height", "min_height", "max_height" }) |name| {
+        if (std.mem.eql(u8, group, "geometry") and std.mem.eql(u8, field, name)) {
+            memos.insert(.heights);
+            return memos;
+        }
+    }
+    memos.insert(.layout);
+    return memos;
+}
+
+// BoxReach.of, for a computed field
+fn fieldMovesBox(comptime group: []const u8, comptime field: []const u8) bool {
+    if (std.mem.eql(u8, group, "touch_action")) {
+        return false;
+    }
+    for ([_][]const u8{ "visibility_hidden", "pointer_events_none", "in_opacity_zero", "overscroll_x_contains", "overscroll_y_contains", "z_index" }) |name| {
+        if (std.mem.eql(u8, field, name)) {
+            return false;
+        }
     }
     return true;
 }
@@ -3395,7 +3581,7 @@ pub fn overscrollContainAxes(self: *StyleManager, el: *Element) Element.ScrollAx
 pub fn touchPanBlockedAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{};
-    const p = self.touch_action.inheritedProps(self.arena.allocator(), el, self.frame);
+    const p = self.touchActionProps(el);
     return .{ .x = p.pan_x_blocked, .y = p.pan_y_blocked };
 }
 
@@ -4535,6 +4721,11 @@ fn geometryProps(self: *StyleManager, el: *Element) Geometry.Computed {
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn flowProps(self: *StyleManager, el: *Element) Flow.Computed {
     return self.flow.inheritedProps(self.arena.allocator(), el, self.frame);
+}
+
+/// Callers must have run rebuildIfDirty, which resets the memo.
+fn touchActionProps(self: *StyleManager, el: *Element) TouchAction.Computed {
+    return self.touch_action.inheritedProps(self.arena.allocator(), el, self.frame);
 }
 
 /// A Group's rule lookup work, counted in tests.
@@ -7870,6 +8061,26 @@ const Declarations = struct {
 
 const group_fields = @typeInfo(Declarations).@"struct".field_names;
 
+// Each group's memo, by its index in group_fields
+const group_memos = blk: {
+    var memos: [group_fields.len]Memo = undefined;
+    for (group_fields, 0..) |field, i| {
+        memos[i] = @field(Memo, field);
+    }
+    break :blk memos;
+};
+
+// The groups `declared` sets a value in
+fn declaredGroups(declared: *const Declarations) Memos {
+    var groups: Memos = .empty;
+    inline for (group_fields) |field| {
+        if (declaresAny(&@field(declared, field))) {
+            groups.insert(@field(Memo, field));
+        }
+    }
+    return groups;
+}
+
 // `declared`: a pointer to a group's Declared, which is too large to copy
 fn declaresAny(declared: anytype) bool {
     inline for (@typeInfo(@TypeOf(declared.*)).@"struct".field_names) |field| {
@@ -8550,7 +8761,7 @@ fn trackVarSelector(self: *StyleManager, selector: Selector.Selector, reach: Mem
     const deep = siblingsReachDescendants(selector);
     try self.collectAttributeNames(selector, false, deep);
     self.siblings.addNext(nextReach(selector), deep);
-    try self.collectClassReach(selector, .subtree, true, selector.rightmost(), .ofMemos(reach));
+    try self.collectClassReach(selector, .subtree, true, selector.rightmost(), .{ .boxes = .ofMemos(reach), .groups = reach, .values = false });
 }
 
 /// Declared `content` of `el`, or null when nothing declares it. It doesn't
@@ -10443,6 +10654,64 @@ test "StyleManager: hit bands: a class no rule moves a box with keeps the layout
     try testing.expectEqual(div, (try doc.hitTest(10, 70, frame)).?);
 }
 
+test "StyleManager: memo: a class change keeps what its values didn't change" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { height: 50px } .b { height: 50px } .flat { margin-top: 0 } .c { height: 60px }" ++
+        " .w { height: 60px; width: 40px } .faded { opacity: 0 } .k i { height: 5px }", frame);
+    _ = try html.insertBefore(style_el.asNode(), body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=a><i></i></div><p></p>");
+    const div = body.firstChild().?.as(Element);
+    const p = body.lastChild().?.as(Element);
+    const class: String = comptime .wrap("class");
+
+    try testing.expectEqual(50, layout.boxHeight(div, frame));
+    try testing.expectEqual(50, layout.boxTop(p, frame));
+    const width = layout.boxWidth(div, frame);
+    const layout_bumps = sm.layout_bumps;
+    const version = sm.hitVersion();
+    const entries = sm.layout_memo.map.count();
+
+    // Another rule, the same values: nothing goes
+    try div.setAttribute(class, comptime .wrap("b"), frame);
+    // A declared margin-top: 0 is the initial value
+    try div.setAttribute(class, comptime .wrap("b flat"), frame);
+    // Only an opacity: a hit reads it
+    try div.setAttribute(class, comptime .wrap("b faded"), frame);
+    try testing.expectEqual(true, sm.isHidden(div, .{ .check_opacity = true }));
+    try div.setAttribute(class, comptime .wrap("b"), frame);
+    try testing.expectEqual(layout_bumps, sm.layout_bumps);
+    try testing.expectEqual(version, sm.hitVersion());
+    try testing.expectEqual(entries, sm.layout_memo.map.count());
+    try testing.expectEqual(@as(?f64, width), sm.getCachedLayout(div, .box_width));
+    try testing.expectEqual(@as(?f64, 50), sm.getCachedLayout(div, .box_height));
+
+    // A height: the widths stay, what follows moves
+    try div.setAttribute(class, comptime .wrap("c"), frame);
+    try testing.expectEqual(layout_bumps, sm.layout_bumps);
+    try testing.expectEqual(@as(?f64, width), sm.getCachedLayout(div, .box_width));
+    try testing.expectEqual(60, layout.boxHeight(div, frame));
+    try testing.expectEqual(60, layout.boxTop(p, frame));
+
+    // A width moves the box
+    try div.setAttribute(class, comptime .wrap("w"), frame);
+    try testing.expectEqual(40, layout.boxWidth(div, frame));
+
+    // A class in a compound left of the subject: what's under it can change
+    try testing.expectEqual(false, sm.class_reach.get("k").?.own_values);
+    try div.setAttribute(class, comptime .wrap("w k"), frame);
+    try testing.expectEqual(5, layout.boxHeight(div.asNode().firstChild().?.as(Element), frame));
+}
+
 test "StyleManager: a viewport change drops the layout" {
     const layout = @import("layout.zig");
     const frame = try testing.createFrame();
@@ -11751,8 +12020,15 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
         \\div:focus-within ~ .tall { height: 33px } :focus > span { height: 6px }
         \\:focus + div { height: 13px }
         ,
+        // Classes that set what another one does, or what it was already
+        \\.blk { height: 10px } .same { height: 10px } .tall { height: 30px; margin-top: 0 }
+        \\.box { min-height: 100px } .on { margin-top: 0 } .wide { width: 200px; opacity: 0 }
+        \\.abs { position: absolute; top: 3px; left: 4px } .ib { position: absolute; right: 2px }
+        \\.row { display: flex; visibility: hidden } .hid { display: none; top: 1px }
+        \\.abs.on { left: 0; right: 0 } .blk + .same { height: 11px }
+        ,
     };
-    const classes = [_][]const u8{ "blk", "tall", "box", "hid", "ib", "abs", "wide", "on", "row" };
+    const classes = [_][]const u8{ "blk", "tall", "box", "hid", "ib", "abs", "wide", "on", "row", "same" };
 
     for (sheets, 0..) |sheet, seed| {
         const frame = try testing.createFrame();
