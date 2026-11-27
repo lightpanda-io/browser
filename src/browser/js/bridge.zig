@@ -132,6 +132,7 @@ pub const Function = struct {
     arity: usize,
     noop: bool = false,
     wpt_only: bool = false,
+    unforgeable: bool = false, // Web IDL [LegacyUnforgeable]
     js_name: ?[:0]const u8 = null,
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
@@ -143,6 +144,7 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .wpt_only = opts.wpt_only,
+            .unforgeable = opts.unforgeable,
             .js_name = opts.js_name,
             .exposed = opts.exposed,
             .rejects_bad_receiver = returnsPromise(@TypeOf(func)),

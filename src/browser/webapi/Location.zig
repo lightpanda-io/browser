@@ -191,21 +191,21 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const toString = bridge.function(Location.toString, .{});
-    pub const href = bridge.accessor(Location.toString, setHref, .{});
+    pub const toString = bridge.function(Location.toString, .{ .unforgeable = true });
+    pub const href = bridge.accessor(Location.toString, setHref, .{ .unforgeable = true, .deletable = false });
     fn setHref(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
         return self.assign(url, frame);
     }
 
-    pub const search = bridge.accessor(Location.getSearch, Location.setSearch, .{});
-    pub const hash = bridge.accessor(Location.getHash, Location.setHash, .{});
-    pub const pathname = bridge.accessor(Location.getPathname, Location.setPathname, .{});
-    pub const hostname = bridge.accessor(Location.getHostname, null, .{});
-    pub const host = bridge.accessor(Location.getHost, null, .{});
-    pub const port = bridge.accessor(Location.getPort, null, .{});
-    pub const origin = bridge.accessor(Location.getOrigin, null, .{});
-    pub const protocol = bridge.accessor(Location.getProtocol, null, .{});
-    pub const assign = bridge.function(Location.assign, .{});
-    pub const replace = bridge.function(Location.replace, .{});
-    pub const reload = bridge.function(Location.reload, .{});
+    pub const search = bridge.accessor(Location.getSearch, Location.setSearch, .{ .unforgeable = true, .deletable = false });
+    pub const hash = bridge.accessor(Location.getHash, Location.setHash, .{ .unforgeable = true, .deletable = false });
+    pub const pathname = bridge.accessor(Location.getPathname, Location.setPathname, .{ .unforgeable = true, .deletable = false });
+    pub const hostname = bridge.accessor(Location.getHostname, null, .{ .unforgeable = true, .deletable = false });
+    pub const host = bridge.accessor(Location.getHost, null, .{ .unforgeable = true, .deletable = false });
+    pub const port = bridge.accessor(Location.getPort, null, .{ .unforgeable = true, .deletable = false });
+    pub const origin = bridge.accessor(Location.getOrigin, null, .{ .unforgeable = true, .deletable = false });
+    pub const protocol = bridge.accessor(Location.getProtocol, null, .{ .unforgeable = true, .deletable = false });
+    pub const assign = bridge.function(Location.assign, .{ .unforgeable = true });
+    pub const replace = bridge.function(Location.replace, .{ .unforgeable = true });
+    pub const reload = bridge.function(Location.reload, .{ .unforgeable = true });
 };

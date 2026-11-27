@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-/// The event handlers (onclick, ...) of HTML elements.
+/// The event handler content attributes (onclick="...") of HTML elements.
 pub const Handler = enum {
     onabort,
     onanimationcancel,
@@ -110,6 +110,12 @@ pub const Handler = enum {
     onsuspend,
     ontimeupdate,
     ontoggle,
+    // Chrome without a touch screen hides the IDL attributes but still
+    // compiles the content attributes.
+    ontouchcancel,
+    ontouchend,
+    ontouchmove,
+    ontouchstart,
     ontransitioncancel,
     ontransitionend,
     ontransitionrun,

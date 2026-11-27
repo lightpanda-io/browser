@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=location>
@@ -27,11 +28,31 @@
 </script>
 
 <script id=location_pathname_setter>
-  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Location.prototype, 'pathname').set);
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(location, 'pathname').set);
 </script>
 
 <script id=location_search_setter>
-  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Location.prototype, 'search').set);
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(location, 'search').set);
+</script>
+
+<script id=location_unforgeable>
+{
+  // [LegacyUnforgeable]: every member is an own, non-configurable property
+  // of the instance; the prototype has none of them.
+  for (const name of ['href', 'origin', 'protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash']) {
+    const d = Object.getOwnPropertyDescriptor(location, name);
+    testing.expectEqual([name, 'function', false, true], [name, typeof d.get, d.configurable, d.enumerable]);
+    testing.expectEqual(false, Object.hasOwn(Location.prototype, name));
+  }
+  for (const name of ['assign', 'replace', 'reload', 'toString']) {
+    const d = Object.getOwnPropertyDescriptor(location, name);
+    testing.expectEqual([name, 'function', false, false, true], [name, typeof d.value, d.configurable, d.writable, d.enumerable]);
+    testing.expectEqual(false, Object.hasOwn(Location.prototype, name));
+  }
+  testing.expectEqual(false, delete location.pathname);
+  location.toString = null;
+  testing.expectEqual('function', typeof location.toString);
+}
 </script>
 
 <div id="sec1"></div>
