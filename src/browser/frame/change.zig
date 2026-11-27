@@ -166,7 +166,7 @@ pub fn textChanged(cdata: *CData, old: String, frame: *Frame) void {
     _ = old;
     if (detachedHandled(cdata.asNode(), frame) == false) {
         styleChanged(frame);
-        observers.scheduleResizeChecks(frame);
+        observers.layoutChanged(frame, .resize);
     }
 }
 
@@ -299,8 +299,7 @@ fn renderingChanged(frame: *Frame) void {
 /// A change that can move a box without changing any selector match or
 /// cascaded value, like an inline transform: only the layout observers look.
 fn layoutObserversChanged(frame: *Frame) void {
-    observers.scheduleIntersectionChecks(frame);
-    observers.scheduleResizeChecks(frame);
+    observers.layoutChanged(frame, .all);
 }
 
 /// Stamps the cascade: any change that can alter a selector match or cascade

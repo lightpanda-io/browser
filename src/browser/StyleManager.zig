@@ -95,6 +95,10 @@ origin_memo: ?OriginMemo = null,
 // element's geometry, a height can stop at a declared one (see heightWritten).
 inline_bumps: usize = 0,
 
+// Inline writes that move a box no memo holds, like a transform (see
+// geometryVersion).
+origin_bumps: usize = 0,
+
 // A box that sizes others by its content couldn't be flagged (see
 // setSizesOthers), in the layout memo's current version.
 unscoped_sizing: bool = false,
@@ -2913,6 +2917,9 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach_: Memos, moves_box:
     }
     // A transform reaches no memo, but moves the origins (translateX)
     self.origin_memo = null;
+    if (moves_box) {
+        self.origin_bumps += 1;
+    }
     var it = reach.iterator();
     while (it.next()) |memo| {
         switch (memo) {
@@ -4649,6 +4656,12 @@ const HitBands = struct {
 // kept the rest, layout_bumps when it couldn't.
 fn hitVersion(self: *const StyleManager) usize {
     return self.extentVersion() + self.inline_bumps;
+}
+
+/// Bumped by every change that can resize or move a box, a transform
+/// included: hitVersion, which a hit reads alongside what it doesn't track.
+pub fn geometryVersion(self: *const StyleManager) usize {
+    return self.hitVersion() + self.origin_bumps;
 }
 
 /// The cursor of the last line Element.horizontalPosition walked, left at the

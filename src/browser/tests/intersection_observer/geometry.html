@@ -314,3 +314,33 @@
     testing.expectEqual([false, true, false], seen);
   });
 </script>
+
+<script id=moved_by_transform type=module>
+  // An inline transform moves the target without resizing any box, whichever
+  // way it is written.
+  const state = await testing.async();
+  const result = await serial(async () => {
+    const target = box(0);
+    target.style.left = '5000px';
+    const { seen, observer } = watch(target);
+    const steps = [
+      () => { target.style.transform = 'translateX(-5000px)'; },
+      () => { target.style.transform = ''; },
+      () => target.setAttribute('style', 'top: 0; left: 5000px; transform: translateX(-5000px)'),
+      () => target.setAttribute('style', 'top: 0; left: 5000px'),
+    ];
+    await testing.nextFrame();
+    for (const step of steps) {
+      step();
+      await testing.nextFrame();
+    }
+    observer.disconnect();
+    target.remove();
+    return seen;
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([false, 1, false, 1, false], result);
+  });
+</script>
