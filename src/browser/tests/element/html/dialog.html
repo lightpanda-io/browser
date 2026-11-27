@@ -117,6 +117,30 @@
   }
 </script>
 
+<script id="modal_pseudo_class">
+  {
+    const dialog = document.createElement('dialog')
+    document.body.append(dialog)
+    testing.expectFalse(dialog.matches(':modal'))
+
+    dialog.show()
+    testing.expectFalse(dialog.matches(':modal'))
+    dialog.close()
+
+    dialog.showModal()
+    testing.expectTrue(dialog.matches(':modal'))
+    testing.expectEqual(dialog, document.querySelector('dialog:modal'))
+
+    dialog.close()
+    testing.expectFalse(dialog.matches(':modal'))
+    testing.expectEqual(null, document.querySelector(':modal'))
+
+    dialog.showModal()
+    dialog.remove()
+    testing.expectFalse(dialog.matches(':modal'))
+  }
+</script>
+
 <script id="showModal_throws_when_disconnected">
   {
     const dialog = document.createElement('dialog')

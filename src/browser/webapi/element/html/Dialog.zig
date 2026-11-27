@@ -102,6 +102,12 @@ pub fn requestCloseTopModal(frame: *Frame) !void {
     try dialog.close(null, frame);
 }
 
+/// Whether the dialog is in its document's modal stack, i.e. matches `:modal`.
+pub fn isModal(self: *Dialog, frame: *Frame) bool {
+    const list = self.asNode().getDocument(frame)._modal_dialogs.items;
+    return std.mem.findScalar(*Dialog, list, self) != null;
+}
+
 fn removeModal(element: *Element, frame: *Frame) void {
     const dialog = element.is(Dialog) orelse return;
     const list = &element.asNode().getDocument(frame)._modal_dialogs;
