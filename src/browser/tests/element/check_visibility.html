@@ -1790,3 +1790,32 @@
     box.remove();
   }
 </script>
+
+<script id="nth_extreme_coefficients">
+  {
+    // An+B coefficients beyond the i32 range: clamped and never matching, or,
+    // for "n-<digits>" written as one identifier, an invalid selector that
+    // drops its rule.
+    const sheet = document.createElement("style");
+    sheet.textContent = `
+      .nx > :nth-child(-n-2147483647) { display: none }
+      .nx > :nth-child(2147483647n+2147483647) { display: none }
+      .nx > :nth-last-child(99999999999n+1) { display: none }
+      .nx > :nth-of-type(n - 99999999999) { display: none }
+      .nx > :nth-child(n-99999999999), .nx > i { display: none }
+      .nx > :nth-child(n - 99999999999), .nx > b { display: none }
+      .nx > :nth-child(1073741823n+3) { display: none }
+    `;
+    document.head.appendChild(sheet);
+    const div = document.createElement("div");
+    div.innerHTML = "<div class=nx><i></i><b></b><u></u><s></s></div>";
+    document.body.appendChild(div);
+    const [i, b, u, s] = div.firstChild.children;
+    testing.expectEqual(true, i.checkVisibility());
+    testing.expectEqual(false, b.checkVisibility());
+    testing.expectEqual(false, u.checkVisibility());
+    testing.expectEqual(true, s.checkVisibility());
+    div.remove();
+    sheet.remove();
+  }
+</script>

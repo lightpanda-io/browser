@@ -912,25 +912,15 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
         self.input = self.input[1..];
     } else {
         // Parse numeric coefficient
-        var num: i32 = 0;
-        var digit_count: usize = 0;
-        p = self.peek();
-        while (std.ascii.isDigit(p)) {
-            num = num * 10 + @as(i32, p - '0');
-            self.input = self.input[1..];
-            digit_count += 1;
-            p = self.peek();
-        }
-
-        if (digit_count > 0) {
+        if (self.nthDigits()) |num| {
             p = self.peek();
             if (p == 'n' or p == 'N') {
-                a = sign_a * num;
+                a = nthInteger(sign_a, num);
                 has_n = true;
                 self.input = self.input[1..];
             } else {
                 // Just a number, no 'n', so this is 'b'
-                b = sign_a * num;
+                b = nthInteger(sign_a, num);
                 return .{ .a = 0, .b = b };
             }
         } else if (sign_a != 1) {
@@ -944,31 +934,47 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
     }
 
     // Parse offset 'b'
-    _ = self.skipSpaces();
+    var spaced = self.skipSpacesConsumed();
     p = self.peek();
     if (p == '+' or p == '-') {
         const sign_b: i32 = if (p == '-') -1 else 1;
         self.input = self.input[1..];
-        _ = self.skipSpaces();
-
-        var num: i32 = 0;
-        var digit_count: usize = 0;
-        p = self.peek();
-        while (std.ascii.isDigit(p)) {
-            num = num * 10 + @as(i32, p - '0');
-            self.input = self.input[1..];
-            digit_count += 1;
-            p = self.peek();
+        if (self.skipSpacesConsumed()) {
+            spaced = true;
         }
 
-        if (digit_count == 0) {
+        const num = self.nthDigits() orelse return error.InvalidNthPattern;
+
+        // "n-123" written without a space is a single <ident-token> so they
+        // aren't clamped. A selector is invalid when they don't fit an i32.
+        if (sign_b == -1 and !spaced and num > -std.math.minInt(i32)) {
             return error.InvalidNthPattern;
         }
 
-        b = sign_b * num;
+        b = nthInteger(sign_b, num);
     }
 
     return .{ .a = a, .b = b };
+}
+
+// Consumes a run of ASCII digits in saturating fashion, null if there's none.
+fn nthDigits(self: *Parser) ?u32 {
+    const input = self.input;
+    var num: u32 = 0;
+    var i: usize = 0;
+    while (i < input.len and std.ascii.isDigit(input[i])) : (i += 1) {
+        num = num *| 10 +| (input[i] - '0');
+    }
+    if (i == 0) {
+        return null;
+    }
+    self.input = input[i..];
+    return num;
+}
+
+// A CSS <integer> beyond the i32 range is clamped to it, as in Blink.
+fn nthInteger(sign: i32, magnitude: u32) i32 {
+    return std.math.lossyCast(i32, @as(i64, sign) * magnitude);
 }
 
 pub fn id(self: *Parser, arena: Allocator) ![]const u8 {
@@ -1850,6 +1856,86 @@ test "Selector: Parser.parseNthPattern" {
         try testing.expectEqual(2, pattern.a);
         try testing.expectEqual(1, pattern.b);
         try testing.expectEqual("  )", parser.input);
+    }
+
+    // An integer beyond the i32 range is clamped to it
+    const max = std.math.maxInt(i32);
+    const min = std.math.minInt(i32);
+    {
+        var parser = Parser{ .input = "2147483647n+2147483647)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(max, pattern.a);
+        try testing.expectEqual(max, pattern.b);
+        try testing.expectEqual(")", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "2147483648)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(0, pattern.a);
+        try testing.expectEqual(max, pattern.b);
+        try testing.expectEqual(")", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "-2147483649)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(0, pattern.a);
+        try testing.expectEqual(min, pattern.b);
+        try testing.expectEqual(")", parser.input);
+    }
+
+    {
+        // 2^32 and 2^64, which wrap a u32 and a u64 to 0
+        var parser = Parser{ .input = "4294967296n+18446744073709551616)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(max, pattern.a);
+        try testing.expectEqual(max, pattern.b);
+        try testing.expectEqual(")", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "-1111111111111111111111111111111111111111n - 1111111111111111111111111111111111111111)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(min, pattern.a);
+        try testing.expectEqual(min, pattern.b);
+        try testing.expectEqual(")", parser.input);
+    }
+
+    // "n-<digits>" without a space is one identifier: its digits aren't
+    // clamped, they have to fit
+    {
+        var parser = Parser{ .input = "-n-2147483648)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(-1, pattern.a);
+        try testing.expectEqual(min, pattern.b);
+        try testing.expectEqual(")", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "n-2147483649)" };
+        try testing.expectError(error.InvalidNthPattern, parser.parseNthPattern());
+    }
+
+    {
+        var parser = Parser{ .input = "2n-1111111111111111111111111111111111111111)" };
+        try testing.expectError(error.InvalidNthPattern, parser.parseNthPattern());
+    }
+
+    {
+        var parser = Parser{ .input = "n- 2147483649)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(1, pattern.a);
+        try testing.expectEqual(min, pattern.b);
+        try testing.expectEqual(")", parser.input);
+    }
+
+    {
+        var parser = Parser{ .input = "n -2147483649)" };
+        const pattern = try parser.parseNthPattern();
+        try testing.expectEqual(1, pattern.a);
+        try testing.expectEqual(min, pattern.b);
+        try testing.expectEqual(")", parser.input);
     }
 }
 
