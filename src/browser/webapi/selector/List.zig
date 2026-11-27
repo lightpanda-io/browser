@@ -685,7 +685,10 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
     const node = el.asNode();
     switch (pseudo) {
         // State pseudo-classes
-        .modal => return false,
+        .modal => {
+            const dialog = el.is(Node.Element.Html.Dialog) orelse return false;
+            return dialog.isModal(frame);
+        },
         .popover_open => return @import("../element/popover.zig").isOpen(el, frame),
         .checked => {
             if (el.is(Node.Element.Html.Input)) |input| {
