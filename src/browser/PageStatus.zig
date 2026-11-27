@@ -69,6 +69,7 @@ missing_globals: MissingGlobals = .{},
 const global_features = std.StaticStringMap(Unsupported).initComptime(.{
     .{ "ImageBitmap", .canvas2d },
     .{ "createImageBitmap", .canvas2d },
+    .{ "WebGLRenderingContext", .webgl },
     .{ "WebGL2RenderingContext", .webgl },
 });
 

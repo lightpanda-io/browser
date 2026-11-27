@@ -21,6 +21,8 @@ const js = @import("../../js/js.zig");
 
 const Blob = @import("../Blob.zig");
 const EventTarget = @import("../EventTarget.zig");
+const WebGLRenderingContext = @import("WebGLRenderingContext.zig");
+const WebGL2RenderingContext = @import("WebGL2RenderingContext.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
 
@@ -40,6 +42,8 @@ _cached: ?DrawingContext = null,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,
+    webgl: *WebGLRenderingContext,
+    webgl2: *WebGL2RenderingContext,
 };
 
 pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas {
@@ -68,9 +72,12 @@ fn setHeight(self: *OffscreenCanvas, value: u32) void {
 
 fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
     if (self._cached) |cached| {
-        return switch (cached) {
-            .@"2d" => if (std.mem.eql(u8, context_type, "2d")) cached else null,
+        const matches = switch (cached) {
+            .@"2d" => std.mem.eql(u8, context_type, "2d"),
+            .webgl => Canvas.webglVersion(context_type) == .webgl1,
+            .webgl2 => Canvas.webglVersion(context_type) == .webgl2,
         };
+        return if (matches) cached else null;
     }
 
     if (std.mem.eql(u8, context_type, "2d")) {
@@ -79,10 +86,16 @@ fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution
         return self._cached;
     }
 
-    if (Canvas.isWebGL(context_type)) {
-        exec.page.status.noteUnsupported(.webgl);
+    const version = Canvas.webglVersion(context_type) orelse return null;
+    exec.page.status.noteUnsupported(.webgl);
+    if (exec.page.session.experimental_features.webgl == false) {
+        return null;
     }
-    return null;
+    self._cached = switch (version) {
+        .webgl1 => .{ .webgl = try exec._factory.create(WebGLRenderingContext{ ._canvas = .{ .offscreen = self } }) },
+        .webgl2 => .{ .webgl2 = try exec._factory.create(WebGL2RenderingContext{ ._canvas = .{ .offscreen = self } }) },
+    };
+    return self._cached;
 }
 
 /// Resolves to the same blank PNG as `HTMLCanvasElement.toBlob`. A canvas

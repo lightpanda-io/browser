@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<meta name=lp-mode content="skipped: Lightpanda without --experimental-features webgl">
+<script src="../testing.js"></script>
+
+<script id=no_context>
+{
+  const el = document.createElement('canvas');
+  testing.expectEqual(null, el.getContext('webgl'));
+  testing.expectEqual(null, el.getContext('webgl2'));
+  testing.expectEqual(null, el.getContext('experimental-webgl'));
+  testing.expectTrue(el.getContext('2d') !== null);
+
+  const offscreen = new OffscreenCanvas(1, 1);
+  testing.expectEqual(null, offscreen.getContext('webgl'));
+  testing.expectEqual(null, offscreen.getContext('webgl2'));
+}
+</script>
+
+<script id=no_interfaces>
+{
+  // Only built when the flag is on: they'd cost every context ~95 KB
+  testing.expectEqual('undefined', typeof WebGLRenderingContext);
+  testing.expectEqual('undefined', typeof WebGL2RenderingContext);
+  testing.expectEqual('undefined', typeof WebGLBuffer);
+}
+</script>

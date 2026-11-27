@@ -346,6 +346,9 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     if (global._session.experimental_features.serviceworker == false) {
         self.hideServiceWorker(is_frame, v8_context, global_obj);
     }
+    if (global._session.experimental_features.webgl) {
+        self.exposeExperimental(.webgl, v8_context, global_obj);
+    }
 
     // Store our TAO inside the internal field of the global object. This
     // maps the v8::Object -> Zig instance.
@@ -462,6 +465,23 @@ pub fn hideSecureContextInterfaces(self: *const Env, v8_context: *const v8.Conte
         self.deleteGlobal(v8_context, global_obj, name);
     }
     self.deletePrototypeMember(v8_context, global_obj, "navigator", "clipboard");
+}
+
+/// Adds the interfaces marked `Meta.experimental = feature` to the global.
+/// They're left out of the snapshot, so a context without the feature never
+/// builds them: the WebGL ones cost ~95 KB per context.
+fn exposeExperimental(self: *const Env, comptime feature: @TypeOf(.enum_literal), v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+    inline for (bridge.JsApis) |JsApi| {
+        if (comptime @hasDecl(JsApi.Meta, "experimental") and JsApi.Meta.experimental == feature) {
+            const template = self.templates[comptime bridge.JsApiLookup.getId(JsApi)];
+            const func = v8.v8__FunctionTemplate__GetFunction(template, v8_context).?;
+            const name = JsApi.Meta.name;
+            const key = v8.v8__String__NewFromUtf8(self.isolate.handle, name.ptr, v8.kNormal, @intCast(name.len));
+            var result: v8.MaybeBool = undefined;
+            // Web IDL: interface objects on the global are non-enumerable.
+            v8.v8__Object__DefineOwnProperty(global_obj, v8_context, key, @ptrCast(func), v8.DontEnum, &result);
+        }
+    }
 }
 
 fn deleteGlobal(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, comptime name: []const u8) void {
@@ -1055,12 +1075,17 @@ const PrivateSymbols = struct {
     child_nodes: Private,
     crypto_key_algorithm: Private,
     crypto_key_usages: Private,
+    // Set on a WebGL object (WebGLBuffer, …) once bound, and once deleted
+    webgl_bound: Private,
+    webgl_deleted: Private,
 
     fn init(isolate: *v8.Isolate) PrivateSymbols {
         return .{
             .child_nodes = Private.init(isolate, "child_nodes"),
             .crypto_key_algorithm = Private.init(isolate, "crypto_key_algorithm"),
             .crypto_key_usages = Private.init(isolate, "crypto_key_usages"),
+            .webgl_bound = Private.init(isolate, "webgl_bound"),
+            .webgl_deleted = Private.init(isolate, "webgl_deleted"),
         };
     }
 
@@ -1068,6 +1093,8 @@ const PrivateSymbols = struct {
         self.child_nodes.deinit();
         self.crypto_key_algorithm.deinit();
         self.crypto_key_usages.deinit();
+        self.webgl_bound.deinit();
+        self.webgl_deleted.deinit();
     }
 };
 
