@@ -225,8 +225,14 @@ pub fn CallToolResult(comptime Content: type) type {
     return struct {
         content: Content,
         isError: bool = false,
+        _meta: ?ResultMeta = null,
     };
 }
+
+/// Facts about how a call was served, for the client rather than the model.
+pub const ResultMeta = struct {
+    @"io.lightpanda/searchEngine": ?[]const u8 = null,
+};
 
 /// The text block stays alongside `structuredContent`: it is what the model
 /// reads, and the spec asks for the serialized form next to it anyway.
@@ -235,6 +241,7 @@ pub fn StructuredCallToolResult(comptime Content: type, comptime Structured: typ
         content: Content,
         structuredContent: Structured,
         isError: bool = false,
+        _meta: ?ResultMeta = null,
     };
 }
 

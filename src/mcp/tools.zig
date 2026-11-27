@@ -288,23 +288,30 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, browser_tools.errorMessage(err));
     };
 
+    try sendToolResult(server, id, result);
+}
+
+fn sendToolResult(server: *Server, id: std.json.Value, result: browser_tools.ToolResult) !void {
+    const meta: ?protocol.ResultMeta = if (result.search_engine) |engine| .{ .@"io.lightpanda/searchEngine" = engine } else null;
     if (result.image) |image| {
         const Content = struct { protocol.ImageContent(lp.screenshot.Prepared), protocol.TextContent([]const u8) };
         return server.sendResult(id, protocol.CallToolResult(Content){
             .content = .{ .{ .data = image, .mimeType = "image/png" }, .{ .text = result.text } },
             .isError = result.is_error,
+            ._meta = meta,
         });
     }
+    const Content = []const protocol.TextContent([]const u8);
+    const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
     if (result.page_state) |page_state| {
-        const Content = []const protocol.TextContent([]const u8);
-        const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
         return server.sendResult(id, protocol.StructuredCallToolResult(Content, browser_tools.PageState){
             .content = &content,
             .structuredContent = page_state,
             .isError = result.is_error,
+            ._meta = meta,
         });
     }
-    try sendToolResultText(server, id, result.text, result.is_error);
+    try server.sendResult(id, protocol.CallToolResult(Content){ .content = &content, .isError = result.is_error, ._meta = meta });
 }
 
 fn surfacesErrorInBand(tool: BrowserTool) bool {
@@ -654,6 +661,22 @@ test "MCP - structuredContent on a navigation" {
             .title = "",
         },
     } }, out.written());
+}
+
+test "MCP - a search result names its engine in _meta" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    try sendToolResult(server, .{ .integer = 1 }, .{ .text = "1. **a** — https://a.test", .search_engine = "brave" });
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "1. **a** — https://a.test" }},
+        ._meta = .{ .@"io.lightpanda/searchEngine" = "brave" },
+    } }, out.written());
+
+    out.clearRetainingCapacity();
+    try sendToolResult(server, .{ .integer = 2 }, .{ .text = "No results." });
+    try testing.expect(std.mem.find(u8, out.written(), "_meta") == null);
 }
 
 test "MCP - evaluate error reporting" {

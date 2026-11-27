@@ -410,6 +410,9 @@ pub const ToolResult = struct {
     no_data: bool = false,
     /// Set for the tools `Tool.reportsPageState` names.
     page_state: ?PageState = null,
+    /// The engine that answered a `search`, or the last one that failed: with
+    /// `.auto`, which keys are set doesn't say which one it was.
+    search_engine: ?[]const u8 = null,
     /// Set when a caller acts on an in-band failure's kind rather than only
     /// reporting its text. Implies `is_error`.
     failure: ?FailureKind = null,
