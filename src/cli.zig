@@ -268,6 +268,13 @@ pub fn Builder(comptime commands: anytype) type {
     return struct {
         const Self = @This();
 
+        /// Hidden commands exist in `Enum`/`Union` (for programmatic
+        /// construction, e.g. the C API's `embed`) but are not parseable
+        /// and never appear in help.
+        fn isHidden(comptime command: anytype) bool {
+            return @hasField(@TypeOf(command), "hidden") and command.hidden;
+        }
+
         /// Enum type for provided commands.
         pub const Enum = blk: {
             const len = commands.len + 1;
@@ -284,7 +291,27 @@ pub fn Builder(comptime commands: anytype) type {
             break :blk @Enum(Tag, .exhaustive, &names, &std.simd.iota(Tag, len));
         };
 
-        pub const command_names = tagNames(Enum);
+        const visible_count = blk: {
+            var n: usize = 0;
+            for (commands) |command| {
+                if (!isHidden(command)) n += 1;
+            }
+            break :blk n;
+        };
+
+        /// Typeable command names, `help` last; hidden commands left out.
+        pub const command_names: []const []const u8 = blk: {
+            var names: [visible_count + 1][]const u8 = undefined;
+            var i: usize = 0;
+            for (commands) |command| {
+                if (isHidden(command)) continue;
+                names[i] = command.name;
+                i += 1;
+            }
+            names[visible_count] = "help";
+            const frozen = names;
+            break :blk &frozen;
+        };
 
         const Field = struct {
             name: [:0]const u8,
@@ -464,6 +491,7 @@ pub fn Builder(comptime commands: anytype) type {
 
             const cmd_str: []const u8 = args.next() orelse "serve";
             inline for (commands) |command| {
+                if (comptime isHidden(command)) continue;
                 // Match a command.
                 if (std.mem.eql(u8, cmd_str, command.name)) {
                     const cmd_parsed = try parseCommand(allocator, command, &args);
@@ -480,6 +508,7 @@ pub fn Builder(comptime commands: anytype) type {
                 };
 
                 inline for (commands) |command| {
+                    if (comptime isHidden(command)) continue;
                     if (std.mem.eql(u8, command_name, command.name)) {
                         return .{
                             exec_name,
@@ -518,6 +547,7 @@ pub fn Builder(comptime commands: anytype) type {
             _ = args.skip();
 
             inline for (commands) |command| {
+                if (comptime isHidden(command)) continue;
                 if (std.mem.eql(u8, @tagName(command_enum), command.name)) {
                     const cmd_parsed = try parseCommand(allocator, command, &args);
                     return .{ exec_name, cmd_parsed };
@@ -588,10 +618,12 @@ pub fn Builder(comptime commands: anytype) type {
         /// Every command's flags and their accepted values, for generating
         /// shell completion scripts. Deprecated options are left out.
         pub const completion_spec: []const Completion.Command = blk: {
-            var specs: [commands.len + 1]Completion.Command = undefined;
-            for (commands, specs[0..commands.len]) |command, *spec| {
+            var specs: [visible_count + 1]Completion.Command = undefined;
+            var i: usize = 0;
+            for (commands) |command| {
+                if (isHidden(command)) continue;
                 const Command = @TypeOf(command);
-                spec.* = .{
+                specs[i] = .{
                     .name = command.name,
                     .positional = if (@hasField(Command, "positional")) .{
                         .name = command.positional.name,
@@ -600,8 +632,9 @@ pub fn Builder(comptime commands: anytype) type {
                     } else null,
                     .flags = commandFlags(command),
                 };
+                i += 1;
             }
-            specs[commands.len] = .{
+            specs[visible_count] = .{
                 .name = "help",
                 .positional = .{ .name = "command", .values = .{ .one_of = command_names }, .multiple = false },
                 .flags = &.{},
