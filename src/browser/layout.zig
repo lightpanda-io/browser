@@ -1156,11 +1156,34 @@ pub fn boxHeight(self: *Element, owner: *Frame) f64 {
         // write to that block reaches
         return height;
     }
+    if (style_manager.aspectRatio(self)) |aspect| {
+        return ratioHeight(self, aspect, edges, cached, owner);
+    }
     const content = cached.content orelse measureContentHeight(self, owner);
     // The fallback stands in for an empty box, padding included
     const height = clampHeight(self, @max(own.value, content + edges.padding), edges, owner);
     style_manager.setCacheHeights(self, content, height);
     return height;
+}
+
+// The height its aspect ratio gives the box's used width. A box with
+// content is no shorter than it (min-height: auto); a replaced box has none.
+fn ratioHeight(self: *Element, aspect: StyleManager.UsedAspectRatio, edges: Edges, cached: StyleManager.CachedHeights, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    style_manager.setHeightReadsWidth(self);
+    const height = if (aspect.border_box)
+        @max(edges.padding, aspect.ratio.heightOf(boxWidth(self, owner)))
+    else
+        aspect.ratio.heightOf(innerWidth(self, owner)) + edges.padding;
+    if (self.getTag().isReplacedOrControl()) {
+        const clamped = clampHeight(self, height, edges, owner);
+        style_manager.setCacheLayout(self, .box_height, clamped);
+        return clamped;
+    }
+    const content = cached.content orelse measureContentHeight(self, owner);
+    const clamped = clampHeight(self, @max(height, content + edges.padding), edges, owner);
+    style_manager.setCacheHeights(self, content, clamped);
+    return clamped;
 }
 
 // The height of a box that spans between its vertical insets (see

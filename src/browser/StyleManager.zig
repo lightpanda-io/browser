@@ -2675,7 +2675,13 @@ fn nextReaching(it: *CssParser.DeclarationsIterator, memo: Memo) ?Reaching {
     return null;
 }
 
-fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos, moves_box: bool) void {
+fn invalidateInline(self: *StyleManager, el: *Element, reach_: Memos, moves_box: bool) void {
+    var reach = reach_;
+    if (reach.contains(.heights) and self.hadAspectRatio(el)) {
+        // The ratio turns the height into a width (see declaredSize)
+        reach.remove(.heights);
+        reach.insert(.layout);
+    }
     if (moves_box and reach.count() != 0) {
         self.inline_bumps += 1;
     }
@@ -2701,6 +2707,16 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos, moves_box: 
             },
         }
     }
+}
+
+// Whether the layout read an aspect ratio of el's: one it read is in the
+// geometry memo, until a restyle drops both.
+fn hadAspectRatio(self: *StyleManager, el: *Element) bool {
+    if (self.geometry.fresh(self.frame) == false) {
+        return false;
+    }
+    const cached = self.geometry.memo.get(el) orelse return false;
+    return @TypeOf(self.geometry).load(cached).aspect_ratio.isNone() == false;
 }
 
 /// Drops `root`'s entry and those of everything that inherits from it.
@@ -3375,13 +3391,67 @@ pub fn touchPanBlockedAxes(self: *StyleManager, el: *Element) Element.ScrollAxes
     return .{ .x = p.pan_x_blocked, .y = p.pan_y_blocked };
 }
 
-/// Own computed width or height in px, from inline style or a sheet rule.
-/// Null when undeclared or when it needs layout to resolve.
+/// Own computed width or height in px, from inline style, a sheet rule or a
+/// presentational attribute. An auto width with an aspect ratio is the one
+/// the ratio gives a declared height. Null when undeclared or when it needs
+/// layout to resolve.
 pub fn declaredSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
-    const length = @field(self.geometryProps(el), @tagName(axis));
-    return @max(0, length.resolve(self, el) orelse return null);
+    const allocator = self.arena.allocator();
+    if (axis == .height) {
+        const length = self.geometry.ownProp(allocator, el, "height", self.frame);
+        return @max(0, length.resolve(self, el) orelse return null);
+    }
+    const length, const ratio = self.geometry.ownPair(allocator, el, "width", "aspect_ratio", self.frame);
+    if (length.resolve(self, el)) |px| {
+        return @max(0, px);
+    }
+    if (length.unit == .auto and ratio.isNone() == false) {
+        const geometry = self.geometryProps(el);
+        const height = @max(0, geometry.height.resolve(self, el) orelse return null);
+        if (geometry.border_box == false or geometry.aspect_ratio_auto == false) {
+            // Both sizes are of the box the ratio is
+            return ratio.widthOf(height);
+        }
+        // Border-box sizes, a content-box ratio. A percentage padding isn't
+        // read: the width would follow the containing block's.
+        const vertical = self.boxEdges(el, .height).padding.px;
+        const horizontal = self.boxEdges(el, .width).padding.px;
+        return ratio.widthOf(@max(0, height - vertical)) + horizontal;
+    }
+    return null;
+}
+
+pub const UsedAspectRatio = struct {
+    ratio: Ratio,
+    border_box: bool, // of the border box, else of the content box
+};
+
+/// el's aspect-ratio, or the one its width and height attributes map to
+/// (see Geometry.finish).
+pub fn aspectRatio(self: *StyleManager, el: *Element) ?UsedAspectRatio {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    // Read on every auto height: the one field, rarely set
+    const ratio = self.geometry.ownProp(self.arena.allocator(), el, "aspect_ratio", self.frame);
+    if (ratio.isNone()) {
+        return null;
+    }
+    const border_box, const auto = self.geometry.ownPair(self.arena.allocator(), el, "border_box", "aspect_ratio_auto", self.frame);
+    return .{ .ratio = ratio, .border_box = border_box and auto == false };
+}
+
+/// Whether a replaced element's undeclared size on `axis` is its natural
+/// one: a percentage width isn't, nor a height an aspect ratio gives.
+pub fn takesNaturalSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return true;
+    const geometry = self.geometryProps(el);
+    return switch (axis) {
+        .width => geometry.width.percentage() == null,
+        .height => geometry.aspect_ratio.isNone(),
+    };
 }
 
 /// A root container's declared height. html's percentage is of the viewport,
@@ -6416,6 +6486,86 @@ pub const Length = packed struct(u36) {
     }
 };
 
+/// A preferred aspect ratio, as its two terms: a quotient would round
+/// (200 / 60).
+pub const Ratio = packed struct(u64) {
+    width: f32 = 0,
+    height: f32 = 0,
+
+    // No ratio, or a degenerate one
+    fn isNone(self: Ratio) bool {
+        return self.width == 0;
+    }
+
+    pub fn widthOf(self: Ratio, height: f64) f64 {
+        return height * self.width / self.height;
+    }
+
+    pub fn heightOf(self: Ratio, width: f64) f64 {
+        return width * self.height / self.width;
+    }
+};
+
+// `aspect-ratio: auto || <ratio>`. A ratio with a 0 side is degenerate: it
+// behaves as auto, like a missing one (ratio 0).
+const AspectRatio = struct {
+    ratio: Ratio = .{},
+    auto: bool = true,
+
+    // Null for an invalid value, which drops the declaration, and for
+    // inherit, which a memo of own values can't follow
+    fn parse(value: []const u8) ?AspectRatio {
+        for ([_][]const u8{ "initial", "unset", "revert", "revert-layer" }) |keyword| {
+            if (std.ascii.eqlIgnoreCase(value, keyword)) {
+                return .{};
+            }
+        }
+        var result: AspectRatio = .{ .auto = false };
+        var ratio: ?Ratio = null;
+        var rest = value;
+        while (true) {
+            rest = std.mem.trimStart(u8, rest, &std.ascii.whitespace);
+            if (rest.len == 0) {
+                break;
+            }
+            if (std.ascii.startsWithIgnoreCase(rest, "auto")) {
+                if (result.auto) return null;
+                result.auto = true;
+                rest = rest[4..];
+                continue;
+            }
+            if (ratio != null) return null;
+            const width = takeNumber(&rest) orelse return null;
+            rest = std.mem.trimStart(u8, rest, &std.ascii.whitespace);
+            var height: f32 = 1;
+            if (std.mem.startsWith(u8, rest, "/")) {
+                rest = std.mem.trimStart(u8, rest[1..], &std.ascii.whitespace);
+                height = takeNumber(&rest) orelse return null;
+            }
+            ratio = if (width > 0 and height > 0) .{ .width = width, .height = height } else .{};
+        }
+        const r = ratio orelse return if (result.auto) result else null;
+        if (r.isNone()) {
+            return .{};
+        }
+        result.ratio = r;
+        return result;
+    }
+
+    // A non-negative <number> at the start of `rest`, which moves past it
+    fn takeNumber(rest: *[]const u8) ?f32 {
+        const text = rest.*;
+        var end: usize = 0;
+        while (end < text.len and (std.ascii.isDigit(text[end]) or text[end] == '.')) : (end += 1) {}
+        const number = std.fmt.parseFloat(f32, text[0..end]) catch return null;
+        if (std.math.isFinite(number) == false) {
+            return null;
+        }
+        rest.* = text[end..];
+        return number;
+    }
+};
+
 /// A percentage of the containing block, plus a px offset (calc(100% - 2rem)).
 pub const Percent = struct {
     fraction: f64,
@@ -6803,7 +6953,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "min-height", "max-height", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-block", "margin-left", "margin-right", "margin-top", "margin-bottom", "margin-inline-start", "margin-inline-end", "margin-block-start", "margin-block-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end", "z-index", "padding", "padding-inline", "padding-block", "padding-top", "padding-right", "padding-bottom", "padding-left", "padding-inline-start", "padding-inline-end", "padding-block-start", "padding-block-end", "box-sizing" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "min-height", "max-height", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-block", "margin-left", "margin-right", "margin-top", "margin-bottom", "margin-inline-start", "margin-inline-end", "margin-block-start", "margin-block-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end", "z-index", "padding", "padding-inline", "padding-block", "padding-top", "padding-right", "padding-bottom", "padding-left", "padding-inline-start", "padding-inline-end", "padding-block-start", "padding-block-end", "box-sizing", "aspect-ratio" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -6832,6 +6982,8 @@ const Geometry = struct {
         padding_right: ?Length = null,
         padding_bottom: ?Length = null,
         padding_left: ?Length = null,
+        aspect_ratio: ?Ratio = null,
+        aspect_ratio_auto: ?bool = null,
 
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
@@ -6972,6 +7124,11 @@ const Geometry = struct {
                 },
                 .@"box-sizing" => {
                     self.border_box = std.ascii.eqlIgnoreCase(value, "border-box");
+                },
+                .@"aspect-ratio" => {
+                    const parsed = AspectRatio.parse(value) orelse return;
+                    self.aspect_ratio = parsed.ratio;
+                    self.aspect_ratio_auto = parsed.auto;
                 },
                 else => {},
             }
@@ -7123,30 +7280,70 @@ const Geometry = struct {
         }
     };
 
-    // Presentational width and height attributes (HTML Rendering §15.3.10
-    // "Tables"): author-level hints that any declaration beats.
+    // Presentational width and height attributes: author-level hints that
+    // any declaration beats, `height: auto` included.
     pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
-        const tag = el.getTag();
-        // td and th ignore a zero height; table and tr don't
-        const zero_height = switch (tag) {
-            .table, .tr => true,
-            .td, .th => false,
-            else => return,
-        };
-        if (priorities.get(.width) == 0 and tag != .tr) {
-            if (el.getAttributeSafe(comptime .wrap("width"))) |attr| {
-                if (parseDimension(attr, false)) |length| {
-                    p.width = length;
+        switch (el.getTag()) {
+            // HTML Rendering §15.3.10 "Tables": td and th ignore a zero
+            // height, table and tr don't
+            .table => dimensionHints(p, el, priorities, .{ .width = true, .zero_height = true }),
+            .tr => dimensionHints(p, el, priorities, .{ .width = false, .zero_height = true }),
+            .td, .th => dimensionHints(p, el, priorities, .{ .width = true, .zero_height = false }),
+            // §15.4.3 "Attributes for embedded content and images"
+            .iframe => dimensionHints(p, el, priorities, .{ .width = true, .zero_height = true }),
+            .img, .video => {
+                dimensionHints(p, el, priorities, .{ .width = true, .zero_height = true });
+                // Both, as numbers, map to `aspect-ratio: auto w / h`
+                if (priorities.get(.aspect_ratio) != 0) {
+                    return;
                 }
+                const width = attributeDimension(el, comptime .wrap("width"), true) orelse return;
+                const height = attributeDimension(el, comptime .wrap("height"), true) orelse return;
+                if (width.unit == .px and height.unit == .px and width.value > 0 and height.value > 0) {
+                    p.aspect_ratio = .{ .width = width.value, .height = height.value };
+                    p.aspect_ratio_auto = true;
+                }
+            },
+            // Its attributes are its natural size (see Element.getElementAxis),
+            // which `auto` prefers to a declared ratio
+            .canvas => if (p.aspect_ratio_auto) {
+                const width = canvasDimension(el, comptime .wrap("width")) orelse 300;
+                const height = canvasDimension(el, comptime .wrap("height")) orelse 150;
+                if (width > 0 and height > 0) {
+                    p.aspect_ratio = .{ .width = width, .height = height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const DimensionHints = struct {
+        width: bool,
+        zero_height: bool,
+    };
+
+    fn dimensionHints(p: *Computed, el: *Element, priorities: *const Priorities(Declared), comptime hints: DimensionHints) void {
+        if (hints.width and priorities.get(.width) == 0) {
+            if (attributeDimension(el, comptime .wrap("width"), false)) |length| {
+                p.width = length;
             }
         }
         if (priorities.get(.height) == 0) {
-            if (el.getAttributeSafe(comptime .wrap("height"))) |attr| {
-                if (parseDimension(attr, zero_height)) |length| {
-                    p.height = length;
-                }
+            if (attributeDimension(el, comptime .wrap("height"), hints.zero_height)) |length| {
+                p.height = length;
             }
         }
+    }
+
+    fn attributeDimension(el: *Element, name: String, allow_zero: bool) ?Length {
+        return parseDimension(el.getAttributeSafe(name) orelse return null, allow_zero);
+    }
+
+    // A canvas' width and height: non-negative integers
+    fn canvasDimension(el: *Element, name: String) ?f32 {
+        const attr = el.getAttributeSafe(name) orelse return null;
+        const value = std.fmt.parseInt(u32, std.mem.trim(u8, attr, &std.ascii.whitespace), 10) catch return null;
+        return @floatFromInt(value);
     }
 
     // HTML "rules for parsing dimension values": leading digits, then a `%`
@@ -7170,7 +7367,7 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u688) {
+    const Computed = packed struct(u753) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -7207,6 +7404,10 @@ const Geometry = struct {
         padding_right: Length = .{},
         padding_bottom: Length = .{},
         padding_left: Length = .{},
+        // aspect-ratio. Without `auto`, it's of the box box-sizing names,
+        // with it of the content box.
+        aspect_ratio: Ratio = .{},
+        aspect_ratio_auto: bool = true,
     };
 
     // Memory optimization. We usedto store each value as a
@@ -7220,6 +7421,8 @@ const Geometry = struct {
         units: [(length_count + 1) / 2]u8,
         flags: Flags,
         z_index: ZIndex,
+        // its two terms: as a u64, Ratio would align the record to 8
+        aspect_ratio: [2]f32,
 
         const names = @typeInfo(Computed).@"struct".field_names;
         const types = @typeInfo(Computed).@"struct".field_types;
@@ -7228,11 +7431,11 @@ const Geometry = struct {
 
         comptime {
             std.debug.assert(@bitSizeOf(Length.Unit) == 4);
-            std.debug.assert(names.len - length_count - 1 <= @bitSizeOf(Flags));
+            std.debug.assert(names.len - length_count - 2 <= @bitSizeOf(Flags));
         }
 
         fn pack(computed: Computed) Stored {
-            var stored: Stored = .{ .values = undefined, .units = @splat(0), .flags = 0, .z_index = computed.z_index };
+            var stored: Stored = .{ .values = undefined, .units = @splat(0), .flags = 0, .z_index = computed.z_index, .aspect_ratio = .{ computed.aspect_ratio.width, computed.aspect_ratio.height } };
             comptime var length = 0;
             comptime var flag = 0;
             inline for (names, types) |name, T| {
@@ -7241,7 +7444,7 @@ const Geometry = struct {
                     stored.values[length] = value.value;
                     stored.units[length / 2] |= @as(u8, @backingInt(value.unit)) << (length % 2 * 4);
                     length += 1;
-                } else if (T != ZIndex) {
+                } else if (T != ZIndex and T != Ratio) {
                     stored.flags |= @as(Flags, @intFromBool(value)) << flag;
                     flag += 1;
                 }
@@ -7250,7 +7453,7 @@ const Geometry = struct {
         }
 
         fn unpack(self: Stored) Computed {
-            var computed: Computed = .{ .z_index = self.z_index };
+            var computed: Computed = .{ .z_index = self.z_index, .aspect_ratio = .{ .width = self.aspect_ratio[0], .height = self.aspect_ratio[1] } };
             comptime var length = 0;
             comptime var flag = 0;
             inline for (names, types) |name, T| {
@@ -7258,7 +7461,7 @@ const Geometry = struct {
                     const unit: std.meta.Tag(Length.Unit) = @truncate(self.units[length / 2] >> (length % 2 * 4));
                     @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(unit) };
                     length += 1;
-                } else if (T != ZIndex) {
+                } else if (T != ZIndex and T != Ratio) {
                     @field(computed, name) = (self.flags >> flag) & 1 == 1;
                     flag += 1;
                 }
@@ -11251,7 +11454,7 @@ test "StyleManager: records: a group allocates the chunks it reaches" {
 }
 
 test "StyleManager: records: geometry packs its lengths' units with the flags" {
-    try testing.expectEqual(92, @sizeOf(Records(Geometry.Stored).Entry));
+    try testing.expectEqual(100, @sizeOf(Records(Geometry.Stored).Entry));
 
     // Each field apart from its neighbours
     const names = Geometry.Stored.names;
@@ -11262,6 +11465,8 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
             @field(computed, name) = .{ .value = @floatFromInt(n + 1), .unit = .percent };
         } else if (T == ZIndex) {
             @field(computed, name) = .of(-@as(i64, n));
+        } else if (T == Ratio) {
+            @field(computed, name) = .{ .width = @floatFromInt(n + 1), .height = 3 };
         } else {
             @field(computed, name) = true;
         }
@@ -11276,6 +11481,8 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
             @field(computed, name) = .{ .value = -@as(f32, @floatFromInt(n)) / 3, .unit = unit_values[n % unit_values.len] };
         } else if (T == ZIndex) {
             @field(computed, name) = .of(n);
+        } else if (T == Ratio) {
+            @field(computed, name) = .{ .width = @as(f32, @floatFromInt(n)) / 7, .height = 2 };
         } else {
             @field(computed, name) = n % 2 == 0;
         }
