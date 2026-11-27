@@ -597,6 +597,7 @@ fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.
         .dump = if (dump_mode) |mode| @tagName(mode) else "",
         .content = content,
         .@"error" = if (err) |e| @errorName(e) else null,
+        .terminated = if (frame) |f| f.js.env.terminatePending() else false,
         .bot_challenge = if (frame) |f| f._bot_challenge else null,
         .page_status = if (frame) |f| &f.page.status else null,
     }, .{}, writer);
@@ -743,6 +744,7 @@ test "writeJsonEnvelope: page status" {
     try writeJsonEnvelope(&aw.writer, page.frame().?, null, "", null);
     try testing.expectJson(.{
         .http_status = 200,
+        .terminated = false,
         .page_status = .{
             .js_errors = 2,
             .unsupported = .{ .webgl = 0, .canvas2d = 0 },
