@@ -209,3 +209,47 @@
     }
 }
 </script>
+
+<script id="new_customized_builtin">
+{
+    class NewButton extends HTMLButtonElement {}
+    customElements.define('new-button', NewButton, { extends: 'button' });
+    const btn = new NewButton();
+    testing.expectEqual(NewButton, btn.constructor);
+    testing.expectEqual('BUTTON', btn.tagName);
+    testing.expectEqual(null, btn.getAttribute('is'));
+    testing.expectEqual(true, btn.matches(':defined'));
+
+    const clone = btn.cloneNode();
+    testing.expectEqual(NewButton, clone.constructor);
+    testing.expectEqual(null, clone.getAttribute('is'));
+
+    // an interface reached through HTMLMediaElement
+    class NewAudio extends HTMLAudioElement {}
+    customElements.define('new-audio', NewAudio, { extends: 'audio' });
+    testing.expectEqual(NewAudio, new NewAudio().constructor);
+    testing.expectEqual(NewAudio, document.createElement('audio', { is: 'new-audio' }).constructor);
+
+    // HTMLElement is the interface of <abbr>
+    class NewAbbr extends HTMLElement {}
+    customElements.define('new-abbr', NewAbbr, { extends: 'abbr' });
+    testing.expectEqual('ABBR', new NewAbbr().tagName);
+}
+
+{
+    // `extends` names an element of another interface
+    class WrongInterface extends HTMLDivElement {}
+    customElements.define('wrong-interface', WrongInterface, { extends: 'p' });
+    testing.expectError('TypeError', () => new WrongInterface());
+
+    // a builtin interface needs `extends`
+    class NoExtends extends HTMLParagraphElement {}
+    customElements.define('no-extends', NoExtends);
+    testing.expectError('TypeError', () => new NoExtends());
+
+    class NotDefined extends HTMLDivElement {}
+    testing.expectError('TypeError', () => new NotDefined());
+    testing.expectError('TypeError', () => new HTMLDivElement());
+    testing.expectError('TypeError', () => new HTMLElement());
+}
+</script>

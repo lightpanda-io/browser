@@ -2250,6 +2250,16 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
     const tag_name = self.getTagNameDump();
     const node = try Frame.node_factory.createElementNS(document, self._namespace, tag_name, &self._attributes);
 
+    // The clone takes our is value, which `new MyButton()` holds without an
+    // `is` attribute. TODO: one that disagrees with our `is` attribute should
+    // win over it too.
+    if (frame.getCustomizedBuiltInDefinition(self)) |definition| {
+        const cloned = node.as(Element);
+        if (document._frame != null and !cloned._flags.builtin_undefined and !cloned._flags.customized_builtin) {
+            try Element.Html.Custom.initBuiltInWithIs(cloned, definition.name, frame);
+        }
+    }
+
     // A namespace outside the built-in set lives in a side table; the clone
     // must report the same namespaceURI.
     if (self._namespace == .unknown) {

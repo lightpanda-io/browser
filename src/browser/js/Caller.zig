@@ -623,7 +623,7 @@ fn createError(local: *const Local, err_local: *const Local, err: anyerror) *con
         error.RangeError => isolate.createRangeError(""),
         error.InvalidStringLength => isolate.createRangeError("Invalid string length"),
         error.OutOfMemory => isolate.createError("out of memory"),
-        error.IllegalConstructor => isolate.createError("Illegal Constructor"),
+        error.IllegalConstructor => isolate.createTypeError("Illegal Constructor"),
         else => domExceptionToJs(err_local, err) orelse isolate.createError(@errorName(err)),
     };
 }

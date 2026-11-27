@@ -438,6 +438,11 @@ fn invokeCallbackOnElement(element: *Element, comptime callback_name: [:0]const 
 
 pub fn initBuiltIn(element: *Element, frame: *Frame) !void {
     const is_value = element.getAttributeSafe(comptime .wrap("is")) orelse return;
+    return initBuiltInWithIs(element, is_value, frame);
+}
+
+// `is_value` is the element's is value, which can differ from its `is` attribute
+pub fn initBuiltInWithIs(element: *Element, is_value: []const u8, frame: *Frame) !void {
     element._flags.builtin_undefined = true;
     if (frame.window.getCustomElements()._definitions.get(is_value)) |definition| {
         return upgradeBuiltIn(element, definition, frame);
