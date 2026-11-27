@@ -16,6 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+//! Reused metaprogramming routines.
+
+const js = @import("js/js.zig");
+
 // The prototype ("parent") type of T, as declared by its `pub const Proto`.
 // This decl is the single source of truth for prototype-chain discovery.
 pub fn Proto(comptime T: type) ?type {
@@ -43,4 +47,15 @@ pub fn Struct(comptime T: type) type {
         .void => T,
         else => unreachable,
     };
+}
+
+/// Returns whether function type `F` returns a `js.Promise`, possibly wrapped
+/// in an error union.
+pub fn returnsPromise(comptime F: type) bool {
+    const R = @typeInfo(F).@"fn".return_type orelse return false;
+    const payload = switch (@typeInfo(R)) {
+        .error_union => |eu| eu.payload,
+        else => R,
+    };
+    return payload == js.Promise;
 }

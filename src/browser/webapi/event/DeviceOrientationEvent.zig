@@ -83,10 +83,6 @@ fn getGamma(self: *const DeviceOrientationEvent) ?f64 {
     return self._gamma;
 }
 
-fn getAbsolute(self: *const DeviceOrientationEvent) bool {
-    return self._absolute;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DeviceOrientationEvent);
 
@@ -99,5 +95,5 @@ pub const JsApi = struct {
     pub const alpha = bridge.accessor(DeviceOrientationEvent.getAlpha, null, .{});
     pub const beta = bridge.accessor(DeviceOrientationEvent.getBeta, null, .{});
     pub const gamma = bridge.accessor(DeviceOrientationEvent.getGamma, null, .{});
-    pub const absolute = bridge.accessor(DeviceOrientationEvent.getAbsolute, null, .{});
+    pub const absolute = bridge.fastAccessor("_absolute", null);
 };

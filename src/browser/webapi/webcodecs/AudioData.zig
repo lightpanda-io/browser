@@ -164,22 +164,6 @@ fn getFormat(self: *const AudioData) ?[]const u8 {
     return @tagName(format);
 }
 
-fn getSampleRate(self: *const AudioData) f32 {
-    return self._sample_rate;
-}
-
-fn getNumberOfFrames(self: *const AudioData) u32 {
-    return self._number_of_frames;
-}
-
-fn getNumberOfChannels(self: *const AudioData) u32 {
-    return self._number_of_channels;
-}
-
-fn getTimestamp(self: *const AudioData) i64 {
-    return self._timestamp;
-}
-
 fn getDuration(self: *const AudioData) u64 {
     if (self._sample_rate == 0) {
         return 0;
@@ -446,11 +430,11 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(AudioData.init, .{});
     pub const format = bridge.accessor(AudioData.getFormat, null, .{});
-    pub const sampleRate = bridge.accessor(AudioData.getSampleRate, null, .{});
-    pub const numberOfFrames = bridge.accessor(AudioData.getNumberOfFrames, null, .{});
-    pub const numberOfChannels = bridge.accessor(AudioData.getNumberOfChannels, null, .{});
+    pub const sampleRate = bridge.fastAccessor("_sample_rate", null);
+    pub const numberOfFrames = bridge.fastAccessor("_number_of_frames", null);
+    pub const numberOfChannels = bridge.fastAccessor("_number_of_channels", null);
     pub const duration = bridge.accessor(AudioData.getDuration, null, .{});
-    pub const timestamp = bridge.accessor(AudioData.getTimestamp, null, .{});
+    pub const timestamp = bridge.fastAccessor("_timestamp", null);
     pub const allocationSize = bridge.function(AudioData.allocationSize, .{});
     pub const copyTo = bridge.function(AudioData.copyTo, .{});
     pub const clone = bridge.function(AudioData.clone, .{});

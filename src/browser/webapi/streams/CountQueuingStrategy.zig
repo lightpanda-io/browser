@@ -32,10 +32,6 @@ pub fn init(init_: Init, exec: *const Execution) !*CountQueuingStrategy {
     return exec._factory.create(CountQueuingStrategy{ ._high_water_mark = init_.highWaterMark });
 }
 
-fn getHighWaterMark(self: *const CountQueuingStrategy) f64 {
-    return self._high_water_mark;
-}
-
 pub fn size(_: *const CountQueuingStrategy) u32 {
     return 1;
 }
@@ -49,6 +45,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(CountQueuingStrategy.init, .{});
-    pub const highWaterMark = bridge.accessor(CountQueuingStrategy.getHighWaterMark, null, .{});
+    pub const highWaterMark = bridge.fastAccessor("_high_water_mark", null);
     pub const size = bridge.function(CountQueuingStrategy.size, .{});
 };

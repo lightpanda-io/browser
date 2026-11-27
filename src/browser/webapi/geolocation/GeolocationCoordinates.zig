@@ -43,18 +43,6 @@ pub fn releaseRef(self: *GeolocationCoordinates, page: *Page) void {
     self._position.releaseRef(page);
 }
 
-fn getLatitude(self: *const GeolocationCoordinates) f64 {
-    return self._latitude;
-}
-
-fn getLongitude(self: *const GeolocationCoordinates) f64 {
-    return self._longitude;
-}
-
-fn getAccuracy(self: *const GeolocationCoordinates) f64 {
-    return self._accuracy;
-}
-
 fn getAltitude(self: *const GeolocationCoordinates) ?f64 {
     return self._altitude;
 }
@@ -101,9 +89,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const latitude = bridge.accessor(GeolocationCoordinates.getLatitude, null, .{});
-    pub const longitude = bridge.accessor(GeolocationCoordinates.getLongitude, null, .{});
-    pub const accuracy = bridge.accessor(GeolocationCoordinates.getAccuracy, null, .{});
+    pub const latitude = bridge.fastAccessor("_latitude", null);
+    pub const longitude = bridge.fastAccessor("_longitude", null);
+    pub const accuracy = bridge.fastAccessor("_accuracy", null);
     pub const altitude = bridge.accessor(GeolocationCoordinates.getAltitude, null, .{});
     pub const altitudeAccuracy = bridge.accessor(GeolocationCoordinates.getAltitudeAccuracy, null, .{});
     pub const heading = bridge.accessor(GeolocationCoordinates.getHeading, null, .{});

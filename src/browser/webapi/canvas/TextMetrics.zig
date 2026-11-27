@@ -52,18 +52,6 @@ pub fn releaseRef(self: *TextMetrics, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getWidth(self: *const TextMetrics) f64 {
-    return self._width;
-}
-
-fn getAscent(self: *const TextMetrics) f64 {
-    return self._ascent;
-}
-
-fn getDescent(self: *const TextMetrics) f64 {
-    return self._descent;
-}
-
 fn getIdeographicBaseline(self: *const TextMetrics) f64 {
     return -self._descent;
 }
@@ -76,16 +64,16 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.accessor(TextMetrics.getWidth, null, .{});
+    pub const width = bridge.fastAccessor("_width", null);
     pub const actualBoundingBoxLeft = bridge.property(0.0, .{ .template = false });
-    pub const actualBoundingBoxRight = bridge.accessor(TextMetrics.getWidth, null, .{});
-    pub const actualBoundingBoxAscent = bridge.accessor(TextMetrics.getAscent, null, .{});
-    pub const actualBoundingBoxDescent = bridge.accessor(TextMetrics.getDescent, null, .{});
-    pub const fontBoundingBoxAscent = bridge.accessor(TextMetrics.getAscent, null, .{});
-    pub const fontBoundingBoxDescent = bridge.accessor(TextMetrics.getDescent, null, .{});
-    pub const emHeightAscent = bridge.accessor(TextMetrics.getAscent, null, .{});
-    pub const emHeightDescent = bridge.accessor(TextMetrics.getDescent, null, .{});
-    pub const hangingBaseline = bridge.accessor(TextMetrics.getAscent, null, .{});
+    pub const actualBoundingBoxRight = bridge.fastAccessor("_width", null);
+    pub const actualBoundingBoxAscent = bridge.fastAccessor("_ascent", null);
+    pub const actualBoundingBoxDescent = bridge.fastAccessor("_descent", null);
+    pub const fontBoundingBoxAscent = bridge.fastAccessor("_ascent", null);
+    pub const fontBoundingBoxDescent = bridge.fastAccessor("_descent", null);
+    pub const emHeightAscent = bridge.fastAccessor("_ascent", null);
+    pub const emHeightDescent = bridge.fastAccessor("_descent", null);
+    pub const hangingBaseline = bridge.fastAccessor("_ascent", null);
     pub const alphabeticBaseline = bridge.property(0.0, .{ .template = false });
     pub const ideographicBaseline = bridge.accessor(TextMetrics.getIdeographicBaseline, null, .{});
 };

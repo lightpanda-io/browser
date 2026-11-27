@@ -237,10 +237,6 @@ pub fn getName(self: *const IDBDatabase) []const u8 {
     return self._name;
 }
 
-pub fn getVersion(self: *const IDBDatabase) i64 {
-    return self._version;
-}
-
 pub fn getObjectStoreNames(self: *IDBDatabase, exec: *Execution) !*DOMStringList {
     const arena = try exec.getArena(.small, "IDB.getObjectStoreNames");
     errdefer arena.release();
@@ -260,7 +256,7 @@ pub const JsApi = struct {
     };
 
     pub const name = bridge.accessor(IDBDatabase.getName, null, .{});
-    pub const version = bridge.accessor(IDBDatabase.getVersion, null, .{});
+    pub const version = bridge.fastAccessor("_version", null);
     pub const objectStoreNames = bridge.accessor(IDBDatabase.getObjectStoreNames, null, .{});
     pub const createObjectStore = bridge.function(IDBDatabase.createObjectStore, .{});
     pub const deleteObjectStore = bridge.function(IDBDatabase.deleteObjectStore, .{});

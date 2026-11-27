@@ -79,14 +79,6 @@ fn getUpper(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
     return try Key.decodeToJs(exec.call_arena, exec.js.local.?, encoded);
 }
 
-fn getLowerOpen(self: *const IDBKeyRange) bool {
-    return self._lower_open;
-}
-
-fn getUpperOpen(self: *const IDBKeyRange) bool {
-    return self._upper_open;
-}
-
 pub fn includes(self: *const IDBKeyRange, key: js.Value, exec: *Execution) !bool {
     const encoded = try Key.encodeValue(exec.call_arena, key);
     return self.containsEncoded(encoded);
@@ -245,7 +237,7 @@ pub const JsApi = struct {
 
     pub const lower = bridge.accessor(IDBKeyRange.getLower, null, .{ .null_as_undefined = true });
     pub const upper = bridge.accessor(IDBKeyRange.getUpper, null, .{ .null_as_undefined = true });
-    pub const lowerOpen = bridge.accessor(IDBKeyRange.getLowerOpen, null, .{});
-    pub const upperOpen = bridge.accessor(IDBKeyRange.getUpperOpen, null, .{});
+    pub const lowerOpen = bridge.fastAccessor("_lower_open", null);
+    pub const upperOpen = bridge.fastAccessor("_upper_open", null);
     pub const includes = bridge.function(IDBKeyRange.includes, .{});
 };

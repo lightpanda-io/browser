@@ -471,6 +471,12 @@ fn countExternalReferences() comptime_int {
                 if (value.setter != null) {
                     count += 1;
                 }
+            } else if (T == bridge.FastAccessor) {
+                // getter + v8.CFunction
+                count += 2;
+                if (value.setter != null) {
+                    count += 1;
+                }
             } else if (T == bridge.Function) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
                     continue;
@@ -563,6 +569,17 @@ fn collectExternalReferences() *const ExternalReferences {
                     references[idx] = @bitCast(@intFromPtr(setter));
                     idx += 1;
                 }
+            } else if (T == bridge.FastAccessor) {
+                references[idx] = @bitCast(@intFromPtr(value.getter));
+                idx += 1;
+                if (value.setter) |setter| {
+                    references[idx] = @bitCast(@intFromPtr(setter));
+                    idx += 1;
+                }
+                // V8 stores a pointer to the v8.CFunction itself (not its
+                // .address) as a Foreign in the template's C function overloads.
+                references[idx] = @bitCast(@intFromPtr(value.fast_getter));
+                idx += 1;
             } else if (T == bridge.Function) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
                     continue;
@@ -848,6 +865,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
             // [Global] flattening only mirrors non-static accessors/methods onto itself
             switch (definition) {
                 bridge.Accessor, bridge.Function => if (value.static) continue,
+                bridge.FastAccessor => {},
                 else => continue,
             }
         }
@@ -864,6 +882,9 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     continue;
                 }
                 attachAccessorProperty(name, value, isolate, template, signature, define_on orelse member_template);
+            },
+            bridge.FastAccessor => {
+                attachAccessorProperty(name, value, isolate, template, signature, define_on orelse prototype);
             },
             bridge.Function => {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
@@ -1038,12 +1059,20 @@ const unforgeables: []const Unforgeable = blk: {
 // and define_on != null. This is the "flattening" pass, and it defines all of
 // the functions/accessors on directly on the global instance. Thus, globals have
 // it defined on both their prototype (first pass) and their own instance (2nd pass).
-fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
+fn attachAccessorProperty(comptime name: [:0]const u8, value: anytype, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
+    const is_fast = switch (@TypeOf(value)) {
+        bridge.Accessor => false,
+        bridge.FastAccessor => true,
+        else => |T| @compileError("not an accessor: " ++ @typeName(T)),
+    };
+    // A FastAccessor reads a field off its receiver, so it's never static.
+    const static = !is_fast and value.static;
     const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-    const getter_signature = if (value.static) null else signature;
+    const getter_signature = if (static) null else signature;
     const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
         .callback = value.getter,
         .signature = getter_signature,
+        .c_function = if (is_fast) value.fast_getter else null,
     }).?;
     // WebIDL: getter function's .name should be "get X"
     const getter_name_str = "get " ++ name;
@@ -1066,11 +1095,11 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, i
     if (value.setter == null) {
         attribute |= v8.ReadOnly;
     }
-    if (value.deletable == false) {
+    if (!is_fast and value.deletable == false) {
         attribute |= v8.DontDelete;
     }
 
-    if (value.static) {
+    if (static) {
         v8.v8__Template__SetAccessorProperty(@ptrCast(template), js_name, getter_callback, setter_callback, attribute);
     } else {
         // Web IDL: attributes on the interface prototype object

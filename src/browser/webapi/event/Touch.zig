@@ -134,22 +134,6 @@ fn getClientY(self: *const Touch) f64 {
     return self._point.y;
 }
 
-fn getPageX(self: *const Touch) f64 {
-    return self._page_x;
-}
-
-fn getPageY(self: *const Touch) f64 {
-    return self._page_y;
-}
-
-fn getScreenX(self: *const Touch) f64 {
-    return self._screen_x;
-}
-
-fn getScreenY(self: *const Touch) f64 {
-    return self._screen_y;
-}
-
 fn getRadiusX(self: *const Touch) f64 {
     return self._point.radiusX;
 }
@@ -179,10 +163,10 @@ pub const JsApi = struct {
     pub const target = bridge.accessor(Touch.getTarget, null, .{});
     pub const clientX = bridge.accessor(Touch.getClientX, null, .{});
     pub const clientY = bridge.accessor(Touch.getClientY, null, .{});
-    pub const pageX = bridge.accessor(Touch.getPageX, null, .{});
-    pub const pageY = bridge.accessor(Touch.getPageY, null, .{});
-    pub const screenX = bridge.accessor(Touch.getScreenX, null, .{});
-    pub const screenY = bridge.accessor(Touch.getScreenY, null, .{});
+    pub const pageX = bridge.fastAccessor("_page_x", null);
+    pub const pageY = bridge.fastAccessor("_page_y", null);
+    pub const screenX = bridge.fastAccessor("_screen_x", null);
+    pub const screenY = bridge.fastAccessor("_screen_y", null);
     pub const radiusX = bridge.accessor(Touch.getRadiusX, null, .{});
     pub const radiusY = bridge.accessor(Touch.getRadiusY, null, .{});
     pub const rotationAngle = bridge.accessor(Touch.getRotationAngle, null, .{});

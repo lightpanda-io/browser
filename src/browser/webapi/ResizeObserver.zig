@@ -297,14 +297,6 @@ pub const ResizeObserverSize = struct {
         });
     }
 
-    fn getInlineSize(self: *const ResizeObserverSize) f64 {
-        return self._inline_size;
-    }
-
-    fn getBlockSize(self: *const ResizeObserverSize) f64 {
-        return self._block_size;
-    }
-
     pub const JsApi = struct {
         pub const bridge = js.Bridge(ResizeObserverSize);
 
@@ -313,8 +305,8 @@ pub const ResizeObserverSize = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const inlineSize = bridge.accessor(ResizeObserverSize.getInlineSize, null, .{});
-        pub const blockSize = bridge.accessor(ResizeObserverSize.getBlockSize, null, .{});
+        pub const inlineSize = bridge.fastAccessor("_inline_size", null);
+        pub const blockSize = bridge.fastAccessor("_block_size", null);
     };
 };
 

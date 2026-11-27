@@ -240,14 +240,6 @@ fn getKeyPath(self: *IDBIndex, exec: *Execution) !js.Value {
     return idb.cachedKeyPathJs(&self._key_path_js, self._store._txn, self._key_path, exec);
 }
 
-fn getUnique(self: *const IDBIndex) bool {
-    return self._unique;
-}
-
-fn getMultiEntry(self: *const IDBIndex) bool {
-    return self._multi_entry;
-}
-
 fn getObjectStore(self: *IDBIndex) *IDBObjectStore {
     return self._store;
 }
@@ -262,8 +254,8 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(IDBIndex.getName, IDBIndex.setName, .{});
     pub const keyPath = bridge.accessor(IDBIndex.getKeyPath, null, .{});
-    pub const unique = bridge.accessor(IDBIndex.getUnique, null, .{});
-    pub const multiEntry = bridge.accessor(IDBIndex.getMultiEntry, null, .{});
+    pub const unique = bridge.fastAccessor("_unique", null);
+    pub const multiEntry = bridge.fastAccessor("_multi_entry", null);
     pub const objectStore = bridge.accessor(IDBIndex.getObjectStore, null, .{});
     pub const get = bridge.function(IDBIndex.get, .{});
     pub const getKey = bridge.function(IDBIndex.getKey, .{});

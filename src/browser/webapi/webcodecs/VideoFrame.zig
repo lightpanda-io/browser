@@ -591,14 +591,6 @@ fn getFormat(self: *const VideoFrame) ?[]const u8 {
     return @tagName(format);
 }
 
-fn getCodedWidth(self: *const VideoFrame) u32 {
-    return self._coded_width;
-}
-
-fn getCodedHeight(self: *const VideoFrame) u32 {
-    return self._coded_height;
-}
-
 fn getCodedRect(self: *const VideoFrame, exec: *const Execution) !?*DOMRectReadOnly {
     if (self.isClosed()) return null;
     return try DOMRectReadOnly.init(0, 0, @floatFromInt(self._coded_width), @floatFromInt(self._coded_height), exec);
@@ -608,26 +600,6 @@ fn getVisibleRect(self: *const VideoFrame, exec: *const Execution) !?*DOMRectRea
     if (self.isClosed()) return null;
     const v = self._visible;
     return try DOMRectReadOnly.init(@floatFromInt(v.x), @floatFromInt(v.y), @floatFromInt(v.width), @floatFromInt(v.height), exec);
-}
-
-fn getRotation(self: *const VideoFrame) f64 {
-    return self._rotation;
-}
-
-fn getFlip(self: *const VideoFrame) bool {
-    return self._flip;
-}
-
-fn getDisplayWidth(self: *const VideoFrame) u32 {
-    return self._display_width;
-}
-
-fn getDisplayHeight(self: *const VideoFrame) u32 {
-    return self._display_height;
-}
-
-fn getTimestamp(self: *const VideoFrame) i64 {
-    return self._timestamp;
 }
 
 fn getDuration(self: *const VideoFrame) ?u64 {
@@ -954,16 +926,16 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(VideoFrame.constructor, .{});
     pub const format = bridge.accessor(VideoFrame.getFormat, null, .{});
-    pub const codedWidth = bridge.accessor(VideoFrame.getCodedWidth, null, .{});
-    pub const codedHeight = bridge.accessor(VideoFrame.getCodedHeight, null, .{});
+    pub const codedWidth = bridge.fastAccessor("_coded_width", null);
+    pub const codedHeight = bridge.fastAccessor("_coded_height", null);
     pub const codedRect = bridge.accessor(VideoFrame.getCodedRect, null, .{});
     pub const visibleRect = bridge.accessor(VideoFrame.getVisibleRect, null, .{});
-    pub const rotation = bridge.accessor(VideoFrame.getRotation, null, .{});
-    pub const flip = bridge.accessor(VideoFrame.getFlip, null, .{});
-    pub const displayWidth = bridge.accessor(VideoFrame.getDisplayWidth, null, .{});
-    pub const displayHeight = bridge.accessor(VideoFrame.getDisplayHeight, null, .{});
+    pub const rotation = bridge.fastAccessor("_rotation", null);
+    pub const flip = bridge.fastAccessor("_flip", null);
+    pub const displayWidth = bridge.fastAccessor("_display_width", null);
+    pub const displayHeight = bridge.fastAccessor("_display_height", null);
     pub const duration = bridge.accessor(VideoFrame.getDuration, null, .{});
-    pub const timestamp = bridge.accessor(VideoFrame.getTimestamp, null, .{});
+    pub const timestamp = bridge.fastAccessor("_timestamp", null);
     pub const colorSpace = bridge.accessor(VideoFrame.getColorSpace, null, .{});
     pub const metadata = bridge.function(VideoFrame.metadata, .{});
     pub const allocationSize = bridge.function(VideoFrame.allocationSize, .{});

@@ -98,20 +98,8 @@ pub fn getHost(self: *const ShadowRoot) *Element {
     return self._host;
 }
 
-fn getDelegatesFocus(self: *const ShadowRoot) bool {
-    return self._delegates_focus;
-}
-
 fn getSlotAssignment(self: *const ShadowRoot) []const u8 {
     return @tagName(self._slot_assignment);
-}
-
-fn getClonable(self: *const ShadowRoot) bool {
-    return self._clonable;
-}
-
-fn getSerializable(self: *const ShadowRoot) bool {
-    return self._serializable;
 }
 
 pub fn setHTML(self: *ShadowRoot, html: []const u8, options: ?Sanitizer.Options, frame: *Frame) !void {
@@ -185,10 +173,10 @@ pub const JsApi = struct {
     pub const activeElement = bridge.accessor(ShadowRoot.getActiveElement, null, .{});
     pub const mode = bridge.accessor(ShadowRoot.getMode, null, .{});
     pub const host = bridge.accessor(ShadowRoot.getHost, null, .{});
-    pub const delegatesFocus = bridge.accessor(ShadowRoot.getDelegatesFocus, null, .{});
+    pub const delegatesFocus = bridge.fastAccessor("_delegates_focus", null);
     pub const slotAssignment = bridge.accessor(ShadowRoot.getSlotAssignment, null, .{});
-    pub const clonable = bridge.accessor(ShadowRoot.getClonable, null, .{});
-    pub const serializable = bridge.accessor(ShadowRoot.getSerializable, null, .{});
+    pub const clonable = bridge.fastAccessor("_clonable", null);
+    pub const serializable = bridge.fastAccessor("_serializable", null);
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *ShadowRoot, value_: ?js.Value) !?*Element {
         const value = value_ orelse return null;

@@ -108,10 +108,6 @@ pub fn getTitle(self: *const CSSStyleSheet) []const u8 {
     return self._title;
 }
 
-fn getDisabled(self: *const CSSStyleSheet) bool {
-    return self._disabled;
-}
-
 pub fn setDisabled(self: *CSSStyleSheet, disabled: bool, frame: *Frame) void {
     if (self._disabled == disabled) {
         return;
@@ -448,7 +444,7 @@ pub const JsApi = struct {
     pub const ownerNode = bridge.accessor(CSSStyleSheet.getOwnerNode, null, .{ .null_as_undefined = true });
     pub const href = bridge.accessor(CSSStyleSheet.getHref, null, .{ .null_as_undefined = true });
     pub const title = bridge.accessor(CSSStyleSheet.getTitle, null, .{});
-    pub const disabled = bridge.accessor(CSSStyleSheet.getDisabled, CSSStyleSheet.setDisabled, .{});
+    pub const disabled = bridge.fastAccessor("_disabled", CSSStyleSheet.setDisabled);
     pub const cssRules = bridge.accessor(CSSStyleSheet.getCssRules, null, .{});
     pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{});
     pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{});

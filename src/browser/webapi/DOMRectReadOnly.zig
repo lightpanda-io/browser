@@ -88,22 +88,6 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*DOMRec
     return createBare(try readData(reader), &page.factory);
 }
 
-pub fn getX(self: *const DOMRectReadOnly) f64 {
-    return self._x;
-}
-
-pub fn getY(self: *const DOMRectReadOnly) f64 {
-    return self._y;
-}
-
-pub fn getWidth(self: *const DOMRectReadOnly) f64 {
-    return self._width;
-}
-
-pub fn getHeight(self: *const DOMRectReadOnly) f64 {
-    return self._height;
-}
-
 pub fn getTop(self: *const DOMRectReadOnly) f64 {
     return @min(self._y, self._y + self._height);
 }
@@ -153,10 +137,10 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(DOMRectReadOnly.init, .{});
     pub const fromRect = bridge.function(DOMRectReadOnly.fromRect, .{ .static = true });
 
-    pub const x = bridge.accessor(DOMRectReadOnly.getX, null, .{});
-    pub const y = bridge.accessor(DOMRectReadOnly.getY, null, .{});
-    pub const width = bridge.accessor(DOMRectReadOnly.getWidth, null, .{});
-    pub const height = bridge.accessor(DOMRectReadOnly.getHeight, null, .{});
+    pub const x = bridge.fastAccessor("_x", null);
+    pub const y = bridge.fastAccessor("_y", null);
+    pub const width = bridge.fastAccessor("_width", null);
+    pub const height = bridge.fastAccessor("_height", null);
     pub const top = bridge.accessor(DOMRectReadOnly.getTop, null, .{});
     pub const right = bridge.accessor(DOMRectReadOnly.getRight, null, .{});
     pub const bottom = bridge.accessor(DOMRectReadOnly.getBottom, null, .{});

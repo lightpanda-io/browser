@@ -218,14 +218,6 @@ fn getThresholds(self: *const IntersectionObserver) []const f64 {
     return self._threshold;
 }
 
-fn getDelay(self: *const IntersectionObserver) i32 {
-    return self._delay;
-}
-
-fn getTrackVisibility(self: *const IntersectionObserver) bool {
-    return self._track_visibility;
-}
-
 pub fn deinit(self: *IntersectionObserver, page: *Page) void {
     self._callback.release();
     releaseAll(self._pending_entries.items, page);
@@ -596,10 +588,6 @@ pub const IntersectionObserverEntry = struct {
         return self._target;
     }
 
-    fn getTime(self: *const IntersectionObserverEntry) f64 {
-        return self._time;
-    }
-
     pub fn getBoundingClientRect(self: *const IntersectionObserverEntry) *DOMRect {
         return self._bounding_client_rect;
     }
@@ -612,14 +600,6 @@ pub const IntersectionObserverEntry = struct {
         return self._root_bounds;
     }
 
-    fn getIntersectionRatio(self: *const IntersectionObserverEntry) f64 {
-        return self._intersection_ratio;
-    }
-
-    fn getIsIntersecting(self: *const IntersectionObserverEntry) bool {
-        return self._is_intersecting;
-    }
-
     pub const JsApi = struct {
         pub const bridge = js.Bridge(IntersectionObserverEntry);
 
@@ -629,12 +609,12 @@ pub const IntersectionObserverEntry = struct {
         };
 
         pub const target = bridge.accessor(IntersectionObserverEntry.getTarget, null, .{});
-        pub const time = bridge.accessor(IntersectionObserverEntry.getTime, null, .{});
+        pub const time = bridge.fastAccessor("_time", null);
         pub const boundingClientRect = bridge.accessor(IntersectionObserverEntry.getBoundingClientRect, null, .{});
         pub const intersectionRect = bridge.accessor(IntersectionObserverEntry.getIntersectionRect, null, .{});
         pub const rootBounds = bridge.accessor(IntersectionObserverEntry.getRootBounds, null, .{});
-        pub const intersectionRatio = bridge.accessor(IntersectionObserverEntry.getIntersectionRatio, null, .{});
-        pub const isIntersecting = bridge.accessor(IntersectionObserverEntry.getIsIntersecting, null, .{});
+        pub const intersectionRatio = bridge.fastAccessor("_intersection_ratio", null);
+        pub const isIntersecting = bridge.fastAccessor("_is_intersecting", null);
     };
 };
 
@@ -652,8 +632,8 @@ pub const JsApi = struct {
     pub const rootMargin = bridge.accessor(IntersectionObserver.getRootMargin, null, .{});
     pub const scrollMargin = bridge.accessor(IntersectionObserver.getScrollMargin, null, .{});
     pub const thresholds = bridge.accessor(IntersectionObserver.getThresholds, null, .{});
-    pub const delay = bridge.accessor(IntersectionObserver.getDelay, null, .{});
-    pub const trackVisibility = bridge.accessor(IntersectionObserver.getTrackVisibility, null, .{});
+    pub const delay = bridge.fastAccessor("_delay", null);
+    pub const trackVisibility = bridge.fastAccessor("_track_visibility", null);
 
     pub const observe = bridge.function(IntersectionObserver.observe, .{});
     pub const unobserve = bridge.function(IntersectionObserver.unobserve, .{});

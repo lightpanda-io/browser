@@ -69,48 +69,24 @@ fn setId(self: *VTTRegion, value: []const u8, frame: *Frame) !void {
     self._id = try frame.dupeString(value);
 }
 
-fn getWidth(self: *const VTTRegion) f64 {
-    return self._width;
-}
-
 fn setWidth(self: *VTTRegion, value: f64) !void {
     self._width = try percentage(value);
-}
-
-fn getLines(self: *const VTTRegion) u32 {
-    return self._lines;
 }
 
 fn setLines(self: *VTTRegion, value: u32) void {
     self._lines = value;
 }
 
-fn getRegionAnchorX(self: *const VTTRegion) f64 {
-    return self._region_anchor_x;
-}
-
 fn setRegionAnchorX(self: *VTTRegion, value: f64) !void {
     self._region_anchor_x = try percentage(value);
-}
-
-fn getRegionAnchorY(self: *const VTTRegion) f64 {
-    return self._region_anchor_y;
 }
 
 fn setRegionAnchorY(self: *VTTRegion, value: f64) !void {
     self._region_anchor_y = try percentage(value);
 }
 
-fn getViewportAnchorX(self: *const VTTRegion) f64 {
-    return self._viewport_anchor_x;
-}
-
 fn setViewportAnchorX(self: *VTTRegion, value: f64) !void {
     self._viewport_anchor_x = try percentage(value);
-}
-
-fn getViewportAnchorY(self: *const VTTRegion) f64 {
-    return self._viewport_anchor_y;
 }
 
 fn setViewportAnchorY(self: *VTTRegion, value: f64) !void {
@@ -139,12 +115,12 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(VTTRegion.init, .{});
     pub const id = bridge.accessor(VTTRegion.getId, VTTRegion.setId, .{});
-    pub const width = bridge.accessor(VTTRegion.getWidth, VTTRegion.setWidth, .{});
-    pub const lines = bridge.accessor(VTTRegion.getLines, VTTRegion.setLines, .{});
-    pub const regionAnchorX = bridge.accessor(VTTRegion.getRegionAnchorX, VTTRegion.setRegionAnchorX, .{});
-    pub const regionAnchorY = bridge.accessor(VTTRegion.getRegionAnchorY, VTTRegion.setRegionAnchorY, .{});
-    pub const viewportAnchorX = bridge.accessor(VTTRegion.getViewportAnchorX, VTTRegion.setViewportAnchorX, .{});
-    pub const viewportAnchorY = bridge.accessor(VTTRegion.getViewportAnchorY, VTTRegion.setViewportAnchorY, .{});
+    pub const width = bridge.fastAccessor("_width", VTTRegion.setWidth);
+    pub const lines = bridge.fastAccessor("_lines", VTTRegion.setLines);
+    pub const regionAnchorX = bridge.fastAccessor("_region_anchor_x", VTTRegion.setRegionAnchorX);
+    pub const regionAnchorY = bridge.fastAccessor("_region_anchor_y", VTTRegion.setRegionAnchorY);
+    pub const viewportAnchorX = bridge.fastAccessor("_viewport_anchor_x", VTTRegion.setViewportAnchorX);
+    pub const viewportAnchorY = bridge.fastAccessor("_viewport_anchor_y", VTTRegion.setViewportAnchorY);
     pub const scroll = bridge.accessor(VTTRegion.getScroll, VTTRegion.setScroll, .{});
 };
 

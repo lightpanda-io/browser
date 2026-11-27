@@ -289,18 +289,6 @@ pub fn getType(self: *const Event) []const u8 {
     return self._type_string.str();
 }
 
-fn getBubbles(self: *const Event) bool {
-    return self._bubbles;
-}
-
-fn getCancelable(self: *const Event) bool {
-    return self._cancelable;
-}
-
-fn getComposed(self: *const Event) bool {
-    return self._composed;
-}
-
 pub fn getTarget(self: *const Event) ?*EventTarget {
     return self._target;
 }
@@ -339,10 +327,6 @@ pub fn setReturnValue(self: *Event, v: bool) void {
             self._prevent_default = true;
         }
     }
-}
-
-fn getCancelBubble(self: *const Event) bool {
-    return self._stop_propagation;
 }
 
 fn setCancelBubble(self: *Event) void {
@@ -515,14 +499,14 @@ pub const JsApi = struct {
         }
     }.wrap, .{});
     pub const @"type" = bridge.accessor(Event.getType, null, .{});
-    pub const bubbles = bridge.accessor(Event.getBubbles, null, .{});
-    pub const cancelable = bridge.accessor(Event.getCancelable, null, .{});
-    pub const composed = bridge.accessor(Event.getComposed, null, .{});
+    pub const bubbles = bridge.fastAccessor("_bubbles", null);
+    pub const cancelable = bridge.fastAccessor("_cancelable", null);
+    pub const composed = bridge.fastAccessor("_composed", null);
     pub const target = bridge.accessor(Event.getTarget, null, .{});
     pub const srcElement = bridge.accessor(Event.getTarget, null, .{});
     pub const currentTarget = bridge.accessor(Event.getCurrentTarget, null, .{});
     pub const eventPhase = bridge.accessor(Event.getEventPhase, null, .{});
-    pub const defaultPrevented = bridge.accessor(Event.getDefaultPrevented, null, .{});
+    pub const defaultPrevented = bridge.fastAccessor("_prevent_default", null);
     pub const timeStamp = bridge.accessor(Event.getTimeStamp, null, .{});
     pub const isTrusted = bridge.accessor(Event.getIsTrusted, null, .{ .unforgeable = true, .deletable = false });
     pub const preventDefault = bridge.function(Event.preventDefault, .{});
@@ -533,7 +517,7 @@ pub const JsApi = struct {
     // deprecated
     pub const returnValue = bridge.accessor(Event.getReturnValue, Event.setReturnValue, .{});
     // deprecated
-    pub const cancelBubble = bridge.accessor(Event.getCancelBubble, Event.setCancelBubble, .{});
+    pub const cancelBubble = bridge.fastAccessor("_stop_propagation", Event.setCancelBubble);
 
     // Event phase constants
     pub const NONE = bridge.property(@backingInt(EventPhase.none), .{ .template = true });

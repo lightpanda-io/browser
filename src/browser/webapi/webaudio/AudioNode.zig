@@ -207,10 +207,6 @@ fn getNumberOfOutputs(self: *const AudioNode) u32 {
     return self._outputs;
 }
 
-fn getChannelCount(self: *const AudioNode) u32 {
-    return self._channel_count;
-}
-
 fn setChannelCount(self: *AudioNode, count: u32) !void {
     if (count == 0) {
         return error.NotSupported;
@@ -419,7 +415,7 @@ pub const JsApi = struct {
     pub const context = bridge.accessor(AudioNode.getContext, null, .{});
     pub const numberOfInputs = bridge.accessor(AudioNode.getNumberOfInputs, null, .{});
     pub const numberOfOutputs = bridge.accessor(AudioNode.getNumberOfOutputs, null, .{});
-    pub const channelCount = bridge.accessor(AudioNode.getChannelCount, AudioNode.setChannelCount, .{});
+    pub const channelCount = bridge.fastAccessor("_channel_count", AudioNode.setChannelCount);
     pub const channelCountMode = bridge.accessor(AudioNode.getChannelCountMode, AudioNode.setChannelCountMode, .{});
     pub const channelInterpretation = bridge.accessor(AudioNode.getChannelInterpretation, AudioNode.setChannelInterpretation, .{});
     pub const connect = bridge.function(AudioNode.connect, .{});

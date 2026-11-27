@@ -41,6 +41,10 @@ pub fn Builder(comptime T: type) type {
             return Accessor.init(T, getter, setter, opts);
         }
 
+        pub fn fastAccessor(comptime getter_field: []const u8, comptime setter: anytype) FastAccessor {
+            return .init(T, getter_field, setter);
+        }
+
         pub fn function(comptime func: anytype, comptime opts: Caller.Function.Opts) Function {
             return Function.init(T, func, opts);
         }
@@ -145,7 +149,7 @@ pub const Function = struct {
             .wpt_only = opts.wpt_only,
             .js_name = opts.js_name,
             .exposed = opts.exposed,
-            .rejects_bad_receiver = returnsPromise(@TypeOf(func)),
+            .rejects_bad_receiver = reflect.returnsPromise(@TypeOf(func)),
             .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
@@ -156,14 +160,6 @@ pub const Function = struct {
     }
 
     pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
-
-    fn returnsPromise(comptime F: type) bool {
-        const R = @typeInfo(F).@"fn".return_type orelse return false;
-        return switch (@typeInfo(R)) {
-            .error_union => |eu| eu.payload,
-            else => R,
-        } == js.Promise;
-    }
 
     fn getArity(comptime T: type, comptime start: usize) usize {
         const Execution = js.Execution;
@@ -248,6 +244,38 @@ pub const Accessor = struct {
         }
 
         return accessor;
+    }
+};
+
+// An accessor whose getter reads a field of T, which lets it have a V8 Fast
+// API variant (see Caller.FastFunction). The setter is a regular one.
+pub const FastAccessor = struct {
+    getter: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
+    setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
+    fast_getter: *const v8.CFunction,
+
+    fn init(comptime T: type, comptime getter_field: []const u8, comptime setter: anytype) FastAccessor {
+        var fast_accessor = FastAccessor{
+            .fast_getter = Caller.FastFunction.createFieldGetter(T, getter_field),
+            .getter = struct {
+                fn _wrap(self: *const T) @FieldType(T, getter_field) {
+                    return @field(self, getter_field);
+                }
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    Caller.Function.call(T, handle.?, _wrap, .{});
+                }
+            }.wrap,
+        };
+
+        if (@typeInfo(@TypeOf(setter)) != .null) {
+            fast_accessor.setter = struct {
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    Caller.Function.call(T, handle.?, setter, .{});
+                }
+            }.wrap;
+        }
+
+        return fast_accessor;
     }
 };
 

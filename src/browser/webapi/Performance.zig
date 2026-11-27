@@ -890,10 +890,6 @@ pub const Entry = struct {
         };
     };
 
-    fn getDuration(self: *const Entry) f64 {
-        return self._duration;
-    }
-
     fn getEntryType(self: *const Entry) []const u8 {
         return switch (self._type) {
             else => |t| @tagName(t),
@@ -902,10 +898,6 @@ pub const Entry = struct {
 
     pub fn getName(self: *const Entry) []const u8 {
         return self._name;
-    }
-
-    fn getStartTime(self: *const Entry) f64 {
-        return self._start_time;
     }
 
     pub fn toJSON(self: *const Entry) struct {
@@ -930,9 +922,9 @@ pub const Entry = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const name = bridge.accessor(Entry.getName, null, .{});
-        pub const duration = bridge.accessor(Entry.getDuration, null, .{});
+        pub const duration = bridge.fastAccessor("_duration", null);
         pub const entryType = bridge.accessor(Entry.getEntryType, null, .{});
-        pub const startTime = bridge.accessor(Entry.getStartTime, null, .{});
+        pub const startTime = bridge.fastAccessor("_start_time", null);
         pub const toJSON = bridge.function(Entry.toJSON, .{});
     };
 };
@@ -1097,69 +1089,9 @@ const ResourceTiming = struct {
         return 0;
     }
 
-    fn getRedirectStart(self: *const ResourceTiming) f64 {
-        return self._redirect_start;
-    }
-
-    fn getRedirectEnd(self: *const ResourceTiming) f64 {
-        return self._redirect_end;
-    }
-
-    fn getFetchStart(self: *const ResourceTiming) f64 {
-        return self._fetch_start;
-    }
-
-    fn getDomainLookupStart(self: *const ResourceTiming) f64 {
-        return self._domain_lookup_start;
-    }
-
-    fn getDomainLookupEnd(self: *const ResourceTiming) f64 {
-        return self._domain_lookup_end;
-    }
-
-    fn getConnectStart(self: *const ResourceTiming) f64 {
-        return self._connect_start;
-    }
-
-    fn getConnectEnd(self: *const ResourceTiming) f64 {
-        return self._connect_end;
-    }
-
-    fn getSecureConnectionStart(self: *const ResourceTiming) f64 {
-        return self._secure_connection_start;
-    }
-
-    fn getRequestStart(self: *const ResourceTiming) f64 {
-        return self._request_start;
-    }
-
-    fn getResponseStart(self: *const ResourceTiming) f64 {
-        return self._response_start;
-    }
-
-    fn getResponseEnd(self: *const ResourceTiming) f64 {
-        return self._response_end;
-    }
-
     fn getFirstInterimResponseStart(_: *const ResourceTiming) f64 {
         // 1xx are consumed by libcurl
         return 0;
-    }
-
-    fn getFinalResponseHeadersStart(self: *const ResourceTiming) f64 {
-        return self._response_start;
-    }
-
-    fn getTransferSize(self: *const ResourceTiming) u64 {
-        return self._transfer_size;
-    }
-
-    fn getEncodedBodySize(self: *const ResourceTiming) u64 {
-        return self._encoded_body_size;
-    }
-
-    fn getDecodedBodySize(self: *const ResourceTiming) u64 {
-        return self._decoded_body_size;
     }
 
     fn getResponseStatus(self: *const ResourceTiming) u16 {
@@ -1247,22 +1179,22 @@ const ResourceTiming = struct {
         pub const nextHopProtocol = bridge.accessor(ResourceTiming.getNextHopProtocol, null, .{});
         pub const deliveryType = bridge.accessor(ResourceTiming.getDeliveryType, null, .{});
         pub const workerStart = bridge.accessor(ResourceTiming.getWorkerStart, null, .{});
-        pub const redirectStart = bridge.accessor(ResourceTiming.getRedirectStart, null, .{});
-        pub const redirectEnd = bridge.accessor(ResourceTiming.getRedirectEnd, null, .{});
-        pub const fetchStart = bridge.accessor(ResourceTiming.getFetchStart, null, .{});
-        pub const domainLookupStart = bridge.accessor(ResourceTiming.getDomainLookupStart, null, .{});
-        pub const domainLookupEnd = bridge.accessor(ResourceTiming.getDomainLookupEnd, null, .{});
-        pub const connectStart = bridge.accessor(ResourceTiming.getConnectStart, null, .{});
-        pub const connectEnd = bridge.accessor(ResourceTiming.getConnectEnd, null, .{});
-        pub const secureConnectionStart = bridge.accessor(ResourceTiming.getSecureConnectionStart, null, .{});
-        pub const requestStart = bridge.accessor(ResourceTiming.getRequestStart, null, .{});
-        pub const responseStart = bridge.accessor(ResourceTiming.getResponseStart, null, .{});
+        pub const redirectStart = bridge.fastAccessor("_redirect_start", null);
+        pub const redirectEnd = bridge.fastAccessor("_redirect_end", null);
+        pub const fetchStart = bridge.fastAccessor("_fetch_start", null);
+        pub const domainLookupStart = bridge.fastAccessor("_domain_lookup_start", null);
+        pub const domainLookupEnd = bridge.fastAccessor("_domain_lookup_end", null);
+        pub const connectStart = bridge.fastAccessor("_connect_start", null);
+        pub const connectEnd = bridge.fastAccessor("_connect_end", null);
+        pub const secureConnectionStart = bridge.fastAccessor("_secure_connection_start", null);
+        pub const requestStart = bridge.fastAccessor("_request_start", null);
+        pub const responseStart = bridge.fastAccessor("_response_start", null);
         pub const firstInterimResponseStart = bridge.accessor(ResourceTiming.getFirstInterimResponseStart, null, .{});
-        pub const finalResponseHeadersStart = bridge.accessor(ResourceTiming.getFinalResponseHeadersStart, null, .{});
-        pub const responseEnd = bridge.accessor(ResourceTiming.getResponseEnd, null, .{});
-        pub const transferSize = bridge.accessor(ResourceTiming.getTransferSize, null, .{});
-        pub const encodedBodySize = bridge.accessor(ResourceTiming.getEncodedBodySize, null, .{});
-        pub const decodedBodySize = bridge.accessor(ResourceTiming.getDecodedBodySize, null, .{});
+        pub const finalResponseHeadersStart = bridge.fastAccessor("_response_start", null);
+        pub const responseEnd = bridge.fastAccessor("_response_end", null);
+        pub const transferSize = bridge.fastAccessor("_transfer_size", null);
+        pub const encodedBodySize = bridge.fastAccessor("_encoded_body_size", null);
+        pub const decodedBodySize = bridge.fastAccessor("_decoded_body_size", null);
         pub const responseStatus = bridge.accessor(ResourceTiming.getResponseStatus, null, .{});
         pub const contentType = bridge.accessor(ResourceTiming.getContentType, null, .{});
         pub const contentEncoding = bridge.accessor(ResourceTiming.getContentEncoding, null, .{});
@@ -1299,30 +1231,6 @@ const NavigationTiming = struct {
 
     fn getUnloadEventEnd(_: *const NavigationTiming) f64 {
         return 0;
-    }
-
-    fn getDomInteractive(self: *const NavigationTiming) f64 {
-        return self._dom_interactive;
-    }
-
-    fn getDomContentLoadedEventStart(self: *const NavigationTiming) f64 {
-        return self._dom_content_loaded_event_start;
-    }
-
-    fn getDomContentLoadedEventEnd(self: *const NavigationTiming) f64 {
-        return self._dom_content_loaded_event_end;
-    }
-
-    fn getDomComplete(self: *const NavigationTiming) f64 {
-        return self._dom_complete;
-    }
-
-    fn getLoadEventStart(self: *const NavigationTiming) f64 {
-        return self._load_event_start;
-    }
-
-    fn getLoadEventEnd(self: *const NavigationTiming) f64 {
-        return self._load_event_end;
     }
 
     fn getType(self: *const NavigationTiming) []const u8 {
@@ -1424,12 +1332,12 @@ const NavigationTiming = struct {
 
         pub const unloadEventStart = bridge.accessor(NavigationTiming.getUnloadEventStart, null, .{});
         pub const unloadEventEnd = bridge.accessor(NavigationTiming.getUnloadEventEnd, null, .{});
-        pub const domInteractive = bridge.accessor(NavigationTiming.getDomInteractive, null, .{});
-        pub const domContentLoadedEventStart = bridge.accessor(NavigationTiming.getDomContentLoadedEventStart, null, .{});
-        pub const domContentLoadedEventEnd = bridge.accessor(NavigationTiming.getDomContentLoadedEventEnd, null, .{});
-        pub const domComplete = bridge.accessor(NavigationTiming.getDomComplete, null, .{});
-        pub const loadEventStart = bridge.accessor(NavigationTiming.getLoadEventStart, null, .{});
-        pub const loadEventEnd = bridge.accessor(NavigationTiming.getLoadEventEnd, null, .{});
+        pub const domInteractive = bridge.fastAccessor("_dom_interactive", null);
+        pub const domContentLoadedEventStart = bridge.fastAccessor("_dom_content_loaded_event_start", null);
+        pub const domContentLoadedEventEnd = bridge.fastAccessor("_dom_content_loaded_event_end", null);
+        pub const domComplete = bridge.fastAccessor("_dom_complete", null);
+        pub const loadEventStart = bridge.fastAccessor("_load_event_start", null);
+        pub const loadEventEnd = bridge.fastAccessor("_load_event_end", null);
         pub const @"type" = bridge.accessor(NavigationTiming.getType, null, .{});
         pub const redirectCount = bridge.accessor(NavigationTiming.getRedirectCount, null, .{});
         pub const toJSON = bridge.function(NavigationTiming.toJSON, .{});

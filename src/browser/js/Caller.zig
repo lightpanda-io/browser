@@ -24,6 +24,8 @@ const ArenaAllocator = @import("../../ArenaAllocator.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Document = @import("../webapi/Document.zig");
+const HtmlElement = @import("../webapi/element/Html.zig");
+const DOMException = @import("../webapi/DOMException.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
@@ -31,6 +33,7 @@ const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
+const bridge = @import("bridge.zig");
 const Local = @import("Local.zig");
 const Context = @import("Context.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
@@ -161,12 +164,12 @@ pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *cons
     const info = FunctionCallbackInfo{ .handle = handle };
 
     if (!info.isConstructCall()) {
-        handleError(local, error.InvalidArgument, info, comptime .of(T), @typeName(@TypeOf(func)), comptime returnsPromise(@TypeOf(func)));
+        handleError(local, error.InvalidArgument, info, comptime .of(T), @typeName(@TypeOf(func)), comptime reflect.returnsPromise(@TypeOf(func)));
         return;
     }
 
     self._constructor(func, info, opts) catch |err| {
-        handleError(local, err, info, comptime .of(T), @typeName(@TypeOf(func)), comptime returnsPromise(@TypeOf(func)));
+        handleError(local, err, info, comptime .of(T), @typeName(@TypeOf(func)), comptime reflect.returnsPromise(@TypeOf(func)));
     };
 }
 
@@ -558,12 +561,13 @@ fn protoNode(comptime T: type, instance: *T) *Node {
     return protoNode(reflect.Proto(T).?, Factory.protoOf(instance));
 }
 
+/// Converts a Zig error to JS error, then either throws it or, if function
+/// returns a promise, rejects with error.
 fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, receiver: *const Receiver, func_name: []const u8, returns_promise: bool) void {
     if (comptime lp.IS_DEBUG) {
         if (log.enabled(.js, .debug)) {
-            const DOMException = @import("../webapi/DOMException.zig");
             if (DOMException.fromError(err) == null) {
-                // This isn't a DOMException, let's log it
+                // This isn't a DOMException, let's log it.
                 logFunctionCallError(local, receiver.type_name, func_name, err, info);
             }
         }
@@ -573,6 +577,7 @@ fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, r
         return;
     }
 
+    // Get to correct realm.
     const err_local = errorLocal(local, info, receiver);
     const js_err = createError(local, &err_local, err);
     if (returns_promise) {
@@ -637,18 +642,8 @@ fn rejectOperation(err_local: *const Local, value: js.Value, info: FunctionCallb
     info.getReturnValue().set(resolver.promise().toValue());
 }
 
-fn returnsPromise(comptime F: type) bool {
-    const R = @typeInfo(F).@"fn".return_type orelse return false;
-    const payload = switch (@typeInfo(R)) {
-        .error_union => |eu| eu.payload,
-        else => R,
-    };
-    return payload == js.Promise;
-}
-
 // Convert a Zig error to a DOMException. If the error is unknown, return null.
 fn domExceptionToJs(local: *const Local, err: anyerror) ?*const v8.Value {
-    const DOMException = @import("../webapi/DOMException.zig");
     const ex = DOMException.fromError(err) orelse return null;
     const value = local.zigValueToJs(ex, .{}) catch return local.isolate.createError("internal error");
     return value.handle;
@@ -893,7 +888,7 @@ pub const Function = struct {
             }
         };
 
-        const js_value = if (comptime returnsPromise(@TypeOf(func)))
+        const js_value = if (comptime reflect.returnsPromise(@TypeOf(func)))
             callRejecting(T, &caller.local, info, func, opts) orelse return
         else
             _call(T, &caller.local, info, func, opts) catch |err| {
@@ -1052,6 +1047,67 @@ pub const Function = struct {
     };
 };
 
+/// V8 Fast API integration.
+pub const FastFunction = struct {
+    /// Whether an object that passed V8's signature check for `T`'s interface
+    /// can still hold something other than a `T`. The check proves the object
+    /// was made from that interface, and an object normally holds the type it
+    /// was made for. HTML element interfaces are the exception: they share
+    /// `HtmlElement.upgradeConstruct`, which binds the custom element being
+    /// upgraded to whichever of them got constructed. A custom element whose
+    /// class extends another interface than its own is thus, say, an
+    /// HTMLInputElement object that doesn't hold an `Input`.
+    ///
+    /// `HtmlElement` itself is included to keep the rule simple. Its own
+    /// constructor binds the element being upgraded too, and only the fact
+    /// that such an element is always an HTML one makes that harmless.
+    fn canReceiverMismatch(comptime T: type) bool {
+        return bridge.inheritsOrIs(T.JsApi, HtmlElement.JsApi);
+    }
+
+    /// Creates a constant `v8.CFunction` that reads `field` off a `T`.
+    ///
+    /// A field read can't throw, makes no JS value and doesn't reach the
+    /// context, so the callback takes the receiver and nothing else: no
+    /// `Caller`, no `HandleScope`.
+    pub fn createFieldGetter(comptime T: type, comptime field: []const u8) *const v8.CFunction {
+        if (canReceiverMismatch(T)) {
+            @compileError("getter-by-field cannot be used for type: " ++ @typeName(T) ++ " and field: " ++ field);
+        }
+
+        const Return = @FieldType(T, field);
+        const return_info: v8.CTypeInfo = .{ .type = switch (Return) {
+            bool => v8.kCTypeInfoType_Bool,
+            i32 => v8.kCTypeInfoType_Int32,
+            u32 => v8.kCTypeInfoType_Uint32,
+            i64 => v8.kCTypeInfoType_Int64,
+            u64 => v8.kCTypeInfoType_Uint64,
+            f32 => v8.kCTypeInfoType_Float32,
+            f64 => v8.kCTypeInfoType_Float64,
+            else => @compileError("getter-by-field cannot return " ++ @typeName(Return) ++ ": " ++ @typeName(T) ++ "." ++ field),
+        } };
+
+        const func = struct {
+            fn wrap(recv: ?*const v8.Value) callconv(.c) Return {
+                // V8 only takes the fast path for a receiver that passed the
+                // accessor's signature check, and canReceiverMismatch ruled
+                // out the interfaces whose objects can hold another type.
+                const self = TaggedOpaque.fromJS(*const T, @ptrCast(recv)) catch unreachable;
+                return @field(self, field);
+            }
+        }.wrap;
+
+        const arg = v8.CTypeInfo{ .type = v8.kCTypeInfoType_V8Value };
+        const func_info: *const v8.CFunctionInfo = &.{
+            .return_info = return_info,
+            .arg_count = 1,
+            .arg_info = @ptrCast(&arg),
+        };
+
+        return &.{ .address = @ptrCast(&func), .type_info = func_info };
+    }
+};
+
 // If we call a method in javascript: cat.lives('nine');
 //
 // Then we'd expect a Zig function with 2 parameters: a self and the string.
@@ -1074,7 +1130,6 @@ fn argToZig(comptime T: type, local: *const Local, js_val: js.Value) !T {
             // the termination, is pending; propagate it untouched
             return err;
         }
-        const DOMException = @import("../webapi/DOMException.zig");
         if (DOMException.fromError(err) != null) {
             return err;
         }
