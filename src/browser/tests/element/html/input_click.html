@@ -309,3 +309,56 @@
     document.body.removeChild(cb);
   }
 </script>
+
+<script id="checkbox_click_clears_indeterminate">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.indeterminate = true;
+    document.body.appendChild(cb);
+
+    let during = null;
+    cb.addEventListener('click', () => { during = cb.indeterminate; });
+    cb.click();
+    testing.expectEqual(false, during, 'indeterminate is cleared before click listeners run');
+    testing.expectEqual(true, cb.checked);
+    testing.expectEqual(false, cb.indeterminate);
+    testing.expectEqual(false, cb.matches(':indeterminate'));
+
+    document.body.removeChild(cb);
+  }
+</script>
+
+<script id="checkbox_click_preventDefault_restores_indeterminate">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.indeterminate = true;
+
+    cb.addEventListener('click', (e) => {
+      testing.expectEqual(false, cb.indeterminate);
+      e.preventDefault();
+    });
+
+    cb.click();
+    testing.expectEqual(false, cb.checked);
+    testing.expectEqual(true, cb.indeterminate);
+  }
+</script>
+
+<script id="checkbox_click_preventDefault_restores_cleared_indeterminate">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+
+    cb.addEventListener('click', (e) => {
+      cb.indeterminate = true;
+      e.preventDefault();
+    });
+
+    cb.click();
+    testing.expectEqual(false, cb.checked);
+    testing.expectEqual(false, cb.indeterminate);
+    testing.expectEqual(false, cb.matches(':indeterminate'));
+  }
+</script>

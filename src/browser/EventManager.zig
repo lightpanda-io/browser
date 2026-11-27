@@ -739,6 +739,7 @@ fn isAncestorOrSelf(ancestor: *Node, node: *Node) bool {
 // then both inputs have to revert to their original values.
 const ActivationState = struct {
     old_checked: bool,
+    old_indeterminate: bool,
     input: *Element.Html.Input,
     previously_checked_radio: ?*Input,
 
@@ -761,6 +762,7 @@ const ActivationState = struct {
         }
 
         const old_checked = input._checked;
+        const old_indeterminate = input._indeterminate;
         var previously_checked_radio: ?*Element.Html.Input = null;
 
         // For radio buttons, find the currently checked radio in the group
@@ -771,10 +773,15 @@ const ActivationState = struct {
         // Toggle checkbox or check radio (which unchecks others in group)
         const new_checked = if (input._input_type == .checkbox) !old_checked else true;
         try input.setChecked(new_checked, frame);
+        if (input._input_type == .checkbox and old_indeterminate) {
+            input._indeterminate = false;
+            Frame.change.stateChanged(input.asElement(), .indeterminate, frame);
+        }
 
         return .{
             .input = input,
             .old_checked = old_checked,
+            .old_indeterminate = old_indeterminate,
             .previously_checked_radio = previously_checked_radio,
         };
     }
@@ -785,6 +792,10 @@ const ActivationState = struct {
             // Rollback: restore previous state
             input._checked = self.old_checked;
             input._checked_dirty = true;
+            if (input._input_type == .checkbox and input._indeterminate != self.old_indeterminate) {
+                input._indeterminate = self.old_indeterminate;
+                Frame.change.stateChanged(input.asElement(), .indeterminate, frame);
+            }
             if (self.previously_checked_radio) |prev_radio| {
                 prev_radio._checked = true;
                 prev_radio._checked_dirty = true;
