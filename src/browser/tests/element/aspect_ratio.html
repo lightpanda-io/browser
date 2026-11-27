@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<style>
+  body { margin: 0; }
+  .ar-img { width: 100%; height: 100%; }
+  .ar-card .ar-img { width: 100%; height: auto; }
+  .ar-fluid { max-width: 100%; height: auto; }
+</style>
+
+<div id="ar-root"></div>
+
+<script id="attributes">
+{
+  const root = $('#ar-root');
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const size = (id) => [rect(id).width, rect(id).height];
+
+  // The attributes map to `aspect-ratio: auto 1080 / 1920`: the auto height
+  // follows the used width. `height: auto` beats the height attribute, and
+  // the rule with it the less specific `height: 100%`.
+  root.innerHTML = `<div class="ar-card" style="width: 270px"><img id="ar-card-img" class="ar-img" width="1080" height="1920"></div>`;
+  testing.expectEqual([270, 480], size('ar-card-img'));
+
+  // The responsive image: max-width clamps the width, the height follows
+  root.innerHTML = `<div style="width: 300px"><img id="ar-fluid" class="ar-fluid" width="600" height="400"></div>`;
+  testing.expectEqual([300, 200], size('ar-fluid'));
+
+  // Without CSS, the attributes. A CSS width alone leaves the height
+  // attribute, which is a declaration.
+  root.innerHTML = `<img id="ar-plain" width="600" height="400"><img id="ar-width" width="600" height="400" style="width: 300px">`;
+  testing.expectEqual([600, 400], size('ar-plain'));
+  testing.expectEqual([300, 400], size('ar-width'));
+
+  // A declared height, an auto width: the width follows
+  root.innerHTML = `<img id="ar-tall" width="600" height="400" style="width: auto; height: 100px">`;
+  testing.expectEqual([150, 100], size('ar-tall'));
+
+  // min-height and max-height clamp the height the ratio gives
+  root.innerHTML = `<div style="width: 300px"><img id="ar-max" width="400" height="200" style="width: 100%; height: auto; max-height: 50px"></div>`;
+  testing.expectEqual([300, 50], size('ar-max'));
+
+  // An image's ratio is its content box's, whatever box-sizing says
+  root.innerHTML = `<img id="ar-padded" width="200" height="100" style="width: 100px; height: auto; padding: 10px; box-sizing: border-box">`;
+  testing.expectEqual([100, 60], size('ar-padded'));
+
+  // One attribute isn't a ratio
+  root.innerHTML = `<div style="width: 300px"><img id="ar-one" width="600" style="width: 100%"></div>`;
+  testing.expectEqual(300, rect('ar-one').width);
+
+  // A percentage width attribute is a percentage
+  root.innerHTML = `<div style="width: 300px"><iframe id="ar-frame" width="50%" height="100" style="border: 0"></iframe></div>`;
+  testing.expectEqual([150, 100], size('ar-frame'));
+}
+</script>
+
+<script id="canvas">
+{
+  const root = $('#ar-root');
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const size = (id) => [rect(id).width, rect(id).height];
+
+  // A canvas' natural size is its attributes, 300x150 without them
+  root.innerHTML = `<div style="width: 400px"><canvas id="ar-canvas" style="width: 100%"></canvas><canvas id="ar-canvas-attrs" width="100" height="25" style="width: 100%"></canvas></div>`;
+  testing.expectEqual([400, 200], size('ar-canvas'));
+  testing.expectEqual([400, 100], size('ar-canvas-attrs'));
+}
+</script>
+
+<script id="property">
+{
+  const root = $('#ar-root');
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const size = (id) => [rect(id).width, rect(id).height];
+
+  root.innerHTML = `<div style="width: 320px">
+    <div id="ar-two" style="aspect-ratio: 2"></div>
+    <div id="ar-wide" style="aspect-ratio: 16 / 9"></div>
+    <div id="ar-auto" style="aspect-ratio: auto 4/1"></div>
+    <div id="ar-degenerate" style="aspect-ratio: 1 / 0"></div>
+    <div id="ar-invalid" style="aspect-ratio: 2 / 1 / 1"></div>
+    <div id="ar-none"></div>
+  </div>`;
+  testing.expectEqual([320, 160], size('ar-two'));
+  testing.expectEqual([320, 180], size('ar-wide'));
+  testing.expectEqual([320, 80], size('ar-auto'));
+  // Like no ratio
+  testing.expectEqual(rect('ar-none').height, rect('ar-degenerate').height);
+  testing.expectEqual(rect('ar-none').height, rect('ar-invalid').height);
+
+  // A declared height gives the width
+  root.innerHTML = `<div id="ar-from-height" style="aspect-ratio: 2; height: 50px; display: inline-block"></div>`;
+  testing.expectEqual([100, 50], size('ar-from-height'));
+
+  // Without auto, the ratio is of the box box-sizing names
+  root.innerHTML = `<div id="ar-border" style="aspect-ratio: 1; width: 100px; padding: 10px; box-sizing: border-box"></div><div id="ar-content" style="aspect-ratio: 1; width: 100px; padding: 10px"></div>`;
+  testing.expectEqual([100, 100], size('ar-border'));
+  testing.expectEqual([120, 120], size('ar-content'));
+
+  // Content taller than the ratio's height grows the box (min-height: auto)
+  root.innerHTML = `<div id="ar-content-tall" style="aspect-ratio: 10; width: 100px"><div style="height: 40px"></div></div>`;
+  testing.expectEqual([100, 40], size('ar-content-tall'));
+}
+</script>
+
+<script id="changes">
+{
+  const root = $('#ar-root');
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const size = (id) => [rect(id).width, rect(id).height];
+
+  // A new width moves the height
+  root.innerHTML = `<div id="ar-wrap" style="width: 200px"><img id="ar-change" width="2" height="1" style="width: 100%; height: auto"></div>`;
+  testing.expectEqual([200, 100], size('ar-change'));
+  $('#ar-wrap').style.width = '100px';
+  testing.expectEqual([100, 50], size('ar-change'));
+
+  // So do the attributes
+  $('#ar-change').setAttribute('height', '2');
+  testing.expectEqual([100, 100], size('ar-change'));
+
+  // A new height moves the width, and what the width sizes
+  root.innerHTML = `<div id="ar-shrink" style="display: inline-block"><div id="ar-sized" style="aspect-ratio: 2; height: 50px; display: inline-block"></div></div>`;
+  testing.expectEqual(100, rect('ar-shrink').width);
+  $('#ar-sized').style.height = '100px';
+  testing.expectEqual([200, 100], size('ar-sized'));
+  testing.expectEqual(200, rect('ar-shrink').width);
+}
+</script>
