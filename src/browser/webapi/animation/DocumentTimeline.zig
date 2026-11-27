@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
+const Frame = @import("../../Frame.zig");
 const Document = @import("../Document.zig");
 
 // https://drafts.csswg.org/web-animations-1/#the-documenttimeline-interface
@@ -27,14 +28,29 @@ const Document = @import("../Document.zig");
 const DocumentTimeline = @This();
 
 _document: *Document,
+// ms from the document's time origin; 0 for document.timeline.
+_origin_time: f64 = 0,
+
+const Options = struct {
+    originTime: f64 = 0,
+};
+
+pub fn init(options_: ?Options, frame: *Frame) !*DocumentTimeline {
+    const opts = options_ orelse Options{};
+    return frame._factory.create(DocumentTimeline{
+        ._document = frame.document,
+        ._origin_time = opts.originTime,
+    });
+}
 
 // The default document timeline's origin is the document's time origin, so its
 // current time is the value performance.now() returns. A document without a
 // browsing context (DOMParser, createHTMLDocument) has an inactive timeline:
 // its current time is null.
+// Chrome only advances it once per animation frame; we have no frame clock.
 pub fn getCurrentTime(self: *const DocumentTimeline) ?f64 {
     const frame = self._document._frame orelse return null;
-    return frame.window._performance.now();
+    return frame.window._performance.now() - self._origin_time;
 }
 
 pub const JsApi = struct {
@@ -45,6 +61,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const constructor = bridge.constructor(DocumentTimeline.init, .{});
     pub const currentTime = bridge.accessor(DocumentTimeline.getCurrentTime, null, .{});
 };
 

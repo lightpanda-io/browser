@@ -579,7 +579,7 @@ fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
     return impl;
 }
 
-fn getTimeline(self: *Document, frame: *Frame) !*DocumentTimeline {
+pub fn getTimeline(self: *Document, frame: *Frame) !*DocumentTimeline {
     if (self._timeline) |timeline| return timeline;
     const timeline = try frame._factory.create(DocumentTimeline{ ._document = self });
     self._timeline = timeline;

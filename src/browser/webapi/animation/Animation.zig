@@ -23,6 +23,7 @@ const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const EventTarget = @import("../EventTarget.zig");
+const DocumentTimeline = @import("DocumentTimeline.zig");
 const AnimationPlaybackEvent = @import("../event/AnimationPlaybackEvent.zig");
 
 const log = lp.log;
@@ -44,7 +45,7 @@ _frame: *Frame,
 _arena: *lp.Arena,
 
 _effect: ?js.Object.Global = null,
-_timeline: ?js.Object.Global = null,
+_timeline: ?*DocumentTimeline,
 _ready_resolver: ?js.PromiseResolver.Global = null,
 _finished_resolver: ?js.PromiseResolver.Global = null,
 _startTime: ?f64 = null,
@@ -54,8 +55,8 @@ _playState: PlayState = .idle,
 // .idle => .running once play() is called.
 // .running => .finished after 10ms when update() is callback.
 //
-// TODO add support for effect and timeline
-pub fn init(frame: *Frame) !*Animation {
+// TODO add support for effect; the timeline is stored but drives nothing
+pub fn init(timeline: ?*DocumentTimeline, frame: *Frame) !*Animation {
     const arena = try frame.getArena(.tiny, "Animation");
     errdefer arena.release();
 
@@ -63,6 +64,7 @@ pub fn init(frame: *Frame) !*Animation {
         ._proto = undefined,
         ._frame = frame,
         ._arena = arena,
+        ._timeline = timeline,
     });
 }
 
@@ -204,11 +206,11 @@ fn setEffect(self: *Animation, effect: ?js.Object.Global) !void {
     self._effect = effect;
 }
 
-fn getTimeline(self: *const Animation) ?js.Object.Global {
+fn getTimeline(self: *const Animation) ?*DocumentTimeline {
     return self._timeline;
 }
 
-fn setTimeline(self: *Animation, timeline: ?js.Object.Global) !void {
+fn setTimeline(self: *Animation, timeline: ?*DocumentTimeline) void {
     self._timeline = timeline;
 }
 
