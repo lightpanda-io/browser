@@ -26,6 +26,7 @@ const CssParser = @import("../../css/Parser.zig");
 const Tokenizer = @import("../../css/Tokenizer.zig");
 const escape = @import("../../css/escape.zig");
 const properties = @import("../../css/properties.zig");
+const position_area = @import("../../css/position_area.zig");
 const DeclarationBlock = @import("../../css/DeclarationBlock.zig");
 const StyleManager = @import("../../StyleManager.zig");
 
@@ -128,6 +129,12 @@ pub fn getKnownPropertyValue(self: *const CSSStyleDeclaration, id: properties.Id
 
     if (isColorProperty(id)) {
         return computedColor(value, frame);
+    }
+
+    if (id == .@"position-area") {
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        position_area.writeComputed(value, &buf.writer) catch return value;
+        return buf.written();
     }
 
     return value;
@@ -681,6 +688,14 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, id: properties.Id, value: []const
                 },
                 .unsupported => {},
             }
+        }
+        if (id == .@"position-area" and color.usesSubstitution(value) == false and CssWideKeyword.parse(std.mem.trim(u8, value, &std.ascii.whitespace)) == null) {
+            var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+            if (try position_area.writeSpecified(value, &buf.writer) == false) {
+                // An invalid value leaves the declaration as it was.
+                return false;
+            }
+            break :blk buf.written();
         }
         break :blk try normalizePropertyValue(frame.local_arena, id, value);
     };
