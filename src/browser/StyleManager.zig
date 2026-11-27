@@ -2747,9 +2747,25 @@ pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) 
     if (@backingInt(id) >= properties.known_count) {
         return self.customChanged(el, self.varReach(id));
     }
+    var reach = propertyReach(id);
+    if (self.insetOnlyMoves(el, id)) {
+        reach.remove(.layout);
+    }
     // z-index orders boxes, it doesn't move them
-    self.invalidateInline(el, propertyReach(id), id != .@"z-index");
+    self.invalidateInline(el, reach, id != .@"z-index");
     return true;
+}
+
+// A left or right only places the box, applied on every read like a top
+// (see property_reach), unless the box is pinned on both sides: it then
+// stretches between them, and that width is cached (see widthSizing).
+fn insetOnlyMoves(self: *StyleManager, el: *Element, id: properties.Id) bool {
+    const geometry = self.geometryProps(el);
+    return switch (id) {
+        .left => geometry.right.unit == .auto,
+        .right => geometry.left.unit == .auto,
+        else => false,
+    };
 }
 
 /// `el`'s style attribute went from `old` to `new` (null: absent), `el`
@@ -10966,6 +10982,34 @@ test "StyleManager: a box sized by its insets follows the viewport" {
     try testing.expectEqual(170, layout.boxHeight(overlay, frame));
 }
 
+test "StyleManager: a box pinned on both sides follows its inline insets" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style='position: relative; width: 400px'><div style='position: absolute; left: 0; right: 0'></div></div>");
+    const box = body.firstChild().?.firstChild().?.as(Element);
+    const style = (try box.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+
+    try testing.expectEqual(400, layout.boxWidth(box, frame));
+    try style.setProperty("left", "100px", null, frame);
+    try testing.expectEqual(300, layout.boxWidth(box, frame));
+
+    // Unpinned: it shrinks to its content, and a left then only moves it
+    try style.setProperty("right", "auto", null, frame);
+    const shrunk = layout.boxWidth(box, frame);
+    try testing.expect(shrunk < 300);
+    try style.setProperty("left", "50px", null, frame);
+    try testing.expectEqual(@as(?f64, shrunk), sm.getCachedLayout(box, .box_width));
+    try testing.expectEqual(shrunk, layout.boxWidth(box, frame));
+}
+
 test "StyleManager: the root's width follows the viewport" {
     const layout = @import("layout.zig");
     const frame = try testing.createFrame();
@@ -11587,6 +11631,10 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     // A vertical inset only moves a positioned box, applied on every read
     sm.setCacheLayout(div, .box_width, 100);
     try style.setProperty("top", "4px", null, frame);
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(div, .box_width));
+
+    // So does a horizontal one, the other side auto
+    try style.setProperty("left", "4px", null, frame);
     try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(div, .box_width));
 
     // No memo reads a custom property
