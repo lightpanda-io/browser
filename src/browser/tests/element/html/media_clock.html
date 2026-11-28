@@ -65,6 +65,38 @@
   });
 </script>
 
+<script id="zero_duration" type=module>
+  // A file with no samples: a timeline of length 0, ended from the start.
+  // https://html.spec.whatwg.org/multipage/media.html#ended-playback
+  const state = await testing.async();
+  const audio = new Audio();
+  const loading = record(audio, ['loadedmetadata', 'canplaythrough']);
+  audio.src = wav(0);
+  await once(audio, 'canplaythrough');
+  // read now: Chrome's seek back to the start fires canplaythrough again
+  const loadEvents = loading.join(',');
+  const loaded = [audio.duration, audio.readyState, audio.ended, audio.paused];
+
+  // "reaches the end" at once: back to the paused, ended state
+  const playing = record(audio, ['timeupdate', 'pause', 'ended']);
+  // Chrome resolves or rejects (AbortError) depending on whether its seek back
+  // to the start gets its data before the end: either way, it has settled.
+  let settled = false;
+  audio.play().finally(() => { settled = true; }).catch(() => {});
+  await once(audio, 'ended');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('loadedmetadata,canplaythrough', loadEvents);
+    testing.expectEqual([0, 4, true, true], loaded);
+    testing.expectEqual('timeupdate,pause,ended', playing.slice(-3).join(','));
+    testing.expectEqual(0, audio.currentTime);
+    testing.expectEqual(true, audio.ended);
+    testing.expectEqual(true, audio.paused);
+    testing.expectEqual(true, settled);
+  });
+</script>
+
 <script id="source_child" type=module>
   const state = await testing.async();
   const video = document.createElement('video');

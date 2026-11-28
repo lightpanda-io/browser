@@ -169,9 +169,14 @@
   let notBuffer = null;
   try { await ctx.decodeAudioData(new Uint8Array(wav([0], 24000))); } catch (e) { notBuffer = e.name; }
 
+  // a header with no samples: an AudioBuffer has at least one frame
+  let empty = null;
+  try { await ctx.decodeAudioData(wav([], 24000)); } catch (e) { empty = e.name; }
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual('TypeError', notBuffer);
+    testing.expectEqual('EncodingError', empty);
     testing.expectEqual([['callback', 4], 'then'], order);
     testing.expectEqual(1, buffer.numberOfChannels);
     testing.expectEqual(48000, buffer.sampleRate);

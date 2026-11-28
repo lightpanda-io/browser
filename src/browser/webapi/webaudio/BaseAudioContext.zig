@@ -383,7 +383,8 @@ fn decodeAudioData(self: *BaseAudioContext, audio_data: js.Value, success_: ?js.
 
 fn decode(self: *BaseAudioContext, bytes: []const u8, local: *const js.Local) !*AudioBuffer {
     const parsed = try wav.parse(bytes);
-    if (parsed.channels > AudioBuffer.max_channels) {
+    // an AudioBuffer has at least one frame
+    if (parsed.frames == 0 or parsed.channels > AudioBuffer.max_channels) {
         return error.EncodingError;
     }
     const length = parsed.resampledLength(self._sample_rate);
