@@ -1809,13 +1809,22 @@ fn isBidiInterceptionMethod(method_: ?[]const u8) bool {
 fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .close, .disconnect, .quit => true,
-        .ping, .link, .bidi_http => false,
+        .ping, .link => false,
         .cdp => |c| isTeardownMethod(c.input.method),
-        // TODO: BiDi's teardown commands (browsingContext.close,
-        // session.end, browser.close) could interrupt the wait too, now
-        // that input.method is parsed on the Network thread.
-        .bidi => false,
+        .bidi => |b| isBidiTeardownMethod(if (b.input) |input| input.method else null),
+        // DELETE /session arrives as .quit.
+        .bidi_http => |command| command == .close_window,
     };
+}
+
+// The BiDi commands that close the page: a sync wait (which a BiDi
+// intercept can block) must not hold them for the whole request timeout.
+fn isBidiTeardownMethod(method_: ?[]const u8) bool {
+    const method = method_ orelse return false;
+    return std.mem.eql(u8, method, "browsingContext.close") or
+        std.mem.eql(u8, method, "session.end") or
+        std.mem.eql(u8, method, "browser.close") or
+        std.mem.eql(u8, method, "browser.removeUserContext");
 }
 
 fn isTeardownMethod(method: []const u8) bool {
@@ -5337,6 +5346,44 @@ test "HttpClient: isSyncWaitInterrupt matches teardown methods, close and discon
 
     var disconnect_msg = Inbox.Message{ .arena = test_arena, .payload = .{ .disconnect = null } };
     try testing.expect(isSyncWaitInterrupt(&disconnect_msg));
+}
+
+test "HttpClient: isSyncWaitInterrupt matches BiDi teardown commands" {
+    const test_arena = try testing.test_app.arena_pool.acquire(.tiny, "HttpClient test");
+    defer test_arena.release();
+
+    var raw_buf: [16]u8 = undefined;
+
+    const cases = [_]struct { ?[]const u8, bool }{
+        .{ "browsingContext.close", true },
+        .{ "session.end", true },
+        .{ "browser.close", true },
+        .{ "browser.removeUserContext", true },
+        .{ "browsingContext.navigate", false },
+        .{ "network.continueRequest", false },
+        .{ "session.subscribe", false },
+        .{ null, false },
+    };
+    inline for (cases) |case| {
+        var msg = Inbox.Message{
+            .arena = test_arena,
+            .payload = .{ .bidi = .{ .raw = &raw_buf, .input = .{ .id = 1, .method = case[0] } } },
+        };
+        try testing.expectEqual(case[1], isSyncWaitInterrupt(&msg));
+    }
+
+    // A frame that isn't valid JSON.
+    var invalid = Inbox.Message{
+        .arena = test_arena,
+        .payload = .{ .bidi = .{ .raw = &raw_buf, .input = null } },
+    };
+    try testing.expectEqual(false, isSyncWaitInterrupt(&invalid));
+
+    // HTTP WebDriver: closing the window does, other commands don't.
+    var close_window = Inbox.Message{ .arena = test_arena, .payload = .{ .bidi_http = .close_window } };
+    try testing.expectEqual(true, isSyncWaitInterrupt(&close_window));
+    var get_title = Inbox.Message{ .arena = test_arena, .payload = .{ .bidi_http = .get_title } };
+    try testing.expectEqual(false, isSyncWaitInterrupt(&get_title));
 }
 
 test "HttpClient: isSyncWaitInterrupt ignores ping and non-teardown CDP methods" {
