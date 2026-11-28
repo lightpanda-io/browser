@@ -371,6 +371,7 @@ const LpBox = extern struct {
 };
 
 const BOX_OUTLINE: u32 = 1 << 0;
+const BOX_CLIP: u32 = 1 << 1;
 
 const LpRenderOpts = extern struct {
     width: u32,
@@ -539,6 +540,7 @@ const LpAbi = extern struct {
     box_font_size: u32,
     box_flags: u32,
     box_outline: u32,
+    box_clip: u32,
 
     opts_size: u32,
     opts_align: u32,
@@ -1361,7 +1363,9 @@ const BoxCollector = struct {
             .spans = &.{},
             .spans_len = 0,
             .font_size = font_size,
-            .flags = self.box_flags,
+            // An image's alt stands in for its pixels, so it stays inside
+            // them, as in a broken image Chrome sizes
+            .flags = if (tag == .img) self.box_flags | BOX_CLIP else self.box_flags,
         });
         try self.segments.append(self.arena, .{
             .box = index,
@@ -1554,6 +1558,7 @@ test "browser.screenshot: rust abi matches" {
         .box_font_size = @offsetOf(LpBox, "font_size"),
         .box_flags = @offsetOf(LpBox, "flags"),
         .box_outline = BOX_OUTLINE,
+        .box_clip = BOX_CLIP,
 
         .opts_size = @sizeOf(LpRenderOpts),
         .opts_align = @alignOf(LpRenderOpts),
@@ -2171,6 +2176,39 @@ test "browser.screenshot: layout png" {
     try testing.expectEqual(true, height > 500);
     try testing.expectEqual(height, std.mem.readInt(u32, aw.written()[20..24], .big));
     try testing.expectEqual(height, try contentHeight(testing.arena_allocator, frame.document.asNode(), 320, .layout, frame));
+}
+
+test "browser.screenshot: layout png draws an img's alt only inside its box" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const body = try layoutTestBody(frame, "");
+    const Render = struct {
+        frame: *Frame,
+        body: *Node,
+
+        fn draw(self: @This(), html: []const u8) ![]const u8 {
+            while (self.body.firstChild()) |child| {
+                _ = try self.body.removeChild(child, self.frame);
+            }
+            try Frame.parse.htmlAsChildren(self.frame, self.body, html);
+            var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+            _ = try png(testing.arena_allocator, .{ .root = self.frame.document.asNode() }, .{ .width = 320, .mode = .layout }, &aw.writer, self.frame);
+            return aw.written();
+        }
+    };
+    const render: Render = .{ .frame = frame, .body = body };
+
+    // Too small for a glyph: nothing of the alt is drawn
+    const blank_small = try render.draw("<img style='width: 5px; height: 5px'>");
+    const small = try render.draw("<img alt='Karl Seguin' style='width: 5px; height: 5px'>");
+    try testing.expectEqual(true, std.mem.eql(u8, blank_small, small));
+
+    const blank_big = try render.draw("<img style='width: 200px; height: 40px'>");
+    const big = try render.draw("<img alt='Karl Seguin' style='width: 200px; height: 40px'>");
+    try testing.expectEqual(false, std.mem.eql(u8, blank_big, big));
+
+    const boxes = try collectBoxes(testing.arena_allocator, .{ .root = frame.document.asNode() }, .{ .width = 320, .mode = .layout }, frame);
+    try testing.expectEqual(BOX_CLIP, boxes[boxes.len - 1].flags);
 }
 
 test "browser.screenshot: --render-font faces fill what DejaVu lacks" {

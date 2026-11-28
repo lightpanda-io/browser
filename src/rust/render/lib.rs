@@ -94,9 +94,13 @@ pub struct LpBlock {
 /// what shows where the box is.
 pub const BOX_OUTLINE: u32 = 1 << 0;
 
+/// The box's text is drawn only where it fits inside the box: whole lines
+/// and glyphs, the rest left out.
+pub const BOX_CLIP: u32 = 1 << 1;
+
 /// A box placed by the page's own layout (`lp_render_boxes_png`), in CSS px
 /// from the top-left of the output. Its text starts at the box's top-left
-/// corner and wraps at its width, but isn't clipped to it.
+/// corner and wraps at its width, but isn't clipped to it unless BOX_CLIP.
 #[repr(C)]
 pub struct LpBox {
     pub x: f32,
@@ -321,6 +325,7 @@ pub struct LpAbi {
     pub box_font_size: u32,
     pub box_flags: u32,
     pub box_outline: u32,
+    pub box_clip: u32,
 
     pub opts_size: u32,
     pub opts_align: u32,
@@ -476,6 +481,7 @@ pub unsafe extern "C" fn lp_render_abi(out: *mut LpAbi) {
         box_font_size: offset_of!(LpBox, font_size) as u32,
         box_flags: offset_of!(LpBox, flags) as u32,
         box_outline: BOX_OUTLINE,
+        box_clip: BOX_CLIP,
 
         opts_size: size_of::<LpRenderOpts>() as u32,
         opts_align: align_of::<LpRenderOpts>() as u32,
@@ -1057,6 +1063,13 @@ struct Span<'a> {
     color: u32,
 }
 
+/// The size, in device px, a box's text is drawn within.
+#[derive(Clone, Copy)]
+struct Fit {
+    width: f32,
+    height: f32,
+}
+
 /// A box of the layout render that reaches the raster, in device px.
 struct BoxItem {
     x: f32,
@@ -1068,6 +1081,7 @@ struct BoxItem {
     /// How far a glyph can reach past its line box
     slop: f32,
     outline: bool,
+    clip: bool,
     text: Option<Layout<Rgb>>,
 }
 
@@ -1523,9 +1537,9 @@ impl Renderer {
             }
         }
         if let Some(m) = &p.marker {
-            self.draw_layout(pixmap, &m.layout, m.x, oy, slop);
+            self.draw_layout(pixmap, &m.layout, m.x, oy, slop, None);
         }
-        self.draw_layout(pixmap, &p.layout, p.x * scale, oy, slop);
+        self.draw_layout(pixmap, &p.layout, p.x * scale, oy, slop, None);
     }
 
     /// Like `render`, for boxes the caller has already placed. Each box's
@@ -1569,6 +1583,7 @@ impl Renderer {
             if !spans_from_ffi(&mut spans, b.spans, b.spans_len) {
                 return (0, RC_INVALID);
             }
+            let clip = b.flags & BOX_CLIP != 0;
             let mut text = None;
             let mut extent = height;
             if !spans.is_empty() {
@@ -1584,7 +1599,9 @@ impl Renderer {
                 );
                 layout.break_all_lines(Some(width.max(1.0)));
                 layout.align(Alignment::Start, AlignmentOptions::default());
-                extent = extent.max(layout.height());
+                if !clip {
+                    extent = extent.max(layout.height());
+                }
                 text = Some(layout);
             }
             if y + extent > 0.0 {
@@ -1596,6 +1613,7 @@ impl Renderer {
                     extent,
                     slop: font_size * BOX_LINE_HEIGHT * scale,
                     outline: b.flags & BOX_OUTLINE != 0,
+                    clip,
                     text,
                 });
             }
@@ -1633,7 +1651,11 @@ impl Renderer {
                     }
                 }
                 if let Some(layout) = &item.text {
-                    self.draw_layout(band, layout, x, y, item.slop);
+                    let fit = item.clip.then_some(Fit {
+                        width: item.width,
+                        height: item.height,
+                    });
+                    self.draw_layout(band, layout, x, y, item.slop, fit);
                 }
             }
         });
@@ -1641,7 +1663,8 @@ impl Renderer {
     }
 
     /// Draws the lines of `layout` that reach `pixmap`. A glyph can leave
-    /// its line box, by `slop` at most.
+    /// its line box, by `slop` at most. With `fit`, only the lines and
+    /// glyphs that fit inside it are drawn.
     fn draw_layout(
         &mut self,
         pixmap: &mut Pixmap,
@@ -1649,10 +1672,15 @@ impl Renderer {
         ox: f32,
         oy: f32,
         slop: f32,
+        fit: Option<Fit>,
     ) {
         let bottom = pixmap.height() as f32;
+        let right = fit.map_or(f32::INFINITY, |f| ox + f.width);
         for line in layout.lines() {
             let m = line.metrics();
+            if fit.is_some_and(|f| m.block_max_coord > f.height) {
+                break;
+            }
             if oy + m.block_max_coord + slop <= 0.0 {
                 continue;
             }
@@ -1661,13 +1689,21 @@ impl Renderer {
             }
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(gr) = item {
-                    self.draw_glyph_run(pixmap, &gr, ox, oy);
+                    self.draw_glyph_run(pixmap, &gr, ox, oy, right);
                 }
             }
         }
     }
 
-    fn draw_glyph_run(&mut self, pixmap: &mut Pixmap, gr: &GlyphRun<Rgb>, ox: f32, oy: f32) {
+    /// Glyphs whose advance ends past `right` are left out.
+    fn draw_glyph_run(
+        &mut self,
+        pixmap: &mut Pixmap,
+        gr: &GlyphRun<Rgb>,
+        ox: f32,
+        oy: f32,
+        right: f32,
+    ) {
         let run = gr.run();
         let font = run.font();
         let font_size = run.font_size();
@@ -1706,6 +1742,9 @@ impl Renderer {
             let gx = x + glyph.x;
             let gy = baseline - glyph.y;
             x += glyph.advance;
+            if x > right {
+                break;
+            }
             let path = self
                 .glyph_cache
                 .entry((font_key, glyph.id))
@@ -1742,8 +1781,8 @@ impl Renderer {
             let sz = d.size.unwrap_or(default_size).max(1.0);
             let mut p2 = Paint::default();
             p2.set_color_rgba8(d.brush.0, d.brush.1, d.brush.2, 255);
-            if let Some(r) = Rect::from_xywh(x0, (baseline - off).round(), gr.advance(), sz.round())
-            {
+            let w = gr.advance().min(right - x0);
+            if let Some(r) = Rect::from_xywh(x0, (baseline - off).round(), w, sz.round()) {
                 pixmap.fill_rect(r, &p2, Transform::identity(), None);
             }
         }
