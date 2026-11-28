@@ -29,6 +29,7 @@ const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
+const exec_command = @import("exec_command.zig");
 const StyleManager = @import("../StyleManager.zig");
 const EventManager = @import("../EventManager.zig");
 
@@ -2068,6 +2069,8 @@ fn editingHostOf(node: *Node) ?*Element {
 pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !void {
     const host = host_el.asNode();
     const selection = &frame.document._selection;
+    // formatting chosen at a collapsed caret (execCommand('bold'))
+    const typing_style = exec_command.takeTypingStyle(frame.document);
     var container: *Node, var offset: u32 = firstCaretPosition(host);
     if (selection._range) |range| {
         const abstract = range.asAbstractRange();
@@ -2136,12 +2139,16 @@ pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !vo
         offset = 0;
         break :blk @intCast(Node.CData.utf16Len(text));
     };
-    const node = text_node.?.asCData().asNode();
+    var node = text_node.?.asCData().asNode();
     _ = try rebalanceSpaces(frame, node, caret);
     if (std.mem.indexOfNone(u8, text, " ") != null) {
         _ = try rebalanceSpaces(frame, node, offset);
     }
-    try selection.collapse(node, caret, frame);
+    var caret_offset = caret;
+    if (typing_style) |values| {
+        node, caret_offset = try exec_command.applyTypingStyle(frame, host_el, node.is(Node.CData.Text).?, offset, caret, values);
+    }
+    try selection.collapse(node, caret_offset, frame);
 
     const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
         .bubbles = true,
