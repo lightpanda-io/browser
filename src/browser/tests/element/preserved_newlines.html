@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<body>
+
+<script id="pre">
+{
+  // A code block as highlighters write it: a span per line, newlines between
+  const wrap = document.createElement('div');
+  wrap.innerHTML = '<pre id="pn-pre"><code id="pn-code"><span id="pn-a">ab</span>\n<span id="pn-b">abcdef</span>\n<span id="pn-c">a</span></code></pre>';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const a = rect('pn-a');
+  const b = rect('pn-b');
+  const c = rect('pn-c');
+
+  // Each on a line of its own, at the line's start
+  testing.expectEqual(a.left, b.left);
+  testing.expectEqual(a.left, c.left);
+  const line = b.top - a.top;
+  testing.expectTrue(line > 0);
+  testing.expectEqual(line, c.top - b.top);
+
+  // The code is as wide as its widest line, and as tall as its lines
+  testing.expectEqual(b.width, rect('pn-code').width);
+  testing.expectEqual(3 * line, $('#pn-pre').offsetHeight);
+
+  // An empty line takes its room
+  wrap.innerHTML = '<pre><span id="pn-a">a</span>\n\n<span id="pn-b">b</span></pre>';
+  testing.expectEqual(2 * line, rect('pn-b').top - rect('pn-a').top);
+  testing.expectEqual(rect('pn-a').left, rect('pn-b').left);
+
+  // Read from the last: the same tops
+  wrap.innerHTML = '<pre><span id="pn-a">a</span>\n<span id="pn-b">b</span>\n<span id="pn-c">c</span></pre>';
+  const c2 = rect('pn-c').top;
+  const b2 = rect('pn-b').top;
+  testing.expectEqual(line, c2 - b2);
+  testing.expectEqual(line, b2 - rect('pn-a').top);
+
+  wrap.remove();
+}
+</script>
+
+<script id="whiteSpace">
+{
+  const wrap = document.createElement('div');
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const html = '<span id="pn-a">a</span>\n<span id="pn-b">b</span>';
+
+  // Newlines collapse to a space: one line
+  wrap.innerHTML = html;
+  testing.expectEqual(rect('pn-a').top, rect('pn-b').top);
+  testing.expectTrue(rect('pn-b').left > rect('pn-a').left);
+
+  // They break with every value that keeps them
+  for (const value of ['pre', 'pre-wrap', 'pre-line', 'break-spaces']) {
+    wrap.style.whiteSpace = value;
+    wrap.innerHTML = html;
+    testing.expectTrue(rect('pn-b').top > rect('pn-a').top);
+    testing.expectEqual(rect('pn-a').left, rect('pn-b').left);
+  }
+
+  wrap.remove();
+}
+</script>

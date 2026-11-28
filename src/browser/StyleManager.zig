@@ -64,6 +64,7 @@ visibility: Group(Visibility) = .{},
 geometry: Group(Geometry) = .{},
 touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
+text_wrap: Group(TextWrap) = .{},
 flow: Group(Flow) = .{},
 grid: Group(Grid) = .{},
 
@@ -1821,6 +1822,7 @@ fn ownValuesChanged(self: *StyleManager, el: *Element, groups: Memos) ?OwnChange
                 .geometry => self.geometryProps(el),
                 .touch_action => self.touchActionProps(el),
                 .text => self.text.ownProps(self.arena.allocator(), el, frame),
+                .text_wrap => self.textWrapProps(el),
                 .flow => self.flowProps(el),
                 .grid => self.gridProps(el),
                 .layout, .heights => comptime unreachable,
@@ -2534,7 +2536,7 @@ fn dropRestyled(self: *StyleManager, node: *Node, subtree: bool, boxes: *BoxScop
                     // Entries hold the element's own values
                     .geometry, .text, .grid => _ = group.memo.remove(el),
                     // Entries hold resolved values: el's reach its descendants
-                    .visibility, .touch_action, .flow => self.dropInherited(&group.memo, node),
+                    .visibility, .touch_action, .text_wrap, .flow => self.dropInherited(&group.memo, node),
                     .layout, .heights => unreachable,
                 }
             },
@@ -2728,7 +2730,7 @@ fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) b
 
 /// The memos an inline write can invalidate on its own, one per Group. Plus
 /// the layout memos comes from several groups.
-const Memo = enum { visibility, geometry, touch_action, text, flow, grid, layout, heights };
+const Memo = enum { visibility, geometry, touch_action, text, text_wrap, flow, grid, layout, heights };
 const Memos = std.EnumSet(Memo);
 
 comptime {
@@ -2934,7 +2936,7 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach_: Memos, moves_box:
                     // children, but not their styles.
                     .geometry, .text, .grid => _ = group.memo.remove(el),
                     // Entries hold resolved values: el's reach its descendants
-                    .visibility, .touch_action, .flow => self.dropInherited(&group.memo, el.asNode()),
+                    .visibility, .touch_action, .text_wrap, .flow => self.dropInherited(&group.memo, el.asNode()),
                     .layout, .heights => unreachable,
                 };
             },
@@ -3551,30 +3553,14 @@ pub fn ownTextTransform(self: *StyleManager, el: *Element) TextTransform {
 pub fn whiteSpace(self: *StyleManager, el: *Element) text_measure.WhiteSpace {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{};
-
-    var wrap: WrapMode = .inherit;
-    var collapse: SpaceCollapse = .inherit;
-
-    var current: ?*Element = el;
-    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
-        const own = self.ownWhiteSpace(elem);
-        if (collapse == .inherit) {
-            collapse = own.collapse;
-        }
-        if (wrap == .inherit) {
-            wrap = own.wrap;
-        }
-        if (collapse != .inherit and wrap != .inherit) {
-            break;
-        }
-    }
+    const p = self.textWrap(el);
     return .{
-        .collapse = !collapse.keepsSpaces(),
-        .newlines = switch (collapse) {
+        .collapse = !p.white_space_collapse.keepsSpaces(),
+        .newlines = switch (p.white_space_collapse) {
             .preserve, .preserve_breaks, .break_spaces => true,
             .inherit, .collapse, .preserve_spaces => false,
         },
-        .wrap = wrap != .nowrap,
+        .wrap = p.text_wrap_mode != .nowrap,
     };
 }
 
@@ -3582,20 +3568,42 @@ pub fn whiteSpace(self: *StyleManager, el: *Element) text_measure.WhiteSpace {
 /// when it takes its parent value.
 pub fn ownKeepsSpaces(self: *StyleManager, el: *Element) ?bool {
     self.rebuildIfDirty() catch return null;
-    const collapse = self.ownWhiteSpace(el).collapse;
-    if (collapse == .inherit) {
-        return null;
+    if (self.text_wrap.hasRules() or el._flags.has_inline_style) {
+        // Resolved: the parent's is memoized by now
+        return self.textWrapProps(el).white_space_collapse.keepsSpaces();
     }
-    return collapse.keepsSpaces();
+    const ua = WhiteSpace.uaDefault(el.getTag()) orelse return null;
+    return ua.collapse.keepsSpaces();
 }
 
-fn ownWhiteSpace(self: *StyleManager, el: *Element) WhiteSpace {
-    if (!self.text.hasRules() and !el._flags.has_inline_style) {
-        // Most pages declare no white-space: skip the cascade and the memo.
-        return WhiteSpace.uaDefault(el.getTag()) orelse .{};
+// el's resolved white-space. Most pages declare none: then the UA's is found
+// up the ancestors without the cascade, up to one with an inline style.
+fn textWrap(self: *StyleManager, el: *Element) TextWrap.Computed {
+    if (self.text_wrap.hasRules()) {
+        return self.textWrapProps(el);
     }
-    const p = self.text.ownProps(self.arena.allocator(), el, self.frame);
-    return .{ .collapse = p.white_space_collapse, .wrap = p.text_wrap_mode };
+    var own: TextWrap.Cascaded = .{};
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
+        const above: TextWrap.Cascaded = if (elem._flags.has_inline_style) blk: {
+            // Resolved, so it ends the walk
+            const p = self.textWrapProps(elem);
+            break :blk .{ .text_wrap_mode = p.text_wrap_mode, .white_space_collapse = p.white_space_collapse };
+        } else blk: {
+            const ua = WhiteSpace.uaDefault(elem.getTag()) orelse continue;
+            break :blk .{ .text_wrap_mode = ua.wrap, .white_space_collapse = ua.collapse };
+        };
+        if (own.white_space_collapse == .inherit) {
+            own.white_space_collapse = above.white_space_collapse;
+        }
+        if (own.text_wrap_mode == .inherit) {
+            own.text_wrap_mode = above.text_wrap_mode;
+        }
+        if (own.white_space_collapse != .inherit and own.text_wrap_mode != .inherit) {
+            break;
+        }
+    }
+    return .resolve(own, .{});
 }
 
 /// The axes along which `el` is a scroll container: its own computed overflow
@@ -4810,6 +4818,10 @@ fn freshLayoutMemo(self: *StyleManager) ?*LayoutMemo {
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn visibilityProps(self: *StyleManager, el: *Element) Visibility.Computed {
     return self.visibility.inheritedProps(self.arena.allocator(), el, self.frame);
+}
+
+fn textWrapProps(self: *StyleManager, el: *Element) TextWrap.Computed {
+    return self.text_wrap.inheritedProps(self.arena.allocator(), el, self.frame);
 }
 
 /// Callers must have run rebuildIfDirty, which resets the memo.
@@ -7777,17 +7789,40 @@ const TouchAction = struct {
 /// value; `.inherit` means it takes its parent's.
 const Text = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "text-transform", "white-space", "white-space-collapse", "text-wrap-mode", "text-wrap" };
+        const names = [_][]const u8{"text-transform"};
+
+        text_transform: ?TextTransform = null,
+
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            if (id != .@"text-transform") return;
+            self.text_transform = TextTransform.parse(value);
+        }
+    };
+
+    const Computed = packed struct(u3) {
+        text_transform: TextTransform = .inherit,
+    };
+
+    pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
+        if (priorities.get(.text_transform) == 0) {
+            if (TextTransform.uaDefault(el.getTag())) |ua| {
+                p.text_transform = ua;
+            }
+        }
+    }
+};
+
+/// white-space, as its two longhands. Inherited: entries hold the resolved
+/// values, so a read stops at the first ancestor with one.
+const TextWrap = struct {
+    const Declared = struct {
+        const names = [_][]const u8{ "white-space", "white-space-collapse", "text-wrap-mode", "text-wrap" };
 
         text_wrap_mode: ?WrapMode = null,
-        text_transform: ?TextTransform = null,
         white_space_collapse: ?SpaceCollapse = null,
 
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
-                .@"text-transform" => {
-                    self.text_transform = TextTransform.parse(value);
-                },
                 .@"white-space" => {
                     if (WhiteSpace.parse(value)) |white_space| {
                         self.white_space_collapse = white_space.collapse;
@@ -7814,20 +7849,27 @@ const Text = struct {
         }
     };
 
-    const Computed = packed struct(u8) {
+    // `.inherit` takes the parent's
+    pub const Cascaded = struct {
         text_wrap_mode: WrapMode = .inherit,
-        text_transform: TextTransform = .inherit,
         white_space_collapse: SpaceCollapse = .inherit,
     };
 
-    pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
-        const tag = el.getTag();
-        if (priorities.get(.text_transform) == 0) {
-            if (TextTransform.uaDefault(tag)) |ua| {
-                p.text_transform = ua;
-            }
+    // Never `.inherit`: the root's parent has the initial values
+    const Computed = packed struct(u5) {
+        text_wrap_mode: WrapMode = .wrap,
+        white_space_collapse: SpaceCollapse = .collapse,
+
+        fn resolve(own: Cascaded, parent: Computed) Computed {
+            return .{
+                .text_wrap_mode = if (own.text_wrap_mode == .inherit) parent.text_wrap_mode else own.text_wrap_mode,
+                .white_space_collapse = if (own.white_space_collapse == .inherit) parent.white_space_collapse else own.white_space_collapse,
+            };
         }
-        const ua = WhiteSpace.uaDefault(tag) orelse return;
+    };
+
+    pub fn finish(p: *Cascaded, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
+        const ua = WhiteSpace.uaDefault(el.getTag()) orelse return;
         if (priorities.get(.white_space_collapse) == 0) {
             p.white_space_collapse = ua.collapse;
         }
@@ -8266,12 +8308,13 @@ const Var = struct {
 };
 
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names ++ Grid.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ TextWrap.Declared.names ++ Flow.Declared.names ++ Grid.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
     touch_action: TouchAction.Declared = .{},
     text: Text.Declared = .{},
+    text_wrap: TextWrap.Declared = .{},
     flow: Flow.Declared = .{},
     grid: Grid.Declared = .{},
 
@@ -9818,6 +9861,35 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         i += 1;
     }
     try testing.expectEqual(expected.len, i);
+}
+
+test "StyleManager: memo: white-space resolves from the nearest declaring ancestor" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<p style="white-space: pre"><b><i></i></b></p>
+    );
+    const p = div.asNode().firstChild().?.as(Element);
+    const b = p.asNode().firstChild().?.as(Element);
+    const i = b.asNode().firstChild().?.as(Element);
+
+    // Without rules, only the inline style's element and its ancestors are
+    // cascaded and memoized
+    try testing.expectEqual(text_measure.WhiteSpace{ .collapse = false, .newlines = true, .wrap = false }, sm.whiteSpace(i));
+    try testing.expectEqual(2, sm.text_wrap.memo.count());
+    try testing.expectEqual(text_measure.WhiteSpace{}, sm.whiteSpace(div));
+
+    // Resolved entries: a write reaches what inherits from it
+    try p.setStyle("white-space: normal", frame);
+    try testing.expectEqual(text_measure.WhiteSpace{}, sm.whiteSpace(i));
+    try b.setStyle("white-space-collapse: preserve-breaks", frame);
+    try testing.expectEqual(text_measure.WhiteSpace{ .newlines = true }, sm.whiteSpace(i));
+    try testing.expectEqual(true, sm.text_wrap.memo.contains(b));
+    try p.setStyle("text-wrap-mode: nowrap", frame);
+    try testing.expectEqual(text_measure.WhiteSpace{ .newlines = true, .wrap = false }, sm.whiteSpace(i));
 }
 
 test "StyleManager: memo: reuse and invalidation" {

@@ -2085,6 +2085,8 @@ pub const LineCursor = struct {
     // Text before the box, unwrapped: on its line, or in a row the
     // anonymous item a run of it makes.
     text: ?layout.LineText(.full) = null,
+    // Whether the parent's white-space keeps newlines (see layout.ForcedLines)
+    keeps_newlines: ?bool = null,
     // A flex row's free space, read at the first offset; null for none
     space: ??layout.RowSpace = null,
     // A row's gap between its items, read at the first offsetOf
@@ -2166,7 +2168,17 @@ pub const LineCursor = struct {
             const sibling = s.is(Element) orelse {
                 if (self.text) |*t| {
                     if (s.is(Node.CData.Text)) |data| {
-                        t.add(data.ownData(), owner);
+                        // A row's text is one item, whatever its newlines
+                        var lines: layout.ForcedLines = if (self.mode == .line) .init(data.ownData(), t.parent, &self.keeps_newlines, owner) else .whole(data.ownData());
+                        var first = true;
+                        while (lines.next()) |segment| : (first = false) {
+                            if (first == false) {
+                                // A preserved newline ends the line
+                                self.x = 0;
+                                _ = t.end();
+                            }
+                            t.add(segment, owner);
+                        }
                     }
                 }
                 continue;

@@ -641,11 +641,21 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
     var widest: f64 = 0;
     var line: f64 = 0;
     var text: LineText(mode) = .{ .parent = self };
+    var keeps_newlines: ?bool = null;
     var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
     while (children.next()) |node| {
         const el = node.is(Element) orelse {
             if (node.is(Node.CData.Text)) |t| {
-                text.add(t.ownData(), owner);
+                // A row's text is one item, whatever its newlines
+                var lines: ForcedLines = if (in_row) .whole(t.ownData()) else .init(t.ownData(), self, &keeps_newlines, owner);
+                var first = true;
+                while (lines.next()) |segment| : (first = false) {
+                    if (first == false) {
+                        widest = @max(widest, line + text.end());
+                        line = 0;
+                    }
+                    text.add(segment, owner);
+                }
             }
             continue;
         };
@@ -692,6 +702,45 @@ fn textLineWidth(self: *Element, comptime mode: ContentMode, white_space: text_m
         },
     };
 }
+
+/// A text node's data, split at the line breaks it forces: at each newline
+/// when its parent keeps them (white-space: pre and the like), else whole.
+/// `keeps` holds the parent's white-space for the walk: read at the first
+/// newline, which most text has.
+pub const ForcedLines = struct {
+    rest: ?[]const u8,
+    breaks: bool,
+
+    pub fn init(data: []const u8, parent: *Element, keeps: *?bool, owner: *Frame) ForcedLines {
+        const known = keeps.* orelse blk: {
+            if (std.mem.findScalar(u8, data, '\n') == null) {
+                return .whole(data);
+            }
+            const newlines = owner._style_manager.whiteSpace(parent).newlines;
+            keeps.* = newlines;
+            break :blk newlines;
+        };
+        // Once known, next() finds the newlines, if they break
+        return .{ .rest = data, .breaks = known };
+    }
+
+    pub fn whole(data: []const u8) ForcedLines {
+        return .{ .rest = data, .breaks = false };
+    }
+
+    /// The next line's text: each after the first starts a new line.
+    pub fn next(self: *ForcedLines) ?[]const u8 {
+        const rest = self.rest orelse return null;
+        if (self.breaks) {
+            if (std.mem.findScalar(u8, rest, '\n')) |i| {
+                self.rest = rest[i + 1 ..];
+                return rest[0..i];
+            }
+        }
+        self.rest = null;
+        return rest;
+    }
+};
 
 /// The text of parent's children on one line, measured as it's added.
 pub fn LineText(comptime mode: ContentMode) type {
@@ -1016,8 +1065,23 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     }
     defer style_manager.setCachePlaced(parent, placed);
 
+    var keeps_newlines: ?bool = null;
+    var line_height: ?f64 = null;
     while (next) |node| : (next = node.flatNextSibling(owner)) {
-        const el = node.is(Element) orelse continue;
+        const el = node.is(Element) orelse {
+            if (flow.mode == .block) {
+                if (node.is(Node.CData.Text)) |text| {
+                    var lines: ForcedLines = .init(text.ownData(), parent, &keeps_newlines, owner);
+                    _ = lines.next();
+                    while (lines.next()) |_| {
+                        const h = line_height orelse textLineHeight(parent, owner);
+                        line_height = h;
+                        flow.breakLine(h);
+                    }
+                }
+            }
+            continue;
+        };
         if (comptime lp.IS_TEST) {
             style_manager.offset_steps += 1;
         }
@@ -1065,10 +1129,21 @@ fn resumePoint(self: *Element, parent: *Element, gap: f64, owner: *Frame) ?Resum
     // the line-level sibling right before it is enough: Flow.at puts that one
     // at the line's top too, below its top margin. One the flow doesn't place
     // isn't: it sits above the margin the block before it left (Flow.at).
+    // A preserved newline between them puts them on different lines.
     var adjacent = style_manager.flowRole(self) != .block;
+    var keeps_newlines: ?bool = null;
     var previous = self_node.previousSibling();
     while (previous) |node| : (previous = node.previousSibling()) {
-        const el = node.is(Element) orelse continue;
+        const el = node.is(Element) orelse {
+            if (adjacent) {
+                if (node.is(Node.CData.Text)) |text| {
+                    var lines: ForcedLines = .init(text.ownData(), parent, &keeps_newlines, owner);
+                    _ = lines.next();
+                    adjacent = lines.next() == null;
+                }
+            }
+            continue;
+        };
         switch (style_manager.flowRole(el)) {
             .none, .out_of_flow => continue,
             .line => {
@@ -1240,6 +1315,7 @@ fn measureContentHeight(self: *Element, owner: *Frame) f64 {
     var declared_read = false;
     var wraps_at_box: ?bool = null;
     var line_height: ?f64 = null;
+    var keeps_newlines: ?bool = null;
 
     var flow: Flow = .of(self, owner);
     var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
@@ -1271,46 +1347,55 @@ fn measureContentHeight(self: *Element, owner: *Frame) f64 {
                 };
             }
         }
-        if (wrap) |*w| {
-            if (flow.margin.size() != 0 and isAllWhitespace(text.ownData()) == false) {
-                // A line below a block: past its bottom margin
-                flow.settle();
+        var lines: ForcedLines = if (flow.mode == .block) .init(text.ownData(), self, &keeps_newlines, owner) else .whole(text.ownData());
+        var first = true;
+        while (lines.next()) |data| : (first = false) {
+            if (first == false) {
+                if (wrap) |*w| {
+                    flow.line = @max(flow.line, w.wrappedHeight());
+                    w.* = .{ .line_width = w.line_width, .font_size = w.font_size, .white_space = w.white_space };
+                }
+                const h = line_height orelse textLineHeight(self, owner);
+                line_height = h;
+                flow.breakLine(h);
             }
-            w.add(text.ownData());
-            continue;
-        }
-        if (wraps_at_box == false) {
-            // Skip the scan once the line is already this tall
-            if (line_height) |h| {
-                if (flow.line >= h) continue;
+            if (wrap) |*w| {
+                if (flow.margin.size() != 0 and isAllWhitespace(data) == false) {
+                    // A line below a block: past its bottom margin
+                    flow.settle();
+                }
+                w.add(data);
+                continue;
             }
-        }
-        if (isAllWhitespace(text.ownData())) {
-            continue;
-        }
-        flow.settle();
-        const at_box = wraps_at_box orelse blk: {
-            const wraps = style_manager.wrapsOwnText(self);
-            wraps_at_box = wraps;
-            break :blk wraps;
-        };
-        if (at_box) {
-            style_manager.setHeightReadsWidth(self);
-            wrap = .{
-                .line_width = innerWidth(self, owner),
-                .font_size = style_manager.computedFontSize(self),
-                .white_space = style_manager.whiteSpace(self),
+            if (wraps_at_box == false) {
+                // Skip the scan once the line is already this tall
+                if (line_height) |h| {
+                    if (flow.line >= h) continue;
+                }
+            }
+            if (isAllWhitespace(data)) {
+                continue;
+            }
+            flow.settle();
+            const at_box = wraps_at_box orelse blk: {
+                const wraps = style_manager.wrapsOwnText(self);
+                wraps_at_box = wraps;
+                break :blk wraps;
             };
-            wrap.?.add(text.ownData());
-            continue;
-        }
-        const h = line_height orelse blk: {
-            // Whole pixels, like the wrapped height
-            const h = @ceil(style_manager.computedFontSize(self) * text_measure.LINE_HEIGHT);
+            if (at_box) {
+                style_manager.setHeightReadsWidth(self);
+                wrap = .{
+                    .line_width = innerWidth(self, owner),
+                    .font_size = style_manager.computedFontSize(self),
+                    .white_space = style_manager.whiteSpace(self),
+                };
+                wrap.?.add(data);
+                continue;
+            }
+            const h = line_height orelse textLineHeight(self, owner);
             line_height = h;
-            break :blk h;
-        };
-        flow.line = @max(flow.line, h);
+            flow.line = @max(flow.line, h);
+        }
     }
 
     if (wrap) |w| {
@@ -1318,6 +1403,11 @@ fn measureContentHeight(self: *Element, owner: *Frame) f64 {
         flow.line = @max(flow.line, w.wrappedHeight());
     }
     return flow.height();
+}
+
+// A line of el's own text: whole pixels, like the wrapped height
+fn textLineHeight(el: *Element, owner: *Frame) f64 {
+    return @ceil(owner._style_manager.computedFontSize(el) * text_measure.LINE_HEIGHT);
 }
 
 // A parent's children, laid out top to bottom.
@@ -1395,6 +1485,15 @@ const Flow = struct {
     fn settle(self: *Flow) void {
         self.offset += self.margin.size();
         self.margin = .{};
+    }
+
+    // A preserved newline ends the line: the next starts below it. A line
+    // is at least a line of text tall, even an empty one.
+    fn breakLine(self: *Flow, text_height: f64) void {
+        self.settle();
+        self.offset += @max(self.line, text_height);
+        self.line = 0;
+        self.trailing_gap = false;
     }
 
     fn marginsOf(self: *Flow, el: *Element, owner: *Frame) [2]f64 {
