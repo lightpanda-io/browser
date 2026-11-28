@@ -98,9 +98,14 @@ pub const BOX_OUTLINE: u32 = 1 << 0;
 /// and glyphs, the rest left out.
 pub const BOX_CLIP: u32 = 1 << 1;
 
+/// The box's text breaks only at its newlines, not at the box's width
+/// (white-space: pre or nowrap).
+pub const BOX_NOWRAP: u32 = 1 << 2;
+
 /// A box placed by the page's own layout (`lp_render_boxes_png`), in CSS px
 /// from the top-left of the output. Its text starts at the box's top-left
-/// corner and wraps at its width, but isn't clipped to it unless BOX_CLIP.
+/// corner and wraps at its width (unless BOX_NOWRAP), but isn't clipped to
+/// it unless BOX_CLIP.
 #[repr(C)]
 pub struct LpBox {
     pub x: f32,
@@ -326,6 +331,7 @@ pub struct LpAbi {
     pub box_flags: u32,
     pub box_outline: u32,
     pub box_clip: u32,
+    pub box_nowrap: u32,
 
     pub opts_size: u32,
     pub opts_align: u32,
@@ -482,6 +488,7 @@ pub unsafe extern "C" fn lp_render_abi(out: *mut LpAbi) {
         box_flags: offset_of!(LpBox, flags) as u32,
         box_outline: BOX_OUTLINE,
         box_clip: BOX_CLIP,
+        box_nowrap: BOX_NOWRAP,
 
         opts_size: size_of::<LpRenderOpts>() as u32,
         opts_align: align_of::<LpRenderOpts>() as u32,
@@ -1597,7 +1604,8 @@ impl Renderer {
                     BOX_LINE_HEIGHT,
                     scale,
                 );
-                layout.break_all_lines(Some(width.max(1.0)));
+                let wrap = b.flags & BOX_NOWRAP == 0;
+                layout.break_all_lines(wrap.then_some(width.max(1.0)));
                 layout.align(Alignment::Start, AlignmentOptions::default());
                 if !clip {
                     extent = extent.max(layout.height());
