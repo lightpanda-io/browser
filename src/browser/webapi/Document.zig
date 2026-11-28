@@ -1860,16 +1860,15 @@ fn queryCommandEnabled(self: *Document, command: []const u8) bool {
     return exec_command.isEnabled(self, command);
 }
 
-fn queryCommandIndeterm(_: *const Document, _: []const u8) bool {
-    // No supported command is ever indeterminate.
-    return false;
+fn queryCommandIndeterm(self: *Document, command: []const u8) bool {
+    return exec_command.queryIndeterm(self, command);
 }
 
-fn queryCommandState(self: *const Document, command: []const u8) bool {
+fn queryCommandState(self: *Document, command: []const u8) bool {
     return exec_command.queryState(self, command);
 }
 
-fn queryCommandValue(self: *const Document, command: []const u8) []const u8 {
+fn queryCommandValue(self: *Document, command: []const u8) []const u8 {
     return exec_command.queryValue(self, command);
 }
 

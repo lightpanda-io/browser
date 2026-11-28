@@ -40,19 +40,418 @@
 }
 </script>
 
-<script id="not_yet_supported">
+<script>
+  // Formats the content of #host, `html`, with `cmd`, after `pick` chose
+  // what's selected in it.
+  function formatIn(cmd, html, pick) {
+    const host = $('#host');
+    host.innerHTML = html;
+    host.focus();
+    pick(host);
+    events = [];
+    return document.execCommand(cmd);
+  }
+  const selectContents = host => getSelection().selectAllChildren(host);
+  function selectRange(start, startOffset, end, endOffset) {
+    const range = document.createRange();
+    range.setStart(start, startOffset);
+    range.setEnd(end, endOffset);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  }
+  function collapseAt(node, offset) {
+    selectRange(node, offset, node, offset);
+  }
+  // the selection, as "start:offset-end:offset", text nodes by their data
+  function selection() {
+    const range = getSelection().getRangeAt(0);
+    const name = n => n.nodeType === Node.TEXT_NODE ? n.data : n.nodeName;
+    return `${name(range.startContainer)}:${range.startOffset}-${name(range.endContainer)}:${range.endOffset}`;
+  }
+</script>
+
+<script id="format_disabled">
+{
+  for (const cmd of ['bold', 'italic', 'underline', 'strikeThrough', 'BOLD', 'strikethrough']) {
+    testing.expectEqual(true, document.queryCommandSupported(cmd));
+  }
+
+  // nothing editable selected
+  document.activeElement.blur();
+  getSelection().selectAllChildren($('#plain'));
+  events = [];
+  for (const cmd of ['bold', 'italic', 'underline', 'strikeThrough']) {
+    testing.expectEqual(false, document.queryCommandEnabled(cmd));
+    testing.expectEqual(false, document.execCommand(cmd));
+    testing.expectEqual(false, document.queryCommandState(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+    // Chrome's value, where the spec has ""
+    testing.expectEqual('false', document.queryCommandValue(cmd));
+  }
+  testing.expectEqual('plain', $('#plain').innerHTML);
+  getSelection().removeAllRanges();
+  testing.expectEqual(false, document.queryCommandEnabled('bold'));
+  testing.expectEqual(false, document.execCommand('bold'));
+  testing.expectEqual('false', document.queryCommandValue('bold'));
+
+  // a text control can't hold formatting
+  const area = $('#area');
+  area.focus();
+  area.select();
+  testing.expectEqual(false, document.queryCommandEnabled('bold'));
+  testing.expectEqual(false, document.execCommand('bold'));
+  testing.expectEqual('abc', area.value);
+  area.blur();
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="format_text_node">
+{
+  const tags = {bold: 'b', italic: 'i', underline: 'u', strikeThrough: 'strike'};
+  for (const [cmd, tag] of Object.entries(tags)) {
+    testing.expectEqual(true, formatIn(cmd, 'hello', host => {
+      selectContents(host);
+      testing.expectEqual(true, document.queryCommandEnabled(cmd));
+      testing.expectEqual(false, document.queryCommandState(cmd));
+      testing.expectEqual('false', document.queryCommandValue(cmd));
+    }));
+    testing.expectEqual(`<${tag}>hello</${tag}>`, $('#host').innerHTML);
+    // no beforeinput, as for the other commands
+    testing.expectEqual([`input:host:format${cmd[0].toUpperCase()}${cmd.slice(1)}:null`], events);
+    testing.expectEqual(true, document.queryCommandState(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+    testing.expectEqual('true', document.queryCommandValue(cmd));
+    testing.expectEqual('hello:0-hello:5', selection());
+
+    // part of a text node: it's split
+    formatIn(cmd, 'hello', host => selectRange(host.firstChild, 1, host.firstChild, 4));
+    testing.expectEqual(`h<${tag}>ell</${tag}>o`, $('#host').innerHTML);
+    testing.expectEqual('ell:0-ell:3', selection());
+    testing.expectEqual(true, document.queryCommandState(cmd));
+  }
+}
+</script>
+
+<script id="format_across_nodes">
+{
+  formatIn('bold', 'ab<i>cd</i>ef', host => selectRange(host.firstChild, 1, host.lastChild, 1));
+  testing.expectEqual('a<b>b<i>cd</i>e</b>f', $('#host').innerHTML);
+  testing.expectEqual('b:0-e:1', selection());
+
+  // inline elements go in whole
+  formatIn('bold', 'a<i>b</i>c<span>d</span>e', selectContents);
+  testing.expectEqual('<b>a<i>b</i>c<span>d</span>e</b>', $('#host').innerHTML);
+  formatIn('bold', 'ab<br>cd', selectContents);
+  testing.expectEqual('<b>ab<br>cd</b>', $('#host').innerHTML);
+
+  // a block doesn't: its content does, and whitespace between blocks is left be
+  formatIn('bold', '<p>ab</p>\n<p>cd</p>', selectContents);
+  testing.expectEqual('<p><b>ab</b></p>\n<p><b>cd</b></p>', $('#host').innerHTML);
+  testing.expectEqual(true, document.queryCommandState('bold'));
+
+  // what isn't editable isn't formatted
+  formatIn('bold', 'a<span contenteditable="false">b</span>c', selectContents);
+  testing.expectEqual('<b>a</b><span contenteditable="false">b</span><b>c</b>', $('#host').innerHTML);
+
+  // formats add up
+  formatIn('underline', '<strike>hello</strike>', selectContents);
+  testing.expectEqual('<u><strike>hello</strike></u>', $('#host').innerHTML);
+}
+</script>
+
+<script id="format_merge">
+{
+  // into a formatting sibling
+  formatIn('bold', '<b>a</b>bc', host => selectRange(host.lastChild, 0, host.lastChild, 1));
+  testing.expectEqual('<b>ab</b>c', $('#host').innerHTML);
+  formatIn('bold', '<b>a</b>b<b>c</b>', host => selectRange(host.childNodes[1], 0, host.childNodes[1], 1));
+  testing.expectEqual('<b>abc</b>', $('#host').innerHTML);
+  // only the one we'd make
+  formatIn('bold', '<strong>a</strong>bc', host => selectRange(host.lastChild, 0, host.lastChild, 1));
+  testing.expectEqual('<strong>a</strong><b>b</b>c', $('#host').innerHTML);
+
+  // Partly formatted: the state is false, it's applied to all, as in the
+  // spec and in Chrome on Linux and Windows. Chrome on macOS goes by the
+  // start of the selection instead: never indeterminate, and "<b>a</b>bc"
+  // all selected is unbolded.
+  const by_start = !testing.IS_TEST_RUNNER && navigator.platform.startsWith('Mac');
+  formatIn('bold', 'a<b>b</b>c', host => {
+    selectContents(host);
+    testing.expectEqual(false, document.queryCommandState('bold'));
+    testing.expectEqual(!by_start, document.queryCommandIndeterm('bold'));
+  });
+  testing.expectEqual('<b>abc</b>', $('#host').innerHTML);
+  testing.expectEqual(true, document.queryCommandState('bold'));
+  testing.expectEqual(false, document.queryCommandIndeterm('bold'));
+  formatIn('bold', 'ab<b>c</b>', selectContents);
+  testing.expectEqual('<b>abc</b>', $('#host').innerHTML);
+}
+</script>
+
+<script id="format_off">
+{
+  // all formatted: it's removed
+  for (const [cmd, html] of [['bold', '<b>hello</b>'], ['bold', '<strong>hello</strong>'],
+      ['bold', '<span style="font-weight: bold;">hello</span>'], ['bold', '<span style="font-weight: 700">hello</span>'],
+      ['italic', '<i>hello</i>'], ['italic', '<em>hello</em>'], ['underline', '<u>hello</u>'],
+      ['strikeThrough', '<strike>hello</strike>'], ['strikeThrough', '<s>hello</s>']]) {
+    testing.expectEqual(true, formatIn(cmd, html, host => {
+      selectContents(host);
+      testing.expectEqual(true, document.queryCommandState(cmd));
+    }));
+    testing.expectEqual('hello', $('#host').innerHTML);
+    testing.expectEqual(false, document.queryCommandState(cmd));
+    testing.expectEqual(1, events.length);
+  }
+
+  // the rest keeps it
+  formatIn('bold', '<b>hello</b>', host => selectRange(host.firstChild.firstChild, 1, host.firstChild.firstChild, 4));
+  testing.expectEqual('<b>h</b>ell<b>o</b>', $('#host').innerHTML);
+  testing.expectEqual('ell:0-ell:3', selection());
+  testing.diverges('Chrome leaves an empty style attribute', () => {
+    formatIn('bold', '<b>a<i>b</i>c</b>', host => {
+      const b = host.firstChild.childNodes[1].firstChild;
+      selectRange(b, 0, b, 1);
+    });
+    testing.expectEqual('<b>a</b><i>b</i><b>c</b>', $('#host').innerHTML);
+  });
+
+  // other attributes stay
+  formatIn('bold', '<b class="x">hello</b>', selectContents);
+  testing.expectEqual('<span class="x">hello</span>', $('#host').innerHTML);
+  formatIn('bold', '<b style="color: red">hello</b>', selectContents);
+  testing.expectEqual('<span style="color: red">hello</span>', $('#host').innerHTML);
+  formatIn('bold', '<span style="font-weight: bold; color: red">hello</span>', selectContents);
+  testing.expectEqual('<span style="color: red;">hello</span>', $('#host').innerHTML);
+
+  // bold that can't be removed is overridden
+  formatIn('bold', '<h1>title</h1>', host => {
+    selectContents(host);
+    testing.expectEqual(true, document.queryCommandState('bold'));
+  });
+  testing.expectEqual('<h1><span style="font-weight: normal;">title</span></h1>', $('#host').innerHTML);
+  testing.expectEqual(false, document.queryCommandState('bold'));
+}
+</script>
+
+<script id="format_css">
+{
+  document.execCommand('styleWithCSS', false, 'true');
+  const styles = {bold: 'font-weight: bold;', italic: 'font-style: italic;',
+    underline: 'text-decoration-line: underline;', strikeThrough: 'text-decoration-line: line-through;'};
+  for (const [cmd, style] of Object.entries(styles)) {
+    formatIn(cmd, 'hello', selectContents);
+    testing.expectEqual(`<span style="${style}">hello</span>`, $('#host').innerHTML);
+    testing.expectEqual(true, document.queryCommandState(cmd));
+    formatIn(cmd, 'hello', host => selectRange(host.firstChild, 1, host.firstChild, 4));
+    testing.expectEqual(`h<span style="${style}">ell</span>o`, $('#host').innerHTML);
+    // and off again
+    formatIn(cmd, `<span style="${style}">hello</span>`, selectContents);
+    testing.expectEqual('hello', $('#host').innerHTML);
+  }
+  formatIn('bold', 'a<i>b</i>c', selectContents);
+  testing.expectEqual('<span style="font-weight: bold;">a<i>b</i>c</span>', $('#host').innerHTML);
+  formatIn('bold', '<b>hello</b>', selectContents);
+  testing.expectEqual('hello', $('#host').innerHTML);
+  // Chrome doesn't merge into a <b> then
+  formatIn('bold', '<b>a</b>bc', host => selectRange(host.lastChild, 0, host.lastChild, 1));
+  testing.expectEqual('<b>a</b><span style="font-weight: bold;">b</span>c', $('#host').innerHTML);
+  document.execCommand('styleWithCSS', false, 'false');
+}
+</script>
+
+<script id="format_collapsed">
+{
+  // for the text typed next, with no event
+  testing.expectEqual(true, formatIn('bold', 'hello', host => collapseAt(host.firstChild, 2)));
+  testing.expectEqual([], events);
+  testing.expectEqual('hello', $('#host').innerHTML);
+  testing.expectEqual(true, document.queryCommandState('bold'));
+  testing.expectEqual('true', document.queryCommandValue('bold'));
+  testing.expectEqual(false, document.queryCommandIndeterm('bold'));
+  exec('X');
+  testing.expectEqual('he<b>X</b>llo', $('#host').innerHTML);
+  testing.expectEqual(['input:host:insertText:X'], events);
+  exec('Y');
+  testing.expectEqual('he<b>XY</b>llo', $('#host').innerHTML);
+  testing.expectEqual('XY:2-XY:2', selection());
+
+  // twice is nothing
+  formatIn('bold', 'hello', host => collapseAt(host.firstChild, 2));
+  document.execCommand('bold');
+  testing.expectEqual(false, document.queryCommandState('bold'));
+  exec('X');
+  testing.expectEqual('heXllo', $('#host').innerHTML);
+
+  formatIn('bold', 'hello', host => collapseAt(host.firstChild, 2));
+  document.execCommand('italic');
+  exec('X');
+  testing.expectEqual('he<b><i>X</i></b>llo', $('#host').innerHTML);
+
+  // off, in bold text
+  formatIn('bold', '<b>hello</b>', host => {
+    collapseAt(host.firstChild.firstChild, 2);
+    testing.expectEqual(true, document.queryCommandState('bold'));
+  });
+  testing.expectEqual(false, document.queryCommandState('bold'));
+  exec('X');
+  testing.expectEqual('<b>he</b>X<b>llo</b>', $('#host').innerHTML);
+  testing.expectEqual('X:1-X:1', selection());
+
+  // gone once the caret moves
+  formatIn('bold', 'hello', host => collapseAt(host.firstChild, 2));
+  collapseAt($('#host').firstChild, 3);
+  testing.expectEqual(false, document.queryCommandState('bold'));
+  exec('X');
+  testing.expectEqual('helXlo', $('#host').innerHTML);
+
+  document.execCommand('styleWithCSS', false, 'true');
+  formatIn('bold', 'hello', host => collapseAt(host.firstChild, 2));
+  exec('X');
+  testing.expectEqual('he<span style="font-weight: bold;">X</span>llo', $('#host').innerHTML);
+  document.execCommand('styleWithCSS', false, 'false');
+}
+</script>
+
+<script id="format_range_boundaries">
 {
   const host = $('#host');
-  host.innerHTML = 'abc';
-  getSelection().selectAllChildren(host);
-  testing.expectEqual(false, document.queryCommandState('bold'));
-  testing.expectEqual(false, document.queryCommandIndeterm('bold'));
-  testing.diverges('no formatting commands', () => {
-    testing.expectEqual(false, document.queryCommandSupported('bold'));
-    testing.expectEqual(false, document.execCommand('bold'));
-    testing.expectEqual('abc', host.innerHTML);
+  formatIn('bold', 'abc<i>de</i>f', h => selectRange(h.firstChild, 1, h, 2));
+  testing.expectEqual('a<b>bc<i>de</i></b>f', host.innerHTML);
+  testing.expectEqual('bcde', getSelection().toString());
+
+  formatIn('bold', 'abc', h => getSelection().setBaseAndExtent(h.firstChild, 3, h.firstChild, 1));
+  testing.expectEqual('a<b>bc</b>', host.innerHTML);
+  testing.expectEqual([2, 0], [getSelection().anchorOffset, getSelection().focusOffset]);
+
+  // A selected image contributes to toggle state just like visible text.
+  formatIn('bold', '<img alt="x">', selectContents);
+  testing.expectEqual(true, document.queryCommandState('bold'));
+  document.execCommand('bold');
+  testing.expectEqual('<img alt="x">', host.innerHTML);
+}
+</script>
+
+<script id="format_editing_boundaries">
+{
+  const host = $('#host');
+  host.contentEditable = 'plaintext-only';
+  try {
+    for (const cmd of ['bold', 'italic', 'underline', 'strikeThrough']) {
+      testing.expectEqual(false, formatIn(cmd, '<span>abc</span>', h => {
+        selectContents(h.firstChild);
+        testing.expectEqual(false, document.queryCommandEnabled(cmd));
+      }));
+      testing.expectEqual('<span>abc</span>', host.innerHTML);
+      testing.expectEqual([], events);
+    }
+  } finally {
+    host.contentEditable = 'true';
+  }
+
+  formatIn('bold', '<span>a<span contenteditable="false">protected</span>b</span>', selectContents);
+  testing.expectEqual('<span><b>a</b><span contenteditable="false">protected</span><b>b</b></span>', host.innerHTML);
+
+  // Editing the surrounding text must preserve the raw CSS when the editor saves its HTML.
+  formatIn('bold', 'abc<style>.x{color:red}</style>def', selectContents);
+  testing.expectEqual('<b>abc<style>.x{color:red}</style>def</b>', host.innerHTML);
+  formatIn('bold', 'a<span hidden>hidden</span>b', selectContents);
+  testing.expectEqual('hidden', host.querySelector('[hidden]').innerHTML);
+  testing.expectEqual('B', host.querySelector('[hidden]').parentNode.tagName);
+
+  // A read-only selection still reports the formatting that is visible there.
+  host.innerHTML = '<span contenteditable="false"><b>x</b></span>';
+  selectContents(host.querySelector('b'));
+  testing.expectEqual(false, document.queryCommandEnabled('bold'));
+  testing.expectEqual(true, document.queryCommandState('bold'));
+}
+</script>
+
+<script id="format_independent_styles">
+{
+  const host = $('#host');
+  for (const css of [false, true]) {
+    document.execCommand('styleWithCSS', false, String(css));
+    for (const [toggle, remaining, tag, decoration] of [
+      ['underline', 'strikeThrough', 'strike', 'line-through'],
+      ['strikeThrough', 'underline', 'u', 'underline'],
+    ]) {
+      formatIn(toggle, '<span style="text-decoration: underline line-through">abc</span>', selectContents);
+      testing.expectEqual(false, document.queryCommandState(toggle));
+      testing.expectEqual(true, document.queryCommandState(remaining));
+      testing.expectEqual(css ? `<span style="text-decoration-line: ${decoration};">abc</span>` : `<${tag}>abc</${tag}>`, host.innerHTML);
+    }
+  }
+  document.execCommand('styleWithCSS', false, 'false');
+
+  formatIn('underline', '<p style="text-decoration: underline">hello</p>', h => {
+    const text = h.firstChild.firstChild;
+    selectRange(text, 1, text, 4);
   });
-  getSelection().removeAllRanges();
+  testing.expectEqual('ell', getSelection().toString());
+  testing.expectEqual(false, document.queryCommandState('underline'));
+  const p = host.firstChild;
+  selectContents(p.firstChild);
+  testing.expectEqual(true, document.queryCommandState('underline'));
+  selectContents(p.lastChild);
+  testing.expectEqual(true, document.queryCommandState('underline'));
+
+  for (const [weight, relative, expected] of [[100, 'bolder', false], [400, 'bolder', true], [900, 'lighter', true]]) {
+    host.innerHTML = '<span style="font-weight:' + weight + '"><span style="font-weight:' + relative + '">abc</span></span>';
+    selectContents(host);
+    testing.expectEqual(expected, document.queryCommandState('bold'));
+  }
+}
+</script>
+
+<script id="format_typing_navigation">
+{
+  const host = $('#host');
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 1));
+  getSelection().collapse(host.firstChild, 2);
+  getSelection().collapse(host.firstChild, 1);
+  testing.expectEqual(false, document.queryCommandState('bold'));
+  exec('X');
+  testing.expectEqual('aXbc', host.innerHTML);
+
+  // A page can move the caret by editing the selection's live Range.
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 1));
+  const live = getSelection().getRangeAt(0);
+  live.setStart(host.firstChild, 2);
+  live.collapse(true);
+  live.setStart(host.firstChild, 1);
+  live.collapse(true);
+  exec('X');
+  testing.expectEqual('aXbc', host.innerHTML);
+
+  // DOM maintenance can move the same caret without the user navigating.
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 1));
+  host.firstChild.insertData(0, 'Z');
+  testing.expectEqual(true, document.queryCommandState('bold'));
+  exec('X');
+  testing.expectEqual('Za<b>X</b>bc', host.innerHTML);
+
+  formatIn('bold', '<b>ab</b>cd', h => {
+    getSelection().collapse(h, 1);
+    testing.expectEqual(true, document.queryCommandState('bold'));
+  });
+  exec('X');
+  testing.expectEqual('<b>ab</b>Xcd', host.innerHTML);
+
+  for (const [command, html] of [['insertLineBreak', 'he<b><br>X</b>llo'], ['insertParagraph', 'he<div><b>X</b>llo</div>']]) {
+    formatIn('bold', 'hello', h => getSelection().collapse(h.firstChild, 2));
+    document.execCommand(command);
+    testing.expectEqual(true, document.queryCommandState('bold'));
+    exec('X');
+    testing.expectEqual(html, host.innerHTML);
+  }
+
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 3));
+  document.execCommand('insertLineBreak');
+  testing.expectEqual('abc<br><b><br></b>', host.innerHTML);
+  exec('X');
+  testing.expectEqual('abc<br><b>X</b>', host.innerHTML);
 }
 </script>
 

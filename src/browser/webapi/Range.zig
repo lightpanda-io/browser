@@ -24,6 +24,7 @@ const layout = @import("../layout.zig");
 const text_measure = @import("../text_measure.zig");
 
 const Node = @import("Node.zig");
+const exec_command = @import("../frame/exec_command.zig");
 const DOMRect = @import("DOMRect.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
@@ -33,6 +34,8 @@ const Range = @This();
 pub const Proto = AbstractRange;
 
 _proto: *AbstractRange,
+// Only populated on the active, collapsed selection.
+_typing_style: ?exec_command.TypingStyle = null,
 
 pub fn init(frame: *Frame) !*Range {
     return initIn(frame.document.asNode(), frame);
@@ -67,6 +70,7 @@ pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
         return error.IndexSizeError;
     }
 
+    self._typing_style = null;
     self._proto._start_container = node;
     self._proto._start_offset = offset;
 
@@ -89,6 +93,7 @@ pub fn setEnd(self: *Range, node: *Node, offset: u32) !void {
         return error.IndexSizeError;
     }
 
+    self._typing_style = null;
     self._proto._end_container = node;
     self._proto._end_offset = offset;
 
@@ -139,6 +144,7 @@ fn selectNodeContents(self: *Range, node: *Node) !void {
 }
 
 pub fn collapse(self: *Range, to_start: ?bool) void {
+    self._typing_style = null;
     // Per spec, toStart defaults to false: collapse to the end point.
     if (to_start orelse false) {
         self._proto._end_container = self._proto._start_container;

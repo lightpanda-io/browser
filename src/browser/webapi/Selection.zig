@@ -24,6 +24,7 @@ const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 
 const Range = @import("Range.zig");
+const exec_command = @import("../frame/exec_command.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const Node = @import("Node.zig");
 const Event = @import("Event.zig");
@@ -638,7 +639,7 @@ pub fn selectAllChildren(self: *Selection, parent: *Node, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-fn setBaseAndExtent(
+pub fn setBaseAndExtent(
     self: *Selection,
     anchor_node: *Node,
     anchor_offset: u32,
@@ -686,6 +687,10 @@ fn setBaseAndExtent(
 }
 
 pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, frame: *Frame) !void {
+    return self.collapseWithTypingStyle(_node, _offset, null, frame);
+}
+
+pub fn collapseWithTypingStyle(self: *Selection, _node: ?*Node, _offset: ?u32, typing: ?exec_command.TypingStyle, frame: *Frame) !void {
     const node = _node orelse {
         try self.removeAllRanges(frame);
         return;
@@ -707,6 +712,7 @@ pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, frame: *Frame) !
     try range.setStart(node, offset);
     try range.setEnd(node, offset);
 
+    range._typing_style = typing;
     self.setRange(range, frame);
     self._direction = .none;
     try dispatchSelectionChangeEvent(frame);
@@ -719,6 +725,7 @@ pub fn toString(self: *const Selection, frame: *Frame) ![]const u8 {
 
 fn setRange(self: *Selection, new_range: ?*Range, frame: *Frame) void {
     if (self._range) |existing| {
+        existing._typing_style = null;
         _ = existing.asAbstractRange().releaseRef(frame.page);
     }
     if (new_range) |nr| {

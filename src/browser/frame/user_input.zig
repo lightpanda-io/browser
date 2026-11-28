@@ -29,6 +29,7 @@ const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
+const exec_command = @import("exec_command.zig");
 const StyleManager = @import("../StyleManager.zig");
 const EventManager = @import("../EventManager.zig");
 
@@ -2068,6 +2069,8 @@ fn editingHostOf(node: *Node) ?*Element {
 pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !void {
     const host = host_el.asNode();
     const selection = &frame.document._selection;
+    // formatting chosen at a collapsed caret (execCommand('bold'))
+    const typing_style = exec_command.takeTypingStyle(frame.document);
     var container: *Node, var offset: u32 = firstCaretPosition(host);
     if (selection._range) |range| {
         const abstract = range.asAbstractRange();
@@ -2136,12 +2139,16 @@ pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !vo
         offset = 0;
         break :blk @intCast(Node.CData.utf16Len(text));
     };
-    const node = text_node.?.asCData().asNode();
+    var node = text_node.?.asCData().asNode();
     _ = try rebalanceSpaces(frame, node, caret);
     if (std.mem.indexOfNone(u8, text, " ") != null) {
         _ = try rebalanceSpaces(frame, node, offset);
     }
-    try selection.collapse(node, caret, frame);
+    var caret_offset = caret;
+    if (typing_style) |values| {
+        node, caret_offset = try exec_command.applyTypingStyle(frame, host_el, node.is(Node.CData.Text).?, offset, caret, values);
+    }
+    try selection.collapse(node, caret_offset, frame);
 
     const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
         .bubbles = true,
@@ -2274,6 +2281,7 @@ pub fn insertLineBreakAtSelection(frame: *Frame, host_el: *Element, input_type: 
     if (!isEditableIn(host, range.getStartContainer()) or !isEditableIn(host, range.getEndContainer())) {
         return false;
     }
+    const typing_style = exec_command.pendingTypingStyle(frame.document);
     const style_manager = &frame._style_manager;
 
     if (!range.getCollapsed() and !try deleteInlineSelection(frame, host, live)) {
@@ -2340,18 +2348,24 @@ pub fn insertLineBreakAtSelection(frame: *Frame, host_el: *Element, input_type: 
     const line_break = if (use_br) (try doc.createElement("br", null, frame)).asNode() else try doc.createTextNode("\n");
     _ = try parent.insertBefore(line_break, parent.getChildAt(index), frame);
 
-    if (paragraph_end) {
-        // the caret goes on the new line, before the second break
-        const extra = if (use_br) (try doc.createElement("br", null, frame)).asNode() else try doc.createTextNode("\n");
-        _ = try parent.insertBefore(extra, line_break.nextSibling(), frame);
-        try selection.collapse(parent, index + 1, frame);
-    } else {
+    var styled_break = line_break;
+    var caret: struct { *Node, u32 } = if (paragraph_end) blk: {
+        // At the end, the second break holds the new line open for typing.
+        styled_break = if (use_br) (try doc.createElement("br", null, frame)).asNode() else try doc.createTextNode("\n");
+        _ = try parent.insertBefore(styled_break, line_break.nextSibling(), frame);
+        break :blk .{ parent, index + 1 };
+    } else blk: {
         const container, const offset = caretAfter(style_manager, root, parent, index + 1);
         if (keep_space and container.is(Node.CData.Text) != null) {
             _ = try rebalanceSpaces(frame, container, offset);
         }
-        try selection.collapse(container, offset, frame);
+        break :blk .{ container, offset };
+    };
+    if (typing_style) |values| {
+        try exec_command.formatTypedNode(frame, host_el, styled_break, values);
+        caret = if (paragraph_end) exec_command.boundaryBefore(styled_break) else exec_command.boundaryAfter(styled_break);
     }
+    try selection.collapseWithTypingStyle(caret[0], caret[1], typing_style, frame);
 
     const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
         .bubbles = true,
@@ -3279,6 +3293,7 @@ pub fn insertParagraphAtSelection(frame: *Frame, host_el: *Element) !bool {
     if (!isEditableIn(host, range.getStartContainer()) or !isEditableIn(host, range.getEndContainer())) {
         return false;
     }
+    const typing_style = exec_command.pendingTypingStyle(frame.document);
     const style_manager = &frame._style_manager;
 
     // text-only elements: nothing to split into
@@ -3359,7 +3374,7 @@ pub fn insertParagraphAtSelection(frame: *Frame, host_el: *Element) !bool {
         const right = try splitBlock(frame, style_manager, host, block, wrap, container, offset);
         break :blk firstCaretPosition(right);
     };
-    try selection.collapse(caret[0], caret[1], frame);
+    try selection.collapseWithTypingStyle(caret[0], caret[1], typing_style, frame);
 
     const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
         .bubbles = true,
@@ -3742,7 +3757,7 @@ fn hostChildAt(host: *Node, container: *Node, offset: u32) ?*Node {
 // Where Chrome puts a caret that sits between nodes rather than in text: at
 // the end of the text or inline element before it, else at the start of
 // what follows, else at the end of the block before it.
-fn canonicalCaret(style_manager: *StyleManager, start: *Node, start_offset: u32) struct { *Node, u32 } {
+pub fn canonicalCaret(style_manager: *StyleManager, start: *Node, start_offset: u32) struct { *Node, u32 } {
     var container = start;
     var offset = start_offset;
     if (container.is(Node.CData) != null) {
