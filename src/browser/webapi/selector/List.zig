@@ -1206,18 +1206,26 @@ fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
 }
 
 fn matchesNthPattern(index: usize, pattern: Selector.NthPattern) bool {
-    const a = pattern.a;
-    const b = pattern.b;
+    // An index or a coefficient beyond half the i32 range never matches.
+    const max = std.math.maxInt(i32) / 2;
+    const min = @divTrunc(std.math.minInt(i32), 2);
+    if (index > max or pattern.a > max or pattern.a < min or pattern.b > max or pattern.b < min) {
+        return false;
+    }
+
+    // Enlarge to make sure subtraction below won't overflow.
+    const a: i64 = pattern.a;
+    const b: i64 = pattern.b;
+    const index_i: i64 = @intCast(index);
 
     // Special case: a=0 means we're matching a specific index
     if (a == 0) {
-        return @as(i32, @intCast(index)) == b;
+        return index_i == b;
     }
 
     // For an+b pattern, we need to find if there's an integer n >= 0
     // such that an + b = index
     // Rearranging: n = (index - b) / a
-    const index_i = @as(i32, @intCast(index));
     const diff = index_i - b;
 
     // Check if (index - b) is divisible by a
@@ -1376,4 +1384,39 @@ test "Selector.List: contains" {
     try testing.expectEqual(false, contains("c", "c1"));
     try testing.expectEqual(false, contains("", "c"));
     try testing.expectEqual(false, contains("scrolled", "c1"));
+}
+
+test "Selector.List: matchesNthPattern" {
+    try testing.expectEqual(true, matchesNthPattern(3, .{ .a = 2, .b = 1 }));
+    try testing.expectEqual(false, matchesNthPattern(4, .{ .a = 2, .b = 1 }));
+    try testing.expectEqual(true, matchesNthPattern(2, .{ .a = -1, .b = 3 }));
+    try testing.expectEqual(false, matchesNthPattern(4, .{ .a = -1, .b = 3 }));
+    try testing.expectEqual(true, matchesNthPattern(5, .{ .a = 0, .b = 5 }));
+    try testing.expectEqual(true, matchesNthPattern(1, .{ .a = 1, .b = -5 }));
+
+    // The edges of the i32 range, and of the half of it that can match
+    const max = std.math.maxInt(i32);
+    const min = std.math.minInt(i32);
+    const half_max = max / 2;
+    const half_min = @divTrunc(min, 2);
+    const coefficients = [_]i32{ min, min + 1, half_min - 1, half_min, half_min + 1, -3, -2, -1, 0, 1, 2, 3, half_max - 1, half_max, half_max + 1, max - 1, max };
+    const indexes = [_]usize{ 0, 1, 2, 3, half_max - 1, half_max, half_max + 1, max, @as(usize, max) + 1, std.math.maxInt(usize) };
+
+    for (coefficients) |a| {
+        for (coefficients) |b| {
+            for (indexes) |index| {
+                const in_range = index <= half_max and a >= half_min and a <= half_max and b >= half_min and b <= half_max;
+                // Is there an n >= 0 with a*n + b == index?
+                const expected = in_range and blk: {
+                    const offset = @as(i128, index) - b;
+                    if (a == 0) {
+                        break :blk offset == 0;
+                    }
+                    const n = @divFloor(offset, a);
+                    break :blk n >= 0 and n * a == offset;
+                };
+                try testing.expectEqual(expected, matchesNthPattern(index, .{ .a = a, .b = b }));
+            }
+        }
+    }
 }

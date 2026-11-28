@@ -232,3 +232,60 @@
   assertList([], chained.querySelectorAll('.missing > .x ~ .b ~ .c'));
 }
 </script>
+
+<script id=nth_child_extreme_coefficients>
+{
+  const d = document.createElement('div');
+  d.innerHTML = '<p>1</p><p>2</p><p>3</p>';
+  document.body.appendChild(d);
+  const all = (selector) => d.querySelectorAll(selector);
+  const huge = '1'.repeat(40);
+
+  // An+B at the edge of i32: no n >= 0 gives an index >= 1
+  testing.expectEqual(null, d.querySelector('p:nth-child(-n-2147483647)'));
+  testing.expectEqual(null, d.querySelector('p:nth-child(-n-2147483648)'));
+  assertList([], all('p:nth-child(2147483647n+2147483647)'));
+  assertList([], all('p:nth-last-child(-n-2147483647)'));
+  assertList([], all('p:nth-child(2147483647)'));
+  assertList([], all('p:nth-child(-2147483648)'));
+
+  // An integer beyond i32 is clamped to it
+  assertList([], all('p:nth-child(2147483648)'));
+  assertList([], all('p:nth-child(-2147483649)'));
+  assertList([], all(`p:nth-child(${huge})`));
+  assertList([], all(`p:nth-child(-${huge})`));
+  assertList([], all(`p:nth-child(n+${huge})`));
+  assertList([], all(`p:nth-child(-n - ${huge})`));
+  assertList([], all(`p:nth-last-of-type(-${huge}n - ${huge})`));
+
+  // A coefficient beyond half the i32 range never matches, even where
+  // An+B does give the index
+  assertList(['1'], all('p:nth-child(1073741823n+1)'));
+  assertList([], all('p:nth-child(1073741824n+1)'));
+  assertList([], all('p:nth-child(99999999999n+1)'));
+  assertList([], all(`p:nth-of-type(${huge}n+1)`));
+  assertList(['1'], all('p:nth-child(-1073741824n+1)'));
+  assertList([], all('p:nth-child(-1073741825n+1)'));
+  assertList(['1', '2', '3'], all('p:nth-child(-n+1073741823)'));
+  assertList([], all('p:nth-child(-n+1073741824)'));
+  assertList([], all(`p:nth-child(-n+${huge})`));
+  assertList(['1', '2', '3'], all('p:nth-child(n-1073741824)'));
+  assertList([], all('p:nth-child(n-1073741825)'));
+  assertList([], all('p:nth-last-child(n - 99999999999)'));
+  assertList(['1'], all('p:nth-child(1073741823n+1 of p)'));
+  assertList([], all('p:nth-child(99999999999n+1 of p)'));
+  assertList([], all('p:nth-last-child(-n+99999999999 of p)'));
+
+  // "n-<digits>" without a space is one identifier, which isn't clamped:
+  // digits that don't fit make the selector invalid
+  testing.expectError('SyntaxError', () => all('p:nth-child(n-2147483649)'));
+  testing.expectError('SyntaxError', () => all('p:nth-child(-n-2147483649)'));
+  testing.expectError('SyntaxError', () => all('p:nth-child(+2n-99999999999)'));
+  testing.expectError('SyntaxError', () => all(`p:nth-last-of-type(n-${huge})`));
+  testing.expectError('SyntaxError', () => all('p:nth-child(n-99999999999 of p)'));
+  assertList([], all('p:nth-child(n- 2147483649)'));
+  assertList([], all('p:nth-child(n -2147483649)'));
+
+  d.remove();
+}
+</script>
