@@ -16,8 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// RIFF/WAVE parsing for decodeAudioData: integer PCM (8, 16, 24, 32 bits) and
-// IEEE float (32, 64 bits), read in place from the encoded bytes.
+// RIFF/WAVE parsing for decodeAudioData and media elements: integer PCM (8, 16,
+// 24, 32 bits) and IEEE float (32, 64 bits), read in place from the encoded
+// bytes.
 
 const std = @import("std");
 
@@ -27,6 +28,7 @@ pub const Wav = struct {
     format: Format,
     channels: u32,
     sample_rate: f32,
+    // 0 for a file without samples, which has a duration but no AudioBuffer
     frames: u32,
     // the data chunk, cut to whole frames
     data: []const u8,
@@ -147,7 +149,7 @@ pub fn parse(bytes: []const u8) Error!Wav {
         return error.EncodingError;
     }
     const frames = samples.len / block_align;
-    if (frames == 0 or frames > std.math.maxInt(u32)) {
+    if (frames > std.math.maxInt(u32)) {
         return error.EncodingError;
     }
 
@@ -223,6 +225,11 @@ test "wav: rejects" {
     var buf: [64]u8 = undefined;
     try testing.expectError(error.EncodingError, parse("ID3\x04\x00\x00\x00\x00\x00\x00\x00\x00"));
     try testing.expectError(error.EncodingError, parse(header(&buf, 85, 1, 44100, 16, 0)));
-    // header only: no frames
-    try testing.expectError(error.EncodingError, parse(header(&buf, 1, 1, 44100, 16, 0)));
+}
+
+test "wav: header only" {
+    var buf: [64]u8 = undefined;
+    const wav = try parse(header(&buf, 1, 1, 44100, 16, 0));
+    try testing.expectEqual(0, wav.frames);
+    try testing.expectEqual(44100, wav.sample_rate);
 }
