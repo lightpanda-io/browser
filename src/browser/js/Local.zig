@@ -570,7 +570,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 }
                 if (@hasDecl(ptr.child, "JsApi")) {
                     std.debug.assert(bridge.JsApiLookup.has(ptr.child.JsApi));
-                    return TaggedOpaque.fromJS(*ptr.child, @ptrCast(js_val.handle));
+                    return TaggedOpaque.fromJS(*ptr.child, self.isolate.handle, @ptrCast(js_val.handle));
                 }
             },
             .slice => {
@@ -1076,7 +1076,7 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                     // of having a version of TaggedOpaque which
                     // returns a boolean or an optional, we rely on the
                     // main implementation and just handle the error.
-                    const attempt = TaggedOpaque.fromJS(*ptr.child, @ptrCast(js_val.handle));
+                    const attempt = TaggedOpaque.fromJS(*ptr.child, self.isolate.handle, @ptrCast(js_val.handle));
                     if (attempt) |value| {
                         return .{ .value = value };
                     } else |_| {
