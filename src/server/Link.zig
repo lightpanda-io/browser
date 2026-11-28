@@ -27,6 +27,7 @@ const repeat = @import("../string.zig").repeat;
 
 const WS = @import("WS.zig");
 const CDP = @import("cdp/CDP.zig");
+const BiDi = @import("bidi/BiDi.zig");
 const Driver = @import("Driver.zig");
 const json_input = @import("json_input.zig");
 
@@ -334,11 +335,16 @@ fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     return true;
 }
 
-// BiDi frames are pushed raw; the worker parses them.
+// Parse a BiDi JSON frame on the run loop, like pushCdp. Unlike CDP, a frame
+// that isn't valid JSON doesn't disconnect: it's pushed with a null input,
+// and the worker answers it with an error, as the spec says.
 fn pushBiDi(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     const arena = try self.arena_pool.acquire(bytes.len, "bidi data");
     errdefer arena.release();
-    self.inbox.push(arena, .{ .bidi = try arena.dupe(u8, bytes) });
+
+    var raw: []const u8 = try arena.dupe(u8, bytes);
+    const input = try BiDi.parseInput(arena.allocator(), &raw);
+    self.inbox.push(arena, .{ .bidi = .{ .raw = raw, .input = input } });
     pushed.* = true;
     return true;
 }
@@ -461,7 +467,7 @@ test "link: stops reading once the worker's inbox backs up" {
     {
         const arena = try testing.test_app.arena_pool.acquire(link.max_inbox_backlog, "backlog test");
         const payload = try arena.allocator().alloc(u8, link.max_inbox_backlog);
-        inbox.push(arena, .{ .bidi = payload });
+        inbox.push(arena, .{ .bidi = .{ .raw = payload, .input = null } });
     }
     try testing.expectEqual(link.max_inbox_backlog, inbox.queuedBytes());
     try testing.expectError(error.InboxBacklog, link.readAvailable(1024));

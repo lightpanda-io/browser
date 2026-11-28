@@ -96,6 +96,11 @@ preload_scripts: std.ArrayList(script.PreloadScript) = .empty,
 // network.addIntercept registrations: the spec's intercept map.
 intercepts: std.ArrayList(@import("network.zig").Intercept) = .empty,
 
+// How many messages are being dispatched. More than 1 when a message is
+// dispatched during a sync wait (a blocking script or a sync XHR waiting for
+// network.continueRequest), from inside the command that runs the script.
+dispatch_depth: u8 = 0,
+
 // The HTTP session's timeouts. BiDi has no equivalent.
 timeouts: Timeouts = .{},
 
@@ -131,10 +136,24 @@ pub const Origin = union(enum) {
     session: struct { id: [36]u8, worker: *Server.Worker, accept_insecure_certs: bool },
 };
 
-const InputMessage = struct {
+// The fields of a command every message is dispatched by. Command.params
+// parses the params out of the raw message.
+pub const InputMessage = struct {
     id: ?u64 = null,
     method: ?[]const u8 = null,
 };
+
+// Parses a raw frame's InputMessage, null when it isn't valid JSON. `raw`
+// is updated when the parser had to fix the message (json_input): the
+// params must be parsed from the same bytes.
+pub fn parseInput(arena: Allocator, raw: *[]const u8) !?InputMessage {
+    return json_input.parseLeaky(InputMessage, arena, raw, .{
+        .ignore_unknown_fields = true,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
+}
 
 const Timeouts = struct {
     script: ?u32 = 30_000,
@@ -318,22 +337,32 @@ pub fn resetRealm(self: *BiDi) void {
     }
 }
 
-// Dispatch a single BiDi frame from the inbox. Unlike CDP, frames aren't
-// parsed on the Network thread, so `data` is the raw JSON.
-pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
+// Dispatch a single BiDi frame from the inbox, already parsed on the
+// Network thread. The inbox message outlives the dispatch.
+pub fn onMessage(self: *BiDi, msg: *const Inbox.Message.Bidi) anyerror!void {
+    return self.dispatch(msg.raw, msg.input);
+}
+
+// Parse + dispatch a raw frame. Used by tests, which don't go through the
+// Network thread.
+pub fn processMessage(self: *BiDi, data: []const u8) anyerror!void {
+    var json = data;
+    const input = try parseInput(self.message_arena.allocator(), &json);
+    return self.dispatch(json, input);
+}
+
+// `json` is the raw message `input` was parsed from: Command.params parses
+// the params out of it.
+fn dispatch(self: *BiDi, json: []const u8, input_: ?InputMessage) anyerror!void {
     if (self.browser.env.terminatePending()) {
         return;
     }
 
-    defer _ = self.message_arena.reset(.{ .retain_with_limit = 4096 });
+    self.dispatch_depth += 1;
+    defer self.endDispatch();
     const arena = self.message_arena.allocator();
 
-    // Command.params re-parses the message, so it gets the bytes this was
-    // parsed from.
-    var json = data;
-    const input = json_input.parseLeaky(InputMessage, arena, &json, .{
-        .ignore_unknown_fields = true,
-    }) catch {
+    const input = input_ orelse {
         return self.sendError(null, "invalid argument", "invalid JSON message");
     };
 
@@ -396,6 +425,15 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
     };
 }
 
+// The message arena is only reset by the outermost dispatch: a message
+// dispatched during a sync wait runs inside a command still using it.
+fn endDispatch(self: *BiDi) void {
+    self.dispatch_depth -= 1;
+    if (self.dispatch_depth == 0) {
+        _ = self.message_arena.reset(.{ .retain_with_limit = 4096 });
+    }
+}
+
 fn unknownCommand(cmd: *Command, method: []const u8) !void {
     lp.metrics.serve_unknown_commands.incr(.bidi);
     return cmd.sendError("unknown command", method);
@@ -416,7 +454,8 @@ pub fn onHttpCommand(self: *BiDi, command: http_command.Command) void {
         return;
     }
 
-    defer _ = self.message_arena.reset(.{ .retain_with_limit = 4096 });
+    self.dispatch_depth += 1;
+    defer self.endDispatch();
     lp.metrics.serve_commands.incr(.bidi);
 
     var cmd: Command = .{
