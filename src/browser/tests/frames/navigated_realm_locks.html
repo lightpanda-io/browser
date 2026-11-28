@@ -19,6 +19,111 @@ callbacks can't run, and the manager's document is not fully active anymore.
       new Promise((r) => setTimeout(() => r('pending'), 30)),
     ]);
   }
+
+  // Like navigatedRealm, for a realm that goes by its iframe being removed or
+  // its popup closed. It is still there, but it doesn't run its tasks anymore.
+  const discardedRealm = (() => {
+    let count = 0;
+
+    return async function(kind, take) {
+      count += 1;
+      const tag = 'discarded' + count;
+      const url = testing.BASE_URL + 'frames/support/realm.html?' + tag;
+      const loaded = new Promise((resolve) => {
+        window.addEventListener('message', function onMessage(e) {
+          if (e.data && e.data.realm === tag) {
+            window.removeEventListener('message', onMessage);
+            resolve();
+          }
+        });
+      });
+
+      if (kind === 'popup') {
+        const win = window.open(url, tag);
+        await loaded;
+        const taken = await take(win);
+        win.close();
+        return taken;
+      }
+      const iframe = document.createElement('iframe');
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      await loaded;
+      const taken = await take(iframe.contentWindow);
+      iframe.remove();
+      return taken;
+    };
+  })();
+
+  // What our own LockManager has for `name`.
+  async function lockCounts(name) {
+    const snapshot = await navigator.locks.query();
+    const count = (locks) => locks.filter((lock) => lock.name === name).length;
+    return `${count(snapshot.held)} held, ${count(snapshot.pending)} pending`;
+  }
+
+  // A realm is granted a lock of our LockManager, requested with its own
+  // realm's `request`, and goes before its callback ran.
+  async function grantedToGoneRealm(name, goneRealm) {
+    let release = null;
+    await new Promise((granted) => {
+      navigator.locks.request(name, () => {
+        granted();
+        return new Promise((r) => { release = r; });
+      });
+    });
+
+    const calls = [];
+    let queued = null;
+    await goneRealm('iframe', (w) => new Promise((taken) => {
+      w.navigator.locks.request.call(navigator.locks, name, () => { calls.push('granted'); });
+      queued = navigator.locks.request(name, () => 'granted');
+      // Released from a task of the realm: the task that would run the realm's
+      // callback is then queued behind this one, and the realm goes first.
+      w.setTimeout(() => {
+        release();
+        taken();
+      }, 0);
+    }));
+
+    return {
+      calls,
+      ours: {
+        queued: await outcome(queued),
+        counts: await lockCounts(name),
+        steal: await outcome(navigator.locks.request(name, { steal: true }, () => 'stolen')),
+      },
+    };
+  }
+
+  // A realm holds a lock of our LockManager, requested with its own realm's
+  // `request`, for as long as it lives. Then it goes.
+  async function heldByGoneRealm(name, goneRealm) {
+    let held = null;
+    let queued = null;
+    await goneRealm('iframe', async (w) => {
+      await new Promise((granted) => {
+        held = w.navigator.locks.request.call(navigator.locks, name, () => {
+          granted();
+          return new Promise(() => {});
+        });
+      });
+      held.catch(() => {});
+      queued = navigator.locks.request(name, () => 'granted');
+    });
+
+    return {
+      released: {
+        own: await outcome(navigator.locks.request(name, () => 'granted')),
+        queued: await outcome(queued),
+        counts: await lockCounts(name),
+      },
+      steal: await outcome(navigator.locks.request(name, { steal: true }, () => 'stolen')),
+      held: await outcome(held),
+    };
+  }
+
+  const REQUEST_REALM = "Chrome's request belongs to the manager's realm, whichever realm's function made it";
 </script>
 
 <script id=web_locks type=module>
@@ -100,6 +205,98 @@ can't be granted, and must not be left holding the lock.
     testing.expectEqual('fulfilled granted', own);
     testing.diverges("Chrome's request belongs to the manager's realm, whichever realm's function made it", () => {
       testing.expectEqual([], calls);
+    });
+  });
+</script>
+
+<!--
+What a realm that is gone had on our LockManager goes with it: nothing can run
+its callbacks, which is what releases a lock. What we queued behind it is
+granted.
+-->
+<script id=web_locks_granted_to_gone_realm type=module>
+  const state = await testing.async();
+
+  const navigated = await grantedToGoneRealm('navigated_realm_granted', navigatedRealm);
+  const removed = await grantedToGoneRealm('removed_realm_granted', discardedRealm);
+
+  state.resolve();
+  await state.done(() => {
+    const ours = { queued: 'fulfilled granted', counts: '0 held, 0 pending', steal: 'fulfilled stolen' };
+    testing.expectEqual({ navigated: ours, removed: ours }, { navigated: navigated.ours, removed: removed.ours });
+    testing.diverges(REQUEST_REALM, () => {
+      testing.expectEqual({ navigated: [], removed: [] }, { navigated: navigated.calls, removed: removed.calls });
+    });
+  });
+</script>
+
+<script id=web_locks_held_by_gone_realm type=module>
+  const state = await testing.async();
+
+  const navigated = await heldByGoneRealm('navigated_realm_held', navigatedRealm);
+  const removed = await heldByGoneRealm('removed_realm_held', discardedRealm);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({ navigated: 'fulfilled stolen', removed: 'fulfilled stolen' }, { navigated: navigated.steal, removed: removed.steal });
+    testing.diverges(REQUEST_REALM + ', and holds the lock until it is stolen', () => {
+      const released = { own: 'fulfilled granted', queued: 'fulfilled granted', counts: '0 held, 0 pending' };
+      testing.expectEqual({ navigated: released, removed: released }, { navigated: navigated.released, removed: removed.released });
+      // Nothing settles the promise of a realm that is gone.
+      testing.expectEqual({ navigated: 'pending', removed: 'pending' }, { navigated: navigated.held, removed: removed.held });
+    });
+  });
+</script>
+
+<!--
+The LockManager of a popup that was closed, kept by its opener. The popup had
+been granted a lock, whose callback was still to run, with a request queued
+behind it.
+-->
+<script id=web_locks_closed_popup type=module>
+  const state = await testing.async();
+
+  const name = 'closed_popup';
+  const locks = await discardedRealm('popup', (w) => {
+    w.navigator.locks.request(name, () => new w.Promise(() => {}));
+    w.navigator.locks.request(name, () => {});
+    return w.navigator.locks;
+  });
+
+  // https://w3c.github.io/web-locks/#dom-lockmanager-request step 2
+  const rejected = 'rejected InvalidStateError';
+  // Chrome closes the popup in a later task, and its LockManager works until
+  // then.
+  for (let i = 0; i < 50 && await outcome(locks.query()) !== rejected; i++) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+
+  const results = {
+    steal: await outcome(locks.request(name, { steal: true }, () => 'stolen')),
+    query: await outcome(locks.query()),
+    request: await outcome(locks.request(name, () => 'granted')),
+  };
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual({ steal: rejected, query: rejected, request: rejected }, results);
+  });
+</script>
+
+<!--
+A request made on our LockManager with the `request` of an iframe that was
+removed: its realm couldn't run the callback.
+-->
+<script id=web_locks_requested_by_removed_realm type=module>
+  const state = await testing.async();
+
+  const request = await discardedRealm('iframe', (w) => w.navigator.locks.request);
+  const result = await outcome(request.call(navigator.locks, 'removed_realm_request', () => 'granted'));
+
+  state.resolve();
+  await state.done(() => {
+    testing.diverges(REQUEST_REALM, () => {
+      testing.expectEqual('rejected InvalidStateError', result);
     });
   });
 </script>
