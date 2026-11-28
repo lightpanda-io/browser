@@ -73,27 +73,27 @@
   const loading = record(audio, ['loadedmetadata', 'canplaythrough']);
   audio.src = wav(0);
   await once(audio, 'canplaythrough');
+  // read now: Chrome's seek back to the start fires canplaythrough again
+  const loadEvents = loading.join(',');
   const loaded = [audio.duration, audio.readyState, audio.ended, audio.paused];
 
   // "reaches the end" at once: back to the paused, ended state
   const playing = record(audio, ['timeupdate', 'pause', 'ended']);
-  let resolved = false;
-  audio.play().then(() => { resolved = true; }, () => {});
+  // Chrome resolves or rejects (AbortError) depending on whether its seek back
+  // to the start gets its data before the end: either way, it has settled.
+  let settled = false;
+  audio.play().finally(() => { settled = true; }).catch(() => {});
   await once(audio, 'ended');
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual('loadedmetadata,canplaythrough', loading.join(','));
+    testing.expectEqual('loadedmetadata,canplaythrough', loadEvents);
     testing.expectEqual([0, 4, true, true], loaded);
     testing.expectEqual('timeupdate,pause,ended', playing.slice(-3).join(','));
     testing.expectEqual(0, audio.currentTime);
     testing.expectEqual(true, audio.ended);
     testing.expectEqual(true, audio.paused);
-    // Chrome's seek back to the start waits for data, and the end of playback
-    // comes first: play() is rejected with an AbortError and no playing fires.
-    testing.diverges('Lightpanda has the data of the new position at once', () => {
-      testing.expectEqual(true, resolved);
-    });
+    testing.expectEqual(true, settled);
   });
 </script>
 
