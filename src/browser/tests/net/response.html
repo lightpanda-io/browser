@@ -591,3 +591,78 @@
     testing.expectEqual(0, bytes.length);
   });
 </script>
+
+<script id=stream_body_queued_and_later type=module>
+  const state = await testing.async();
+  const enc = new TextEncoder();
+
+  // chunks already queued and chunks that arrive later are all read, in order
+  let controller;
+  const stream = new ReadableStream({
+    start(c) {
+      controller = c;
+      c.enqueue(enc.encode('a'));
+      c.enqueue(enc.encode('b'));
+    },
+  });
+  const pending = new Response(stream).text();
+  await new Promise((r) => setTimeout(r, 0));
+  controller.enqueue(enc.encode('c'));
+  controller.enqueue(enc.encode('d'));
+  await new Promise((r) => setTimeout(r, 0));
+  controller.enqueue(enc.encode('e'));
+  controller.close();
+  const text = await pending;
+
+  // an error after some queued chunks rejects with it
+  const boom = new Error('boom');
+  let errored;
+  const failing = new ReadableStream({ start(c) { errored = c; c.enqueue(enc.encode('a')); } });
+  const failing_res = new Response(failing);
+  const failed = failing_res.text().catch((e) => e);
+  await new Promise((r) => setTimeout(r, 0));
+  errored.error(boom);
+  const reason = await failed;
+
+  // a queued chunk that isn't a Uint8Array rejects, even one that holds bytes
+  const bad = new ReadableStream({ start(c) { c.enqueue(enc.encode('a')); c.enqueue(new ArrayBuffer(1)); c.close(); } });
+  const bad_res = new Response(bad);
+  let bad_error = null;
+  try { await bad_res.arrayBuffer(); } catch (e) { bad_error = e.constructor.name; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('abcde', text);
+    testing.expectEqual(boom, reason);
+    testing.expectEqual('TypeError', bad_error);
+    // a failed read keeps the body locked, as in the spec
+    testing.expectEqual(true, failing_res.body.locked);
+    testing.expectEqual(true, bad_res.body.locked);
+  });
+</script>
+
+<script id=stream_body_many_chunks type=module>
+  const state = await testing.async();
+  const enc = new TextEncoder();
+
+  // a long queue is read whole and in order
+  const stream = new ReadableStream({
+    start(c) {
+      for (let i = 0; i < 10000; i++) c.enqueue(enc.encode(String(i % 10)));
+      c.close();
+    },
+  });
+  const text = await new Response(stream).text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(10000, text.length);
+    testing.expectEqual('0123456789', text.slice(-10));
+  });
+</script>
+
+<script id=stream_body_pending_at_teardown type=module>
+  // a read that never finishes is released with the page
+  const pending = new Response(new ReadableStream()).text();
+  testing.expectTrue(pending instanceof Promise);
+</script>

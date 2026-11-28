@@ -197,8 +197,8 @@ pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator, comptim
     const local = &ls.local;
 
     var buf = std.Io.Writer.Allocating.init(arena);
-    const queue = &self._controller._queue;
-    for (queue.items) |chunk| {
+    var queue = self._controller._queue.iterator();
+    while (queue.next()) |chunk| {
         const value = local.toLocal(chunk);
         switch (chunks) {
             .uint8array => {
@@ -315,7 +315,7 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
         .readable => {},
         // Chunks still queued: the spec still sees it as readable, so cancel
         // drops them and settles the reader's `closed`.
-        .closed => if (self._controller._queue.items.len == 0) {
+        .closed => if (self._controller._queue.len == 0) {
             return local.resolvePromise({});
         },
         .errored => {

@@ -976,6 +976,33 @@
   });
 </script>
 
+<script id=readable_stream_queue_order type=module>
+  const state = await testing.async();
+
+  // chunks come out in order while the queue wraps around and grows
+  let controller;
+  const stream = new ReadableStream({ start(c) { controller = c; } });
+  const reader = stream.getReader();
+  const got = [];
+  let next = 0;
+  for (let round = 1; round <= 40; round++) {
+    for (let i = 0; i < round; i++) controller.enqueue(next++);
+    for (let i = 0; i < round / 2; i++) got.push((await reader.read()).value);
+  }
+  controller.close();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    got.push(value);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(next, got.length);
+    testing.expectTrue(got.every((v, i) => v === i));
+  });
+</script>
+
 <script id=reader_closed type=module>
   const state = await testing.async();
 

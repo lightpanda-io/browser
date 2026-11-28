@@ -331,7 +331,7 @@
   });
   const probeHasContentType = probe.headers.has('Content-Type');
 
-  // Drained on first use, so a body enqueued after construction is read.
+  // Read on first use, so a body enqueued after construction is read.
   let controller;
   const req1 = new Request('https://example.com', {
     method: 'POST',
@@ -344,14 +344,19 @@
   const text1 = await req1.text();
   const usedAfter1 = req1.bodyUsed;
 
-  // Still open at first use: TypeError. We drain a stream body whole; Chrome
-  // waits on it.
-  let rejected2 = true;
-  if (testing.IS_TEST_RUNNER) {
-    const req2 = new Request('https://example.com', { method: 'POST', duplex: 'half', body: new ReadableStream() });
-    rejected2 = false;
-    try { await req2.text(); } catch (e) { rejected2 = e instanceof TypeError; }
-  }
+  // Still open at first use: the body is read as it arrives.
+  let controller2;
+  const req2 = new Request('https://example.com', {
+    method: 'POST',
+    duplex: 'half',
+    body: new ReadableStream({ start(c) { controller2 = c; } }),
+  });
+  const pending2 = req2.text();
+  controller2.enqueue(enc.encode('arrives '));
+  await new Promise((r) => setTimeout(r, 0));
+  controller2.enqueue(enc.encode('later'));
+  controller2.close();
+  const text2 = await pending2;
 
   // A Request built from one with a stream body carries it.
   const req3 = new Request(new Request('https://example.com', {
@@ -380,7 +385,7 @@
     testing.expectFalse(usedBefore1);
     testing.expectEqual('late', text1);
     testing.expectTrue(usedAfter1);
-    testing.expectTrue(rejected2);
+    testing.expectEqual('arrives later', text2);
     testing.expectEqual('carried', text3);
     testing.expectEqual('twice', text4);
     testing.expectEqual('twice', text4b);
@@ -723,4 +728,123 @@
   const s = new ReadableStream({ start(c) { c.enqueue('x'); c.close(); } });
   const r = new Request('https://example.com', { method: 'POST', body: s, duplex: 'half' });
   testing.expectEqual('POST', r.clone().method);
+</script>
+
+<script id=stream_body_async_source type=module>
+  const state = await testing.async();
+  const enc = new TextEncoder();
+
+  // a body that arrives in several chunks, after an async start, is read whole
+  let pulls = 0;
+  const req = new Request('https://example.com', {
+    method: 'POST',
+    duplex: 'half',
+    body: new ReadableStream({
+      async start() { await new Promise((r) => setTimeout(r, 0)); },
+      async pull(c) {
+        await new Promise((r) => setTimeout(r, 0));
+        pulls += 1;
+        if (pulls > 3) {
+          c.close();
+        } else {
+          c.enqueue(enc.encode(String(pulls)));
+        }
+      },
+    }),
+  });
+  const pending = req.text();
+  const used_while_reading = req.bodyUsed;
+  const locked_while_reading = req.body.locked;
+  const text = await pending;
+  let again = null;
+  try { await req.text(); } catch (e) { again = e.constructor.name; }
+
+  // a chunk that isn't a Uint8Array rejects, even one that holds bytes
+  const bad = new Request('https://example.com', {
+    method: 'POST',
+    duplex: 'half',
+    body: new ReadableStream({ async pull(c) { await null; c.enqueue(new ArrayBuffer(1)); c.close(); } }),
+  });
+  let bad_error = null;
+  try { await bad.arrayBuffer(); } catch (e) { bad_error = e.constructor.name; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('123', text);
+    testing.expectTrue(used_while_reading);
+    testing.expectTrue(locked_while_reading);
+    testing.expectEqual('TypeError', again);
+    testing.expectEqual('TypeError', bad_error);
+  });
+</script>
+
+<script id=stream_body_content_type type=module>
+  const state = await testing.async();
+  const enc = new TextEncoder();
+
+  // blob() and formData() still see the Content-Type of a stream body
+  const stream = (s) => new ReadableStream({ start(c) { c.enqueue(enc.encode(s)); c.close(); } });
+  const opts = (s, type) => ({ method: 'POST', duplex: 'half', body: stream(s), headers: { 'Content-Type': type } });
+  const blob = await new Request('https://example.com', opts('hi', 'text/plain')).blob();
+  const form = await new Request('https://example.com', opts('a=1&b=2', 'application/x-www-form-urlencoded')).formData();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('text/plain', blob.type);
+    testing.expectEqual(2, blob.size);
+    testing.expectEqual('1', form.get('a'));
+    testing.expectEqual('2', form.get('b'));
+  });
+</script>
+
+<script id=stream_body_unusable type=module>
+  const state = await testing.async();
+  const enc = new TextEncoder();
+  const stream = () => new ReadableStream({ start(c) { c.enqueue(enc.encode('x')); c.close(); } });
+  const make = (body) => new Request('https://example.com', { method: 'POST', duplex: 'half', body });
+  const error = (p) => p.then(() => null, (e) => e.constructor.name);
+
+  // a stream the page locked can't be read, and the body isn't used
+  const locked_stream = stream();
+  const locked = make(locked_stream);
+  locked_stream.getReader();
+  const locked_error = await error(locked.text());
+
+  // nor can a stream the page already read from
+  const read_stream = new ReadableStream({ start(c) { c.enqueue(enc.encode('x')); c.enqueue(enc.encode('y')); c.close(); } });
+  const disturbed = make(read_stream);
+  const page_reader = read_stream.getReader();
+  await page_reader.read();
+  page_reader.releaseLock();
+  const disturbed_error = await error(disturbed.text());
+
+  // a stream another Request already drained can't be read again
+  const shared = make(stream());
+  new Request(shared).clone();
+  const shared_error = await error(shared.text());
+
+  // once its stream is read, a Request can't be cloned or fetched
+  const read = make(stream());
+  await read.text();
+  let clone_error = null;
+  try { read.clone(); } catch (e) { clone_error = e.constructor.name; }
+  const fetch_error = await error(fetch(read));
+
+  // a read that fails keeps the stream locked, so the Request can't be cloned
+  const failed = make(new ReadableStream({ start(c) { c.enqueue('not bytes'); c.close(); } }));
+  const failed_error = await error(failed.text());
+  let failed_clone_error = null;
+  try { failed.clone(); } catch (e) { failed_clone_error = e.constructor.name; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('TypeError', locked_error);
+    testing.expectFalse(locked.bodyUsed);
+    testing.expectEqual('TypeError', disturbed_error);
+    testing.expectEqual('TypeError', shared_error);
+    testing.expectEqual('TypeError', clone_error);
+    testing.expectEqual('TypeError', fetch_error);
+    testing.expectEqual('TypeError', failed_error);
+    testing.expectEqual('TypeError', failed_clone_error);
+  });
 </script>

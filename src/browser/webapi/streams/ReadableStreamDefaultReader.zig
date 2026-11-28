@@ -61,11 +61,10 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
         return resolver.promise();
     }
 
-    if (stream._controller.dequeue()) |chunk| {
-        defer chunk.release();
+    if (self.takeQueued(local)) |chunk| {
         const result = ReadResult{
             .done = false,
-            .value = .{ .value = local.toLocal(chunk) },
+            .value = .{ .value = chunk },
         };
         return local.resolvePromise(result);
     }
@@ -82,6 +81,16 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
     const promise = try stream._controller.addPendingRead(local);
     try stream.callPullIfNeeded();
     return promise;
+}
+
+/// A chunk already queued, without a read promise around it. Null once the
+/// queue is empty: read() then waits for the next one or reports the end.
+pub fn takeQueued(self: *ReadableStreamDefaultReader, local: *const js.Local) ?js.Value {
+    const stream = self._stream orelse return null;
+    const chunk = stream._controller.dequeue() orelse return null;
+    defer chunk.release();
+    stream._disturbed = true;
+    return local.toLocal(chunk);
 }
 
 pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
@@ -125,7 +134,7 @@ pub fn getClosed(self: *ReadableStreamDefaultReader, exec: *const Execution) !js
     if (self._stream) |stream| {
         switch (stream._state) {
             .readable => {},
-            .closed => if (stream._controller._queue.items.len == 0) {
+            .closed => if (stream._controller._queue.len == 0) {
                 resolver.resolve("ReadableStreamDefaultReader.closed", {});
             },
             .errored => rejectClosed(resolver, local.toLocal(stream._stored_error.?)),

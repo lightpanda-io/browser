@@ -27,12 +27,12 @@ const js = @import("../../js/js.zig");
 const referrer = @import("../../referrer.zig");
 
 const URL = @import("../URL.zig");
-const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
 const body_init = @import("body_init.zig");
+const body_consume = @import("body_consume.zig");
 const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
 const Execution = js.Execution;
@@ -48,7 +48,7 @@ _method: http.Method,
 _method_name: ?[]const u8 = null,
 _headers: ?*Headers,
 _body: ?[]const u8,
-_body_stream: ?*ReadableStream = null, // drained into `_body` on first use.
+_body_stream: ?*ReadableStream = null, // drained into `_body` by clone() and fetch()
 _body_view: ?*ReadableStream = null, // lazily-created, exposed via the `body` getter
 _arena: *lp.Arena,
 _cache: Cache,
@@ -376,23 +376,15 @@ fn lockStream(stream: *ReadableStream, exec: *const Execution) !void {
     stream._disturbed = true;
 }
 
-// Marks a present body consumed and returns it
+// Marks a byte body consumed and returns it. A stream body is read by consumeAs.
 fn consume(self: *Request, exec: *const Execution) ![]const u8 {
-    const local = exec.js.local.?;
-    if (self._body == null and self._body_stream == null) {
-        return "";
-    }
-
-    try self.checkUnusable(local);
-    const body = self.bodyBytes(.uint8array) catch |err| switch (err) {
-        error.TypeError => return local.typeError("Failed to read ReadableStream body"),
-        else => return err,
-    };
+    const body = self._body orelse return "";
+    try self.checkUnusable(exec.js.local.?);
     self._body_used = true;
     if (self._body_view) |stream| {
         try lockStream(stream, exec);
     }
-    return body orelse "";
+    return body;
 }
 
 // https://fetch.spec.whatwg.org/#dom-body-body
@@ -447,56 +439,57 @@ fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
 }
 
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    const body = try self.consume(exec);
-
-    const headers = try self.getHeaders(exec);
-    const content_type = try headers.get("content-type", exec) orelse "";
-
-    const b = try Blob.initFromContentType(body, content_type, exec);
-    return local.resolvePromise(b);
+    return self.consumeAs(.blob, exec);
 }
 
 pub fn text(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    const body = try self.consume(exec);
-    return local.resolvePromise(body_init.stripUtf8Bom(body));
+    return self.consumeAs(.text, exec);
 }
 
 pub fn json(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    const body = try self.consume(exec);
-
-    const value = local.parseJSON(body_init.stripUtf8Bom(body)) catch {
-        return local.rejectPromise(.{ .syntax_error = "failed to parse" });
-    };
-    return local.resolvePromise(try value.persist());
+    return self.consumeAs(.json, exec);
 }
 
 pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    const body = try self.consume(exec);
-    return local.resolvePromise(js.ArrayBuffer{ .values = body });
+    return self.consumeAs(.array_buffer, exec);
 }
 
 pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
-    const body = try self.consume(exec);
-    return local.resolvePromise(js.TypedArray(u8){ .values = body });
+    return self.consumeAs(.bytes, exec);
 }
 
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
-    const local = exec.js.local.?;
     // Per Fetch, a null body acts as an empty byte sequence.
-    const body = try self.consume(exec);
+    return self.consumeAs(.form_data, exec);
+}
 
-    const headers = try self.getHeaders(exec);
-    const content_type = try headers.get("content-type", exec);
-    const form_data = body_init.parseFormData(body, content_type, exec) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        error.TypeError => return local.typeError("Failed to parse body as FormData"),
+// A stream body is read as it arrives, like Response does. Other bodies are
+// packaged right away.
+fn consumeAs(self: *Request, kind: body_consume.Package, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    // only blob() and formData() look at it
+    const content_type = switch (kind) {
+        .blob, .form_data => try (try self.getHeaders(exec)).get("content-type", exec),
+        else => null,
     };
-    return local.resolvePromise(form_data);
+
+    if (self._body_stream) |stream| {
+        // `body` is this stream from now on, so a lock the page took counts
+        self._body_view = stream;
+        try self.checkUnusable(local);
+        // drained by clone() or fetch() of a Request that shares it
+        if (stream._collected) {
+            return local.typeError("Body has already been read");
+        }
+        const promise = try body_consume.StreamConsumer.start(stream, kind, content_type, exec);
+        self._body_used = true;
+        return promise;
+    }
+
+    const body = try self.consume(exec);
+    var resolver = local.createPromiseResolver();
+    try body_consume.package(kind, body, content_type, resolver, exec);
+    return resolver.promise();
 }
 
 pub fn clone(self: *Request, exec: *const Execution) !*Request {

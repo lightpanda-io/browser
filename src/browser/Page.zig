@@ -33,6 +33,7 @@ const properties = @import("css/properties.zig");
 
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
+const StreamConsumer = @import("webapi/net/body_consume.zig").StreamConsumer;
 const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -176,6 +177,9 @@ origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
 blob_urls: Blob.UrlMap = .empty,
 
 _file_lists: std.ArrayList(*FileList) = .empty,
+
+// Stream bodies still being read by text(), json() and the like.
+_body_reads: std.DoublyLinkedList = .{},
 
 // Identity tracking for the main world. All main-world contexts in this Page
 // share this, ensuring object identity works across same-origin frames.
@@ -392,6 +396,8 @@ pub fn deinit(self: *Page) void {
         }
     }
     self._file_lists = .empty;
+
+    StreamConsumer.releasePending(self);
 
     const session = self.session;
     lp.metrics.js_heap_size_bytes.observe(session.browser.env.isolate.getHeapStatistics().total_physical_size);
