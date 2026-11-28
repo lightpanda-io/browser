@@ -268,9 +268,20 @@ const EntryValue = union(enum) {
     bytes: []const u8, //must be last, everything can coerce to a []const u8
 };
 
+// https://xhr.spec.whatwg.org/#dom-formdata-set
 pub fn set(self: *FormData, name: String, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
-    self.deleteByName(name, exec);
-    return self.append(name.str(), value, filename, exec);
+    // append validates and builds the entry, so nothing is removed if it fails.
+    try self.append(name.str(), value, filename, exec);
+
+    const items = self._entries.items;
+    const first = for (items[0 .. items.len - 1], 0..) |*entry, i| {
+        if (entry.name.eql(name)) break i;
+    } else return;
+
+    // The new entry takes the first match's place; that match, now last, is
+    // removed with the others.
+    std.mem.swap(Entry, &items[first], &items[items.len - 1]);
+    self.deleteByName(name, first + 1, exec);
 }
 
 // https://xhr.spec.whatwg.org/#create-an-entry
@@ -337,14 +348,16 @@ pub fn appendText(self: *FormData, name: []const u8, value: []const u8) !void {
 }
 
 pub fn delete(self: *FormData, name: String, exec: *Execution) void {
-    self.deleteByName(name, exec);
+    self.deleteByName(name, 0, exec);
 }
 
-fn deleteByName(self: *FormData, name: String, exec: *Execution) void {
-    var i: usize = 0;
+// Removes the entries named `name` at or after `start`, keeping the order of
+// the rest.
+fn deleteByName(self: *FormData, name: String, start: usize, exec: *Execution) void {
+    var i = start;
     while (i < self._entries.items.len) {
         if (self._entries.items[i].name.eql(name)) {
-            const entry = self._entries.swapRemove(i);
+            const entry = self._entries.orderedRemove(i);
 
             switch (entry.value) {
                 .file => |file| file.releaseRef(exec.page),
