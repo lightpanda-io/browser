@@ -384,7 +384,13 @@ fn getIsSecureContext(self: *const Window) bool {
 
 fn getFrameElement(self: *const Window) ?*Element.Html.IFrame {
     const frame = self._frame.get() orelse return null;
-    return frame.iframe;
+    const iframe = frame.iframe orelse return null;
+    // The container is only exposed to a same origin-domain caller.
+    const parent = frame.parent orelse return null;
+    if (!Access.sameOrigin(self, parent.window)) {
+        return null;
+    }
+    return iframe;
 }
 
 pub fn getLocation(self: *const Window) *Location {
