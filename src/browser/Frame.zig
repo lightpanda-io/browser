@@ -530,9 +530,9 @@ pub fn deinit(self: *Frame) void {
         container.detach();
     }
 
-    if (self._queued_navigation) |qn| {
-        qn.release();
-    }
+    // The parent's load isn't completed for it, as cancelling would: when we
+    // still have a navigation queued here, the parent is being torn down too.
+    _ = self.dropQueuedNavigation();
 
     while (self._message_ports.first) |node| {
         const port: *MessagePort = @alignCast(@fieldParentPtr("_node", node));
@@ -1550,13 +1550,9 @@ fn loadEventsAborted(self: *const Frame) bool {
 }
 
 pub fn cancelQueuedNavigation(self: *Frame) void {
-    const qn = self._queued_navigation orelse return;
-    const queued = self.page.queued_navigation;
-    if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
-        _ = queued.swapRemove(idx);
+    if (self.dropQueuedNavigation() == false) {
+        return;
     }
-    qn.release();
-    self._queued_navigation = null;
 
     // Our own load is aborted and the replacement that would have completed it
     // is now gone, so _documentIsComplete will never reach the parent. Release
@@ -1564,6 +1560,20 @@ pub fn cancelQueuedNavigation(self: *Frame) void {
     if (self.document._load_aborted) {
         self.releaseParentLoadDelay();
     }
+}
+
+// Releases the queued navigation, if there's one, and takes us out of the
+// page's queue. The batch that the session is going through can still list us:
+// it skips a frame that has no navigation.
+fn dropQueuedNavigation(self: *Frame) bool {
+    const qn = self._queued_navigation orelse return false;
+    self._queued_navigation = null;
+    const queued = self.page.queued_navigation;
+    if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
+        _ = queued.swapRemove(idx);
+    }
+    qn.release();
+    return true;
 }
 
 // Stop delaying the parent's load event without dispatching the iframe
@@ -4640,6 +4650,36 @@ test "Frame: document.open cancels the queued navigation without reviving load" 
     try testing.expectEqual(0, frame.page.queued_navigation.items.len);
     try testing.expectEqual("Rewritten", try (try ls.local.exec("document.title", null)).toStringSlice());
     try testing.expectEqual("", try (try ls.local.exec("events.join('|')", null)).toStringSlice());
+}
+
+test "Frame: a root navigation takes its descendants' queued navigations with it" {
+    // replaced right away, and once the response arrives
+    inline for (.{ "about:blank", "/src/browser/tests/hi.html?next" }) |target| {
+        const page = try testing.pageTest("hi.html", .{});
+        defer page.close();
+        {
+            const frame = page.frame().?;
+            var ls: JS.Local.Scope = undefined;
+            frame.js.localScope(&ls);
+            defer ls.deinit();
+            try ls.local.eval(
+                \\const iframe = document.createElement('iframe');
+                \\document.body.appendChild(iframe);
+                \\iframe.src = 'about:blank';
+                \\location.assign('
+            ++ target ++ "');", null);
+            try testing.expect(frame.child_frames.items[0]._queued_navigation != null);
+            try testing.expectEqual(2, frame.page.queued_navigation.items.len);
+        }
+
+        var runner = testing.test_session.runner(.{});
+        try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+
+        const frame = page.frame().?;
+        try testing.expect(std.mem.endsWith(u8, frame.url, target));
+        try testing.expectEqual(0, frame.child_frames.items.len);
+        try testing.expectEqual(0, frame.page.queued_navigation.items.len);
+    }
 }
 
 test "Frame: document.open after inline navigation does not restart the parser" {

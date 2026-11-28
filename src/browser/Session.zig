@@ -734,9 +734,9 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
     // First pass: process async navigations (non-about:blank)
     for (navigations.items) |frame| {
         const qn = frame._queued_navigation orelse {
-            // Was previously an assert; downgraded so prod can recover, but
-            // kept at warn so the invariant violation isn't silently lost.
-            log.warn(.frame, "skipped null queued nav", .{});
+            // Dropped since it was queued: a navigation processed before it
+            // tore the frame down with its parent, or cancelled it.
+            log.debug(.frame, "skipped null queued nav", .{});
             continue;
         };
 
@@ -761,9 +761,8 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
     // siblings whose _queued_navigation stays set).
     for (about_blank_queue.items) |frame| {
         const qn = frame._queued_navigation orelse {
-            // Was previously an assert; downgraded so prod can recover, but
-            // kept at warn so the invariant violation isn't silently lost.
-            log.warn(.frame, "skipped null queued nav", .{});
+            // Dropped since the first pass, as above.
+            log.debug(.frame, "skipped null queued nav", .{});
             continue;
         };
         self.processFrameNavigation(frame, qn) catch |err| {
