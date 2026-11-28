@@ -94,6 +94,54 @@
 }
 </script>
 
+<script id=deleteAndSetKeepOrder>
+{
+  // https://xhr.spec.whatwg.org/#dom-formdata-delete
+  // https://xhr.spec.whatwg.org/#dom-formdata-set
+  const fd = new FormData();
+  fd.append('a', '1');
+  fd.append('b', '2');
+  fd.append('c', '3');
+  fd.append('d', '4');
+  fd.delete('a');
+  assert([{key: 'b', value: '2'}, {key: 'c', value: '3'}, {key: 'd', value: '4'}], fd);
+
+  fd.append('b', '5');
+  fd.append('e', '6');
+  fd.delete('b');
+  assert([{key: 'c', value: '3'}, {key: 'd', value: '4'}, {key: 'e', value: '6'}], fd);
+
+  fd.set('c', '7');
+  assert([{key: 'c', value: '7'}, {key: 'd', value: '4'}, {key: 'e', value: '6'}], fd);
+
+  fd.append('c', '8');
+  fd.append('d', '9');
+  fd.set('d', '0');
+  assert([{key: 'c', value: '7'}, {key: 'd', value: '0'}, {key: 'e', value: '6'}, {key: 'c', value: '8'}], fd);
+
+  fd.set('f', '1');
+  assert([{key: 'c', value: '7'}, {key: 'd', value: '0'}, {key: 'e', value: '6'}, {key: 'c', value: '8'}, {key: 'f', value: '1'}], fd);
+
+  // A set() that throws leaves the entries alone.
+  testing.expectError('TypeError', () => fd.set('c', 'str', 'name.txt'));
+  assert([{key: 'c', value: '7'}, {key: 'd', value: '0'}, {key: 'e', value: '6'}, {key: 'c', value: '8'}, {key: 'f', value: '1'}], fd);
+
+  // Same with file entries.
+  const files = new FormData();
+  files.append('k', '0');
+  files.append('file', new Blob(['x']), 'x.txt');
+  files.append('k', '1');
+  files.append('file', new Blob(['y']), 'y.txt');
+  files.set('file', new Blob(['z']), 'z.txt');
+  testing.expectEqual(['k', 'file', 'k'], Array.from(files.keys()));
+  testing.expectEqual(['z.txt'], files.getAll('file').map((f) => f.name));
+
+  files.delete('k');
+  testing.expectEqual(['file'], Array.from(files.keys()));
+  testing.expectEqual('z.txt', files.get('file').name);
+}
+</script>
+
 <script id=iteration>
 {
   const fd = new FormData();
