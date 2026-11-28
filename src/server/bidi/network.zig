@@ -243,8 +243,9 @@ fn deserializeHeader(arena: std.mem.Allocator, input: HeaderInput) !?http.Header
     if (!Mime.isHttpToken(input.name)) {
         return null;
     }
-    // A header value has no leading or trailing whitespace, and no NUL, CR
-    // or LF.
+    // The Fetch spec's header value: no leading or trailing whitespace, and
+    // no NUL, CR or LF. curl sends a header as given: a CR or LF would start
+    // another header.
     if (!Mime.isHttpHeaderValue(value) or std.mem.trim(u8, value, &Mime.HTTP_WHITESPACE).len != value.len) {
         return null;
     }
@@ -314,8 +315,15 @@ fn continueRequest(cmd: *BiDi.Command) !void {
 
         var cookie_header: std.Io.Writer.Allocating = .init(arena);
         for (cookies, 0..) |cookie, i| {
+            const cookie_value = try cookie.value.decode(arena);
+            // The spec doesn't check the cookies, but they go out in a
+            // header: a CR or LF would inject another header, a ";" another
+            // cookie. Chrome's cookie name and value rules refuse both.
+            if (!Cookie.isValidName(cookie.name) or !Cookie.isValidValue(cookie_value)) {
+                return cmd.sendError("invalid argument", "invalid cookie");
+            }
             if (i > 0) try cookie_header.writer.writeAll("; ");
-            try cookie_header.writer.print("{s}={s}", .{ cookie.name, try cookie.value.decode(arena) });
+            try cookie_header.writer.print("{s}={s}", .{ cookie.name, cookie_value });
         }
         const value = cookie_header.written();
 
@@ -1378,6 +1386,21 @@ test "bidi.network: continueRequest and failRequest errors" {
         .body = .{ .type = "base64", .value = "!!" },
     } });
     try ctx.expectSentError("invalid argument", "invalid body", .{ .id = 17 });
+    try ctx.processMessage(.{ .id = 20, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .cookies = .{.{ .name = "a", .value = .{ .type = "string", .value = "1\r\nX-Evil: injected" } }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid cookie", .{ .id = 20 });
+    try ctx.processMessage(.{ .id = 21, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .cookies = .{.{ .name = "a\nb", .value = .{ .type = "base64", .value = "MQ==" } }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid cookie", .{ .id = 21 });
+    try ctx.processMessage(.{ .id = 22, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .cookies = .{.{ .name = "a", .value = .{ .type = "string", .value = "1; admin=true" } }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid cookie", .{ .id = 22 });
     try ctx.processMessage(.{ .id = 18, .method = "network.continueRequest", .params = .{} });
     try ctx.expectSentError("invalid argument", null, .{ .id = 18 });
 

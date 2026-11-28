@@ -347,6 +347,16 @@ pub fn hasHiddenPrefix(value: []const u8) bool {
     return prefixOf(std.mem.trimStart(u8, value, " \t")) != null;
 }
 
+// Chrome's IsValidCookieName.
+pub fn isValidName(name: []const u8) bool {
+    return isValidField(name, ";=");
+}
+
+// Chrome's IsValidCookieValue.
+pub fn isValidValue(value: []const u8) bool {
+    return isValidField(value, ";");
+}
+
 // Chrome's IsValidCookieName/Value: no control character (tab included) and
 // none of `separators`, but bytes above 0x7F are fine.
 fn isValidField(field: []const u8, comptime separators: []const u8) bool {
