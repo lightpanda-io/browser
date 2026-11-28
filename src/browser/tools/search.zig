@@ -187,7 +187,7 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json
                     // a whole benchmark run.
                     var detail: Failure = .{};
                     if (session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, args.query, &detail, &session.browser.http_client, &session.browser.app.http_client })) |markdown_| {
-                        return .{ .text = markdown_ };
+                        return .{ .text = markdown_, .search_engine = @tagName(e.tag) };
                     } else |err| {
                         last_err = err;
                         last_label = @tagName(e.tag);
@@ -214,17 +214,18 @@ fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime e: an
     const api_key = engineKey(e) catch return .{
         .text = "web search engine is set to " ++ label ++ " but " ++ e.Client.env_var_name ++ " is not set in the environment",
         .is_error = true,
+        .search_engine = label,
     };
     var detail: Failure = .{};
     const markdown_ = session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, query, &detail, &session.browser.http_client, &session.browser.app.http_client }) catch |err|
         return searchFailed(arena, label, err, detail);
-    return .{ .text = markdown_ };
+    return .{ .text = markdown_, .search_engine = label };
 }
 
 fn searchFailed(arena: std.mem.Allocator, label: []const u8, err: anyerror, detail: Failure) ToolError!ToolResult {
     var aw: std.Io.Writer.Allocating = .init(arena);
     writeSearchFailure(&aw.writer, label, err, detail) catch return ToolError.OutOfMemory;
-    return .{ .text = aw.written(), .is_error = true };
+    return .{ .text = aw.written(), .is_error = true, .search_engine = label };
 }
 
 fn writeSearchFailure(w: *std.Io.Writer, label: []const u8, err: anyerror, detail: Failure) !void {
@@ -542,6 +543,7 @@ test "searchFailed: a rate limit says so, a bare failure stays short" {
         .message = try aa.dupe(u8, "Public API hourly limit reached.\nWait 2 minutes to continue."),
     });
     try std.testing.expect(limited.is_error);
+    try std.testing.expectEqualStrings("keenable", limited.search_engine.?);
     try std.testing.expect(std.mem.find(u8, limited.text, "(HTTP 429)") != null);
     try std.testing.expect(std.mem.find(u8, limited.text, "Public API hourly limit reached.") != null);
     try std.testing.expect(std.mem.find(u8, limited.text, "rate-limited right now") != null);
