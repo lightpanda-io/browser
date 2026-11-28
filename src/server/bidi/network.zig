@@ -225,17 +225,14 @@ fn blockedRequest(cmd: *BiDi.Command, request_id: []const u8) !?Blocked {
     return .{ .transfer = transfer, .phase = phase };
 }
 
-// network.CookieHeader
-const CookieHeader = struct {
-    name: []const u8,
-    value: storage.BytesValue,
-};
-
 // network.Header, as the client sends it.
 const HeaderInput = struct {
     name: []const u8,
     value: storage.BytesValue,
 };
+
+// network.CookieHeader: the same fields as network.Header.
+const CookieHeader = HeaderInput;
 
 // The spec's "deserialize header". Null when it isn't a valid header, bad
 // base64 included.
