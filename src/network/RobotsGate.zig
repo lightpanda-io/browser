@@ -40,7 +40,7 @@ const RobotsGate = @This();
 network: *Network,
 single_flight: SingleFlight,
 
-pub const Result = enum { allowed, blocked, pending };
+pub const Result = enum { allowed, blocked, robots_unreachable, pending };
 
 pub fn deinit(self: *RobotsGate) void {
     self.single_flight.deinit();
@@ -56,6 +56,10 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
             .blocked => {
                 log.debug(.http, "blocked by robots", .{ .url = url });
                 return .blocked;
+            },
+            .robots_unreachable => {
+                log.debug(.http, "robots.txt unreachable", .{ .url = url });
+                return .robots_unreachable;
             },
         }
     }
@@ -126,7 +130,8 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
 }
 
 const Outcome = union(enum) {
-    decision: Robots.RobotStore.Decision,
+    allowed,
+    robots_unreachable,
     robots: Robots.Robots,
     challenged,
 };
@@ -142,7 +147,8 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8, outcome: Outcome) voi
         transfer.unpark();
 
         const decision: Robots.RobotStore.Decision = switch (outcome) {
-            .decision => |d| d,
+            .allowed => .allowed,
+            .robots_unreachable => .robots_unreachable,
             .robots => |r| if (r.isAllowed(URL.getPathname(transfer.req.url))) .allowed else .blocked,
             .challenged => {
                 lp.metrics.robots_access.incr(.deny);
@@ -151,11 +157,20 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8, outcome: Outcome) voi
             },
         };
 
-        if (decision == .blocked) {
-            lp.metrics.robots_access.incr(.deny);
-            log.debug(.http, "blocked by robots", .{ .url = transfer.req.url });
-            transfer.failAsync(error.RobotsBlocked);
-            continue;
+        switch (decision) {
+            .allowed => {},
+            .blocked => {
+                lp.metrics.robots_access.incr(.deny);
+                log.debug(.http, "blocked by robots", .{ .url = transfer.req.url });
+                transfer.failAsync(error.RobotsBlocked);
+                continue;
+            },
+            .robots_unreachable => {
+                lp.metrics.robots_access.incr(.deny);
+                log.debug(.http, "robots.txt unreachable", .{ .url = transfer.req.url });
+                transfer.failAsync(error.RobotsUnreachable);
+                continue;
+            },
         }
         // Hand back to the pipeline; the robots gate is the last step
         // before the network. If it fails while we still own the transfer,
@@ -207,7 +222,7 @@ const RobotsContext = struct {
                 const body = transfer.responseBody();
                 if (body.len == 0) {
                     // Empty robots.txt means we can short-circuit the allowed path.
-                    self.settle(.{ .outcome = .{ .decision = .allowed } });
+                    self.settle(.{ .outcome = .allowed });
                     return;
                 }
 
@@ -217,27 +232,31 @@ const RobotsContext = struct {
                 ) catch |err| {
                     // We only return an error if an allocation or something fails.
                     // Our parser does already leniently handle malformed input and takes whichever rules it can parse.
-                    // On this case of an allocation failure, it is our fault so we put it as disallowed.
+                    // On this case of an allocation failure, it is our fault so we treat robots.txt as unreachable.
                     log.debug(.browser, "error while parsing robots.txt", .{ .robots_url = robots_url, .err = err });
-                    self.settle(.{ .outcome = .{ .decision = .blocked } });
+                    self.settle(.{ .outcome = .robots_unreachable });
                     return;
                 };
 
                 // BE CAREFUL: robots can be invalidated after this call
                 self.settle(.{ .outcome = .{ .robots = robots } });
             },
-            // Unauthorized/Forbidden: treat as fully disallowed since we can't verify permissions.
+            // Unauthorized/Forbidden: keep blocking since we can't verify permissions,
+            // but distinguish from explicit robots.txt rules via RobotsUnreachable.
             401, 403 => {
                 log.debug(.http, "robots.txt access denied", .{
                     .url = robots_url,
                     .status = self.status,
                 });
-                self.settle(.{ .outcome = .{ .decision = .blocked } });
+                self.settle(.{ .outcome = .robots_unreachable });
             },
-            // RFC9309: Unavailable (400-499) means that we may access any resources on the server.
+            // RFC9309: Unavailable (400-499, excluding 401/403) means that we may access any resources on the server.
             400, 402, 404...499 => {
-                log.debug(.http, "robots.txt unavailable", .{ .url = robots_url });
-                self.settle(.{ .outcome = .{ .decision = .allowed } });
+                log.debug(.http, "robots.txt unavailable", .{
+                    .url = robots_url,
+                    .status = self.status,
+                });
+                self.settle(.{ .outcome = .allowed });
             },
             // RFC9309: Unreachable (500-599) means that we are completely disallowed.
             500...599 => {
@@ -245,14 +264,14 @@ const RobotsContext = struct {
                     .url = robots_url,
                     .status = self.status,
                 });
-                self.settle(.{ .outcome = .{ .decision = .blocked } });
+                self.settle(.{ .outcome = .robots_unreachable });
             },
             else => {
                 log.debug(.http, "unexpected status on robots", .{
                     .url = robots_url,
                     .status = self.status,
                 });
-                self.settle(.{ .outcome = .{ .decision = .blocked } });
+                self.settle(.{ .outcome = .robots_unreachable });
             },
         }
     }
@@ -262,7 +281,7 @@ const RobotsContext = struct {
 
         log.debug(.http, "robots fetch failed", .{ .err = err });
         self.settle(.{
-            .outcome = .{ .decision = .allowed },
+            .outcome = .allowed,
             .cache = false,
         });
     }
@@ -293,13 +312,11 @@ const RobotsContext = struct {
 
         if (options.cache) {
             switch (options.outcome) {
-                .decision => |d| switch (d) {
-                    .allowed => network.robot_store.putAllowed(self.robots_url) catch |err| {
-                        log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
-                    },
-                    .blocked => network.robot_store.putDisallowed(self.robots_url) catch |err| {
-                        log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
-                    },
+                .allowed => network.robot_store.putAllowed(self.robots_url) catch |err| {
+                    log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
+                },
+                .robots_unreachable => network.robot_store.putUnreachable(self.robots_url) catch |err| {
+                    log.warn(.browser, "cache robots decision", .{ .url = self.robots_url, .err = err });
                 },
                 .robots => |r| network.robot_store.put(self.robots_url, r) catch |err| {
                     log.warn(.browser, "cache robots rules", .{ .url = self.robots_url, .err = err });
@@ -309,3 +326,341 @@ const RobotsContext = struct {
         }
     }
 };
+
+const testing = @import("../testing.zig");
+const ArenaPool = @import("../ArenaPool.zig");
+
+const TestHarness = struct {
+    pool: ArenaPool,
+    network: Network,
+    client: HttpClient,
+
+    fn init(self: *TestHarness) void {
+        self.pool = .init(testing.allocator, .{});
+
+        self.network = undefined;
+        self.network.config = &testing.test_config;
+        self.network.robot_store = .init(testing.allocator, 32);
+        self.network.available = .{};
+        self.network.conn_mutex = .init;
+        self.network.rate_limiter = null;
+        self.network.adblocker = null;
+        self.network.web_bot_auth = null;
+
+        self.client = undefined;
+        self.client.allocator = testing.allocator;
+        self.client.arena_pool = &self.pool;
+        self.client.network = &self.network;
+        self.client.pending_queue = .{};
+        self.client.dispatch_queue = .{};
+        self.client.dispatch_count = 0;
+        self.client.robots = .{
+            .network = &self.network,
+            .single_flight = .init(testing.allocator),
+        };
+    }
+
+    fn deinit(self: *TestHarness) void {
+        self.client.robots.deinit();
+        self.network.robot_store.deinit();
+        self.pool.deinit();
+    }
+
+    fn newWaiter(self: *TestHarness, arena: *lp.Arena, url: [:0]const u8, id: u32) !*Transfer {
+        const transfer = try arena.create(Transfer);
+        transfer.* = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .method = .GET,
+                .url = url,
+                .origin = null,
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
+                .resource_type = .document,
+                .shutdown_callback = HttpClient.noopShutdown,
+            },
+            .client = &self.client,
+            .id = id,
+            .start_time = 0,
+        };
+        return transfer;
+    }
+
+    fn deliverRobotsResponse(
+        self: *TestHarness,
+        robots_url: [:0]const u8,
+        status: u16,
+        headers: []const http.Header,
+        body: []const u8,
+    ) !void {
+        const ctx_arena = try self.pool.acquire(.small, "test.RobotsContext");
+        errdefer ctx_arena.release();
+
+        const owned_url = try ctx_arena.dupeSentinel(u8, robots_url, 0);
+        const robots_ctx = try ctx_arena.create(RobotsContext);
+        robots_ctx.* = .{
+            .gate = &self.client.robots,
+            .arena = ctx_arena,
+            .robots_url = owned_url,
+        };
+
+        const fetch_arena = try self.pool.acquire(.small, "test.RobotsFetch");
+        defer fetch_arena.release();
+
+        var fetch_transfer: Transfer = .{
+            .arena = fetch_arena,
+            .owner = null,
+            .req = .{
+                .method = .GET,
+                .url = owned_url,
+                .internal = true,
+                .origin = null,
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
+                .resource_type = .fetch,
+                .ctx = robots_ctx,
+                .shutdown_callback = HttpClient.noopShutdown,
+            },
+            .client = &self.client,
+            .id = 999,
+            .start_time = 0,
+        };
+        fetch_transfer.res.header = .{
+            .url = owned_url.ptr,
+            .status = status,
+            .redirect_count = 0,
+        };
+        fetch_transfer.res.headers = headers;
+
+        if (body.len > 0) {
+            fetch_transfer.res.buffer = .init(testing.allocator);
+            try fetch_transfer.res.buffer._list.appendSlice(testing.allocator, body);
+        }
+        defer if (body.len > 0) fetch_transfer.res.buffer.deinit();
+
+        try testing.expectEqual(.proceed, try RobotsContext.headerCallback(&fetch_transfer));
+        try RobotsContext.doneCallback(&fetch_transfer);
+    }
+};
+
+test "RobotsGate: 401 and 403 fail with RobotsUnreachable and cache the decision" {
+    const Case = struct {
+        status: u16,
+        headers: []const http.Header = &.{},
+    };
+    const cases = [_]Case{
+        .{ .status = 401 },
+        .{ .status = 401, .headers = &.{.{ .name = "www-authenticate", .value = "Basic realm=\"restricted\"" }} },
+        .{ .status = 403 },
+        .{ .status = 403, .headers = &.{.{ .name = "server", .value = "cloudflare" }} },
+    };
+
+    for (cases) |case| {
+        var h: TestHarness = undefined;
+        h.init();
+        defer h.deinit();
+
+        const waiter_arena = try h.pool.acquire(.small, "test.waiter");
+        defer waiter_arena.release();
+
+        const robots_url = "http://example.com/robots.txt";
+        const waiter = try h.newWaiter(waiter_arena, "http://example.com/abs/2401.00001", 1);
+        try testing.expectEqual(.initial, try h.client.robots.single_flight.enter(robots_url, waiter, .robots));
+
+        try h.deliverRobotsResponse(robots_url, case.status, case.headers, "");
+
+        try testing.expectEqual(true, waiter.state == .buffered);
+        try testing.expectEqual(1, waiter._events.items.len);
+        try testing.expectEqual(error.RobotsUnreachable, waiter._events.items[0].err);
+        try testing.expectEqual(.robots_unreachable, http.errorReason(waiter._events.items[0].err));
+        try testing.expectEqual(0, h.client.robots.single_flight.count());
+        try testing.expectEqual(.robots_unreachable, h.network.robot_store.checkPath(robots_url, "/abs/2401.00001").?);
+
+        // Cached lookups on the same host must also return robots_unreachable rather than blocked.
+        const cached_waiter = try h.newWaiter(waiter_arena, "http://example.com/pdf/2401.00001", 2);
+        try testing.expectEqual(.robots_unreachable, try h.client.robots.check(cached_waiter));
+    }
+}
+
+test "RobotsGate: other 4xx robots.txt responses allow access" {
+    const Case = struct {
+        status: u16,
+        headers: []const http.Header = &.{},
+    };
+    const cases = [_]Case{
+        .{ .status = 400 },
+        .{ .status = 402 },
+        .{ .status = 404 },
+        .{ .status = 405, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "block" }} },
+        .{ .status = 410 },
+        .{ .status = 429 },
+        .{ .status = 451 },
+        .{ .status = 499 },
+    };
+
+    for (cases) |case| {
+        var h: TestHarness = undefined;
+        h.init();
+        defer h.deinit();
+
+        const waiter_arena = try h.pool.acquire(.small, "test.waiter");
+        defer waiter_arena.release();
+
+        const robots_url = "http://example.com/robots.txt";
+        const waiter = try h.newWaiter(waiter_arena, "http://example.com/abs/2401.00001", 1);
+        try testing.expectEqual(.initial, try h.client.robots.single_flight.enter(robots_url, waiter, .robots));
+
+        try h.deliverRobotsResponse(robots_url, case.status, case.headers, "");
+
+        try testing.expectEqual(true, waiter.state == .queued);
+        try testing.expectEqual(0, waiter._events.items.len);
+        try testing.expectEqual(0, h.client.robots.single_flight.count());
+        try testing.expectEqual(.allowed, h.network.robot_store.checkPath(robots_url, "/abs/2401.00001").?);
+    }
+}
+
+test "RobotsGate: 5xx and unexpected status codes fail with RobotsUnreachable" {
+    const statuses = [_]u16{ 500, 502, 503, 599, 300, 999 };
+
+    for (statuses) |status| {
+        var h: TestHarness = undefined;
+        h.init();
+        defer h.deinit();
+
+        const waiter_arena = try h.pool.acquire(.small, "test.waiter");
+        defer waiter_arena.release();
+
+        const robots_url = "http://example.com/robots.txt";
+        const waiter = try h.newWaiter(waiter_arena, "http://example.com/page", 1);
+        try testing.expectEqual(.initial, try h.client.robots.single_flight.enter(robots_url, waiter, .robots));
+
+        try h.deliverRobotsResponse(robots_url, status, &.{}, "");
+
+        try testing.expectEqual(true, waiter.state == .buffered);
+        try testing.expectEqual(1, waiter._events.items.len);
+        try testing.expectEqual(error.RobotsUnreachable, waiter._events.items[0].err);
+        try testing.expectEqual(0, h.client.robots.single_flight.count());
+        try testing.expectEqual(.robots_unreachable, h.network.robot_store.checkPath(robots_url, "/page").?);
+
+        const cached_waiter = try h.newWaiter(waiter_arena, "http://example.com/other", 2);
+        try testing.expectEqual(.robots_unreachable, try h.client.robots.check(cached_waiter));
+    }
+}
+
+test "RobotsGate: bot challenge on 403, 405, or 429 fails with BotChallenge without caching" {
+    const Case = struct {
+        status: u16,
+        headers: []const http.Header,
+    };
+    const cases = [_]Case{
+        .{ .status = 403, .headers = &.{.{ .name = "cf-mitigated", .value = "challenge" }} },
+        .{ .status = 429, .headers = &.{.{ .name = "x-vercel-mitigated", .value = "challenge" }} },
+        .{ .status = 405, .headers = &.{.{ .name = "x-amzn-waf-action", .value = "challenge" }} },
+    };
+
+    for (cases) |case| {
+        var h: TestHarness = undefined;
+        h.init();
+        defer h.deinit();
+
+        const waiter_arena = try h.pool.acquire(.small, "test.waiter");
+        defer waiter_arena.release();
+
+        const robots_url = "http://example.com/robots.txt";
+        const waiter = try h.newWaiter(waiter_arena, "http://example.com/page", 1);
+        try testing.expectEqual(.initial, try h.client.robots.single_flight.enter(robots_url, waiter, .robots));
+
+        try h.deliverRobotsResponse(robots_url, case.status, case.headers, "");
+
+        try testing.expectEqual(true, waiter.state == .buffered);
+        try testing.expectEqual(1, waiter._events.items.len);
+        try testing.expectEqual(error.BotChallenge, waiter._events.items[0].err);
+        try testing.expectEqual(0, h.client.robots.single_flight.count());
+        try testing.expectEqual(null, h.network.robot_store.checkPath(robots_url, "/page"));
+    }
+}
+
+test "RobotsGate: 200 enforces parsed rules and empty 200 allows all" {
+    {
+        var h: TestHarness = undefined;
+        h.init();
+        defer h.deinit();
+
+        const waiter_arena = try h.pool.acquire(.small, "test.waiter");
+        defer waiter_arena.release();
+
+        const robots_url = "http://example.com/robots.txt";
+        const blocked_waiter = try h.newWaiter(waiter_arena, "http://example.com/private/secret", 1);
+        const allowed_waiter = try h.newWaiter(waiter_arena, "http://example.com/public/page", 2);
+        try testing.expectEqual(.initial, try h.client.robots.single_flight.enter(robots_url, blocked_waiter, .robots));
+        try testing.expectEqual(.queued, try h.client.robots.single_flight.enter(robots_url, allowed_waiter, .robots));
+
+        try h.deliverRobotsResponse(
+            robots_url,
+            200,
+            &.{},
+            "User-Agent: *\nDisallow: /private/\nAllow: /public/\n",
+        );
+
+        try testing.expectEqual(true, blocked_waiter.state == .buffered);
+        try testing.expectEqual(1, blocked_waiter._events.items.len);
+        try testing.expectEqual(error.RobotsBlocked, blocked_waiter._events.items[0].err);
+        try testing.expectEqual(.robots_blocked, http.errorReason(blocked_waiter._events.items[0].err));
+        try testing.expectEqual(true, allowed_waiter.state == .queued);
+        try testing.expectEqual(0, allowed_waiter._events.items.len);
+        try testing.expectEqual(.blocked, h.network.robot_store.checkPath(robots_url, "/private/secret").?);
+        try testing.expectEqual(.allowed, h.network.robot_store.checkPath(robots_url, "/public/page").?);
+
+        const cached_blocked = try h.newWaiter(waiter_arena, "http://example.com/private/other", 3);
+        try testing.expectEqual(.blocked, try h.client.robots.check(cached_blocked));
+    }
+
+    {
+        var h: TestHarness = undefined;
+        h.init();
+        defer h.deinit();
+
+        const waiter_arena = try h.pool.acquire(.small, "test.waiter");
+        defer waiter_arena.release();
+
+        const robots_url = "http://example.com/robots.txt";
+        const waiter = try h.newWaiter(waiter_arena, "http://example.com/anything", 1);
+        try testing.expectEqual(.initial, try h.client.robots.single_flight.enter(robots_url, waiter, .robots));
+
+        try h.deliverRobotsResponse(robots_url, 200, &.{}, "");
+
+        try testing.expectEqual(true, waiter.state == .queued);
+        try testing.expectEqual(0, waiter._events.items.len);
+        try testing.expectEqual(.allowed, h.network.robot_store.checkPath(robots_url, "/anything").?);
+    }
+}
+
+test "RobotsGate: transport error allows access without caching" {
+    var h: TestHarness = undefined;
+    h.init();
+    defer h.deinit();
+
+    const waiter_arena = try h.pool.acquire(.small, "test.waiter");
+    defer waiter_arena.release();
+
+    const robots_url = "http://example.com/robots.txt";
+    const waiter = try h.newWaiter(waiter_arena, "http://example.com/page", 1);
+    try testing.expectEqual(.initial, try h.client.robots.single_flight.enter(robots_url, waiter, .robots));
+
+    const ctx_arena = try h.pool.acquire(.small, "test.RobotsContext");
+    const owned_url = try ctx_arena.dupeSentinel(u8, robots_url, 0);
+    const robots_ctx = try ctx_arena.create(RobotsContext);
+    robots_ctx.* = .{
+        .gate = &h.client.robots,
+        .arena = ctx_arena,
+        .robots_url = owned_url,
+    };
+
+    RobotsContext.errorCallback(robots_ctx, error.CouldntConnect);
+
+    try testing.expectEqual(true, waiter.state == .queued);
+    try testing.expectEqual(0, waiter._events.items.len);
+    try testing.expectEqual(0, h.client.robots.single_flight.count());
+    try testing.expectEqual(null, h.network.robot_store.checkPath(robots_url, "/page"));
+}

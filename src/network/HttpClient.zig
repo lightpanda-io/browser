@@ -1204,6 +1204,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                         lp.metrics.robots_access.incr(.deny);
                         return transfer.failAsync(error.RobotsBlocked);
                     },
+                    .robots_unreachable => {
+                        lp.metrics.robots_access.incr(.deny);
+                        return transfer.failAsync(error.RobotsUnreachable);
+                    },
                     .pending => return,
                 }
             }

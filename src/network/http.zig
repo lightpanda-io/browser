@@ -1001,6 +1001,7 @@ pub const ErrorReason = enum {
     too_large,
     aborted,
     robots_blocked,
+    robots_unreachable,
     bot_challenge,
     other,
 };
@@ -1031,6 +1032,7 @@ pub fn errorReason(err: anyerror) ErrorReason {
         error.WaitDeadlineExceeded,
         => .aborted,
         error.RobotsBlocked => .robots_blocked,
+        error.RobotsUnreachable => .robots_unreachable,
         error.BotChallenge => .bot_challenge,
         else => .other,
     };

@@ -99,7 +99,7 @@ pub const RobotStore = struct {
         const Result = union(enum) {
             present: Robots,
             allowed,
-            disallowed,
+            robots_unreachable,
         };
     };
 
@@ -127,11 +127,11 @@ pub const RobotStore = struct {
     fn freeEntry(self: *RobotStore, entry: *RobotsEntry) void {
         switch (entry.result) {
             .present => |*robots| robots.deinit(self.allocator),
-            .allowed, .disallowed => {},
+            .allowed, .robots_unreachable => {},
         }
     }
 
-    pub const Decision = enum { allowed, blocked };
+    pub const Decision = enum { allowed, blocked, robots_unreachable };
 
     pub fn checkPath(self: *RobotStore, url: []const u8, path: []const u8) ?Decision {
         self.mutex.lockUncancelable(lp.io);
@@ -140,7 +140,7 @@ pub const RobotStore = struct {
         const entry = self.getLive(url) orelse return null;
         return switch (entry.result) {
             .allowed => .allowed,
-            .disallowed => .blocked,
+            .robots_unreachable => .robots_unreachable,
             .present => |robots| if (robots.isAllowed(path)) .allowed else .blocked,
         };
     }
@@ -170,7 +170,7 @@ pub const RobotStore = struct {
         const entry = self.getLive(url) orelse return null;
         const signals = switch (entry.result) {
             .present => |robots| robots.content_signals,
-            .allowed, .disallowed => return null,
+            .allowed, .robots_unreachable => return null,
         };
 
         const out = try allocator.alloc(ContentSignal, signals.len);
@@ -190,11 +190,11 @@ pub const RobotStore = struct {
         _ = try self.insert(url, .allowed);
     }
 
-    /// This URL is fully restricted from crawling.
-    pub fn putDisallowed(self: *RobotStore, url: []const u8) !void {
+    /// robots.txt could not be fetched or verified; crawling is denied.
+    pub fn putUnreachable(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-        _ = try self.insert(url, .disallowed);
+        _ = try self.insert(url, .robots_unreachable);
     }
 
     // Caller holds the mutex.
