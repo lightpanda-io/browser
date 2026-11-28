@@ -309,30 +309,35 @@ fn deliverResizes(frame: *Frame, local: *const js.Local) void {
             return;
         }
 
-        // snapshot and acquireRef because a the callback for observer A could
-        // disconnect, which would then wipe our reference from under us.
-        const observers = frame.call_arena.dupe(*ResizeObserver, frame._resize.observers.items) catch |err| {
-            log.err(.frame, "deliverResizes.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
-            return;
-        };
-        for (observers) |observer| {
-            observer.acquireRef();
-        }
-        defer for (observers) |observer| {
-            observer.releaseRef(frame.page);
-        };
+        {
+            // in a block, so that we release before the microtask runs, which
+            // could clear call_arena
 
-        const attribution = frame.js.attribution;
-        const task_scope = attribution.enterNew(.observer, .{ .label = "ResizeObserver" });
-        defer task_scope.exit();
-
-        for (observers) |observer| {
-            observer.deliverEntries(frame) catch |err| {
-                log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
-                if (err == error.ExecutionTerminated) {
-                    return;
-                }
+            // snapshot and acquireRef because a the callback for observer A could
+            // disconnect, which would then wipe our reference from under us.
+            const observers = frame.call_arena.dupe(*ResizeObserver, frame._resize.observers.items) catch |err| {
+                log.err(.frame, "deliverResizes.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
+                return;
             };
+            for (observers) |observer| {
+                observer.acquireRef();
+            }
+            defer for (observers) |observer| {
+                observer.releaseRef(frame.page);
+            };
+
+            const attribution = frame.js.attribution;
+            const task_scope = attribution.enterNew(.observer, .{ .label = "ResizeObserver" });
+            defer task_scope.exit();
+
+            for (observers) |observer| {
+                observer.deliverEntries(frame) catch |err| {
+                    log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
+                    if (err == error.ExecutionTerminated) {
+                        return;
+                    }
+                };
+            }
         }
         local.runMicrotasks();
     }
