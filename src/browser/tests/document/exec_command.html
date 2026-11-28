@@ -314,6 +314,147 @@
 }
 </script>
 
+<script id="format_range_boundaries">
+{
+  const host = $('#host');
+  formatIn('bold', 'abc<i>de</i>f', h => selectRange(h.firstChild, 1, h, 2));
+  testing.expectEqual('a<b>bc<i>de</i></b>f', host.innerHTML);
+  testing.expectEqual('bcde', getSelection().toString());
+
+  formatIn('bold', 'abc', h => getSelection().setBaseAndExtent(h.firstChild, 3, h.firstChild, 1));
+  testing.expectEqual('a<b>bc</b>', host.innerHTML);
+  testing.expectEqual([2, 0], [getSelection().anchorOffset, getSelection().focusOffset]);
+
+  // A selected image contributes to toggle state just like visible text.
+  formatIn('bold', '<img alt="x">', selectContents);
+  testing.expectEqual(true, document.queryCommandState('bold'));
+  document.execCommand('bold');
+  testing.expectEqual('<img alt="x">', host.innerHTML);
+}
+</script>
+
+<script id="format_editing_boundaries">
+{
+  const host = $('#host');
+  host.contentEditable = 'plaintext-only';
+  try {
+    for (const cmd of ['bold', 'italic', 'underline', 'strikeThrough']) {
+      testing.expectEqual(false, formatIn(cmd, '<span>abc</span>', h => {
+        selectContents(h.firstChild);
+        testing.expectEqual(false, document.queryCommandEnabled(cmd));
+      }));
+      testing.expectEqual('<span>abc</span>', host.innerHTML);
+      testing.expectEqual([], events);
+    }
+  } finally {
+    host.contentEditable = 'true';
+  }
+
+  formatIn('bold', '<span>a<span contenteditable="false">protected</span>b</span>', selectContents);
+  testing.expectEqual('<span><b>a</b><span contenteditable="false">protected</span><b>b</b></span>', host.innerHTML);
+
+  // Editing the surrounding text must preserve the raw CSS when the editor saves its HTML.
+  formatIn('bold', 'abc<style>.x{color:red}</style>def', selectContents);
+  testing.expectEqual('<b>abc<style>.x{color:red}</style>def</b>', host.innerHTML);
+  formatIn('bold', 'a<span hidden>hidden</span>b', selectContents);
+  testing.expectEqual('hidden', host.querySelector('[hidden]').innerHTML);
+  testing.expectEqual('B', host.querySelector('[hidden]').parentNode.tagName);
+
+  // A read-only selection still reports the formatting that is visible there.
+  host.innerHTML = '<span contenteditable="false"><b>x</b></span>';
+  selectContents(host.querySelector('b'));
+  testing.expectEqual(false, document.queryCommandEnabled('bold'));
+  testing.expectEqual(true, document.queryCommandState('bold'));
+}
+</script>
+
+<script id="format_independent_styles">
+{
+  const host = $('#host');
+  for (const css of [false, true]) {
+    document.execCommand('styleWithCSS', false, String(css));
+    for (const [toggle, remaining, tag, decoration] of [
+      ['underline', 'strikeThrough', 'strike', 'line-through'],
+      ['strikeThrough', 'underline', 'u', 'underline'],
+    ]) {
+      formatIn(toggle, '<span style="text-decoration: underline line-through">abc</span>', selectContents);
+      testing.expectEqual(false, document.queryCommandState(toggle));
+      testing.expectEqual(true, document.queryCommandState(remaining));
+      testing.expectEqual(css ? `<span style="text-decoration-line: ${decoration};">abc</span>` : `<${tag}>abc</${tag}>`, host.innerHTML);
+    }
+  }
+  document.execCommand('styleWithCSS', false, 'false');
+
+  formatIn('underline', '<p style="text-decoration: underline">hello</p>', h => {
+    const text = h.firstChild.firstChild;
+    selectRange(text, 1, text, 4);
+  });
+  testing.expectEqual('ell', getSelection().toString());
+  testing.expectEqual(false, document.queryCommandState('underline'));
+  const p = host.firstChild;
+  selectContents(p.firstChild);
+  testing.expectEqual(true, document.queryCommandState('underline'));
+  selectContents(p.lastChild);
+  testing.expectEqual(true, document.queryCommandState('underline'));
+
+  for (const [weight, relative, expected] of [[100, 'bolder', false], [400, 'bolder', true], [900, 'lighter', true]]) {
+    host.innerHTML = '<span style="font-weight:' + weight + '"><span style="font-weight:' + relative + '">abc</span></span>';
+    selectContents(host);
+    testing.expectEqual(expected, document.queryCommandState('bold'));
+  }
+}
+</script>
+
+<script id="format_typing_navigation">
+{
+  const host = $('#host');
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 1));
+  getSelection().collapse(host.firstChild, 2);
+  getSelection().collapse(host.firstChild, 1);
+  testing.expectEqual(false, document.queryCommandState('bold'));
+  exec('X');
+  testing.expectEqual('aXbc', host.innerHTML);
+
+  // A page can move the caret by editing the selection's live Range.
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 1));
+  const live = getSelection().getRangeAt(0);
+  live.setStart(host.firstChild, 2);
+  live.collapse(true);
+  live.setStart(host.firstChild, 1);
+  live.collapse(true);
+  exec('X');
+  testing.expectEqual('aXbc', host.innerHTML);
+
+  // DOM maintenance can move the same caret without the user navigating.
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 1));
+  host.firstChild.insertData(0, 'Z');
+  testing.expectEqual(true, document.queryCommandState('bold'));
+  exec('X');
+  testing.expectEqual('Za<b>X</b>bc', host.innerHTML);
+
+  formatIn('bold', '<b>ab</b>cd', h => {
+    getSelection().collapse(h, 1);
+    testing.expectEqual(true, document.queryCommandState('bold'));
+  });
+  exec('X');
+  testing.expectEqual('<b>ab</b>Xcd', host.innerHTML);
+
+  for (const [command, html] of [['insertLineBreak', 'he<b><br>X</b>llo'], ['insertParagraph', 'he<div><b>X</b>llo</div>']]) {
+    formatIn('bold', 'hello', h => getSelection().collapse(h.firstChild, 2));
+    document.execCommand(command);
+    testing.expectEqual(true, document.queryCommandState('bold'));
+    exec('X');
+    testing.expectEqual(html, host.innerHTML);
+  }
+
+  formatIn('bold', 'abc', h => getSelection().collapse(h.firstChild, 3));
+  document.execCommand('insertLineBreak');
+  testing.expectEqual('abc<br><b><br></b>', host.innerHTML);
+  exec('X');
+  testing.expectEqual('abc<br><b>X</b>', host.innerHTML);
+}
+</script>
+
 <script id="settings">
 {
   // always enabled, even with nothing selected; no events

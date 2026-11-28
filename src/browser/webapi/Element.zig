@@ -1257,16 +1257,17 @@ pub fn isSvgLink(self: *Element) bool {
 // plaintext-only states, false for false, null for inherit (no attribute,
 // or an invalid value). The attribute only applies to HTML elements.
 pub fn contentEditableState(self: *Element) ?bool {
-    if (self.is(Html) == null) {
-        return null;
-    }
+    return (self.declaredEditability() orelse return null) != .disabled;
+}
+
+const Editability = enum { rich, plain, disabled };
+
+fn declaredEditability(self: *Element) ?Editability {
+    if (self.is(Html) == null) return null;
     const value = self.getAttributeInterned("contenteditable") orelse return null;
-    if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "true") or std.ascii.eqlIgnoreCase(value, "plaintext-only")) {
-        return true;
-    }
-    if (std.ascii.eqlIgnoreCase(value, "false")) {
-        return false;
-    }
+    if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "true")) return .rich;
+    if (std.ascii.eqlIgnoreCase(value, "plaintext-only")) return .plain;
+    if (std.ascii.eqlIgnoreCase(value, "false")) return .disabled;
     return null;
 }
 
@@ -1291,11 +1292,19 @@ pub fn isEditingHost(self: *Element) bool {
 // An editing host or a descendant of one: the nearest contenteditable
 // attribute in a true or false state decides, then the document's designMode.
 pub fn isEditable(self: *Element) bool {
+    return self.inheritsEditability(false);
+}
+
+pub fn isRichlyEditable(self: *Element) bool {
+    return self.inheritsEditability(true);
+}
+
+fn inheritsEditability(self: *Element, rich_only: bool) bool {
     var node: ?*Node = self.asNode();
     while (node) |n| : (node = n.parentNode()) {
         if (n.is(Element)) |el| {
-            if (el.contentEditableState()) |editable| {
-                return editable;
+            if (el.declaredEditability()) |state| {
+                return state == .rich or (!rich_only and state == .plain);
             }
         } else if (n.is(Node.Document)) |document| {
             return document._design_mode;

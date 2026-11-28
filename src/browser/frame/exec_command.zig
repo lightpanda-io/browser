@@ -607,11 +607,7 @@ pub const Format = enum {
 
 /// Formatting chosen with a collapsed selection, for the text typed next
 /// there. It goes as soon as the caret moves.
-pub const TypingStyle = struct {
-    node: ?*Node = null,
-    offset: u32 = 0,
-    values: std.EnumArray(Format, ?bool) = .initFill(null),
-};
+pub const TypingStyle = std.EnumArray(Format, ?bool);
 
 // The editing host formatting applies to: the selection's, in rich editable
 // content. A text control can't hold formatting.
@@ -625,9 +621,12 @@ fn formatHost(doc: *Document) ?*Element {
     if (selectionInSelect(doc)) {
         return null;
     }
-    const node = range.asAbstractRange().getStartContainer();
+    const abstract = range.asAbstractRange();
+    const node = abstract.getStartContainer();
     const el = node.is(Element) orelse node.parentElement() orelse return null;
-    if (el.isEditable() == false) {
+    const end = abstract.getEndContainer();
+    const end_el = end.is(Element) orelse end.parentElement() orelse return null;
+    if (!el.isRichlyEditable() or !end_el.isRichlyEditable()) {
         return null;
     }
     const host = user_input.outermostEditingHost(el) orelse return null;
@@ -641,13 +640,10 @@ fn formatSelection(frame: *Frame, format: Format) !bool {
     if (range.getCollapsed()) {
         // Nothing to format: remember it for the next typed text. No input
         // event, as in Chrome.
-        const node = range.getStartContainer();
-        const offset = range.getStartOffset();
-        const typing = &doc._exec_command_typing_style;
-        if (typingStyleAt(doc) == null) {
-            typing.* = .{ .node = node, .offset = offset };
-        }
-        typing.values.set(format, !formatState(frame, format).all);
+        const on = !formatState(frame, format).all;
+        const typing = &doc._selection._range.?._typing_style;
+        if (typing.* == null) typing.* = .initFill(null);
+        typing.*.?.set(format, on);
         return true;
     }
 
@@ -658,6 +654,7 @@ fn formatSelection(frame: *Frame, format: Format) !bool {
         .format = format,
         .css = doc._exec_command_settings.css,
     };
+    const backward = doc._selection._direction == .backward;
     if (try ctx.splitSelection(range)) {
         // what clearing leaves unformatted is set again below
         for (try ctx.containedElements()) |el| {
@@ -673,8 +670,11 @@ fn formatSelection(frame: *Frame, format: Format) !bool {
         const selection = &doc._selection;
         const start, const start_offset = boundaryBefore(ctx.first);
         const end, const end_offset = boundaryAfter(ctx.last);
-        try selection.collapse(start, start_offset, frame);
-        try selection.extend(end, end_offset, frame);
+        if (backward) {
+            try selection.setBaseAndExtent(end, end_offset, start, start_offset, frame);
+        } else {
+            try selection.setBaseAndExtent(start, start_offset, end, end_offset, frame);
+        }
     }
 
     const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
@@ -700,19 +700,19 @@ const State = struct {
 // macOS looks at the start of the selection, and is never indeterminate.)
 fn formatState(frame: *Frame, format: Format) State {
     const doc = frame.document;
-    const host = formatHost(doc) orelse return .{};
-    const range = doc._selection._range.?.asAbstractRange();
+    const host = formatHost(doc);
+    const range = (doc._selection._range orelse return .{}).asAbstractRange();
     if (range.getCollapsed()) {
-        if (typingStyleAt(doc)) |typing| {
-            if (typing.values.get(format)) |value| {
+        if (pendingTypingStyle(doc)) |typing| {
+            if (typing.get(format)) |value| {
                 return .{ .all = value, .any = false };
             }
         }
-        const node = caretNode(range.getStartContainer(), range.getStartOffset());
+        const node, _ = user_input.canonicalCaret(&frame._style_manager, range.getStartContainer(), range.getStartOffset());
         return .{ .all = effectiveValue(node, format, frame), .any = false };
     }
 
-    const host_node = host.asNode();
+    const host_node = if (host) |el| el.asNode() else range.getCommonAncestorContainer();
     const first, const last = boundaryLeaves(
         host_node,
         range.getStartContainer(),
@@ -724,7 +724,7 @@ fn formatState(frame: *Frame, format: Format) State {
     var count: usize = 0;
     var node = first;
     while (true) {
-        if (isFormattableText(frame, host_node, node)) {
+        if (isFormattable(frame, host_node, node, host != null)) {
             count += 1;
             if (effectiveValue(node, format, frame)) {
                 state.any = true;
@@ -743,51 +743,21 @@ fn formatState(frame: *Frame, format: Format) State {
     return state;
 }
 
-// The node whose formatting text typed at a caret takes: the text node it
-// joins, as insertAtSelection picks it, else the container.
-fn caretNode(container: *Node, offset: u32) *Node {
-    if (container.is(Node.CData) != null) {
-        return container;
-    }
-    if (offset > 0) {
-        if (container.getChildAt(offset - 1)) |before| {
-            if (before.is(Node.CData.Text) != null) {
-                return before;
-            }
-        }
-    }
-    if (container.getChildAt(offset)) |after| {
-        if (after.is(Node.CData.Text) != null) {
-            return after;
-        }
-    }
-    return container;
-}
-
-// The typing style, when the caret is still where it was chosen.
-fn typingStyleAt(doc: *Document) ?*TypingStyle {
-    const typing = &doc._exec_command_typing_style;
-    const node = typing.node orelse return null;
+pub fn pendingTypingStyle(doc: *Document) ?TypingStyle {
     const range = doc._selection._range orelse return null;
-    const abstract = range.asAbstractRange();
-    if (!abstract.getCollapsed() or abstract.getStartContainer() != node or abstract.getStartOffset() != typing.offset) {
-        return null;
-    }
-    return typing;
+    return if (range.asAbstractRange().getCollapsed()) range._typing_style else null;
 }
 
-/// For text about to be typed: the formatting chosen at the caret with a
-/// collapsed selection, if it's still there. Either way it's used up.
-pub fn takeTypingStyle(doc: *Document) ?std.EnumArray(Format, ?bool) {
-    const typing = typingStyleAt(doc);
-    defer doc._exec_command_typing_style = .{};
-    return if (typing) |t| t.values else null;
+pub fn takeTypingStyle(doc: *Document) ?TypingStyle {
+    const range = doc._selection._range orelse return null;
+    defer range._typing_style = null;
+    return pendingTypingStyle(doc);
 }
 
 /// Formats the text just typed, `text` from `start` to `end`, with the typing
 /// style. Returns where the caret goes: at the end of that text, now a node
 /// of its own.
-pub fn applyTypingStyle(frame: *Frame, host: *Element, text: *Node.CData.Text, start: u32, end: u32, values: std.EnumArray(Format, ?bool)) !struct { *Node, u32 } {
+pub fn applyTypingStyle(frame: *Frame, host: *Element, text: *Node.CData.Text, start: u32, end: u32, values: TypingStyle) !struct { *Node, u32 } {
     var typed = text;
     if (end < typed.asCData().getLength()) {
         _ = try typed.splitText(end, frame);
@@ -796,6 +766,11 @@ pub fn applyTypingStyle(frame: *Frame, host: *Element, text: *Node.CData.Text, s
         typed = try typed.splitText(start, frame);
     }
     const node = typed.asCData().asNode();
+    try formatTypedNode(frame, host, node, values);
+    return .{ node, end - start };
+}
+
+pub fn formatTypedNode(frame: *Frame, host: *Element, node: *Node, values: TypingStyle) !void {
     var ctx = FormatContext{
         .frame = frame,
         .host = host.asNode(),
@@ -808,7 +783,6 @@ pub fn applyTypingStyle(frame: *Frame, host: *Element, text: *Node.CData.Text, s
         ctx.format = format;
         try ctx.setNodeValue(node, value);
     }
-    return .{ node, end - start };
 }
 
 const FormatContext = struct {
@@ -826,28 +800,22 @@ const FormatContext = struct {
     // text has nodes of its own. False when nothing is selected.
     fn splitSelection(self: *FormatContext, range: *const AbstractRange) !bool {
         const frame = self.frame;
-        var start = range.getStartContainer();
-        var start_offset = range.getStartOffset();
-        var end = range.getEndContainer();
-        var end_offset = range.getEndOffset();
-        // the end first: the start's offset still holds after
+        const end = range.getEndContainer();
+        const end_offset = range.getEndOffset();
         if (end.is(Node.CData.Text)) |t| {
             if (end_offset > 0 and end_offset < t.asCData().getLength()) {
                 _ = try t.splitText(end_offset, frame);
             }
         }
+        const start = range.getStartContainer();
+        const start_offset = range.getStartOffset();
         if (start.is(Node.CData.Text)) |t| {
             if (start_offset > 0 and start_offset < t.asCData().getLength()) {
-                const rest = (try t.splitText(start_offset, frame)).asCData().asNode();
-                if (end == start) {
-                    end = rest;
-                    end_offset -= start_offset;
-                }
-                start = rest;
-                start_offset = 0;
+                _ = try t.splitText(start_offset, frame);
             }
         }
-        self.first, self.last = boundaryLeaves(self.host, start, start_offset, end, end_offset) orelse return false;
+        // splitText adjusts live boundaries, including child indices on the parent.
+        self.first, self.last = boundaryLeaves(self.host, range.getStartContainer(), range.getStartOffset(), range.getEndContainer(), range.getEndOffset()) orelse return false;
         var node = self.first;
         while (true) {
             if (isLeaf(node)) {
@@ -901,9 +869,7 @@ const FormatContext = struct {
 
     fn collectEditable(self: *const FormatContext, node: *Node, list: *std.ArrayList(*Element)) !void {
         const el = node.is(Element) orelse return;
-        if (el.isEditable() == false) {
-            return;
-        }
+        if (!el.isRichlyEditable() or self.frame._style_manager.isHidden(el, .{})) return;
         try list.append(self.frame.call_arena, el);
         var child = node.firstChild();
         while (child) |c| : (child = c.nextSibling()) {
@@ -916,17 +882,15 @@ const FormatContext = struct {
     // be, as `on` says.
     fn setNodeValue(self: *FormatContext, node: *Node, on: bool) !void {
         if (node.is(Element)) |el| {
-            if (el.isEditable() == false) {
-                return;
-            }
-            if (!isInline(self.frame, el)) {
+            if (!el.isRichlyEditable() or self.frame._style_manager.isHidden(el, .{})) return;
+            if (!isInline(self.frame, el) or containsEditingBoundary(node)) {
                 // a block can't go in a <b>: its content does
                 for (try children(self.frame, node)) |child| {
                     try self.setNodeValue(child, on);
                 }
                 return;
             }
-        } else if (!isFormattableText(self.frame, self.host, node)) {
+        } else if (!isFormattable(self.frame, self.host, node, true)) {
             return;
         }
         try self.pushDownValues(node, on);
@@ -942,10 +906,12 @@ const FormatContext = struct {
         var current = node.parentNode();
         while (current) |n| : (current = n.parentNode()) {
             const el = n.is(Element) orelse break;
-            if (n == self.host or el.isEditable() == false or !isInline(self.frame, el)) {
-                break;
-            }
+            if (!el.isRichlyEditable()) break;
+            // A block's inline decoration must move onto the unselected siblings:
+            // text-decoration on a descendant cannot cancel it.
+            if ((n == self.host or !isInline(frame, el)) and self.format.inherited()) break;
             try ancestors.append(frame.call_arena, el);
+            if (n == self.host) break;
         }
 
         var top: ?usize = null;
@@ -964,7 +930,11 @@ const FormatContext = struct {
             const content = try children(frame, ancestor.asNode());
             if (specifiedValue(ancestor, self.format, frame)) |value| {
                 propagated = value;
-                try self.clearValue(ancestor);
+                if (ancestor.asNode() == self.host) {
+                    try removeStyleValue(ancestor, self.format, frame);
+                } else {
+                    try self.clearValue(ancestor);
+                }
             }
             const value = propagated orelse continue;
             for (content) |child| {
@@ -978,6 +948,7 @@ const FormatContext = struct {
     // https://w3c.github.io/editing/docs/execCommand/#force-the-value
     fn forceValue(self: *FormatContext, node: *Node, on: bool) !void {
         if (node.is(Element)) |el| {
+            if (self.frame._style_manager.isHidden(el, .{})) return;
             if (!isInline(self.frame, el)) {
                 for (try children(self.frame, node)) |child| {
                     try self.forceValue(child, on);
@@ -1005,9 +976,18 @@ const FormatContext = struct {
     // that's one, as Chrome does: "<b>a</b>b" with b bold is "<b>ab</b>".
     fn wrap(self: *FormatContext, node: *Node, on: bool) !void {
         const frame = self.frame;
-        if (node.previousSibling()) |prev| {
+        // Keep selected display:none siblings opaque when joining wrappers.
+        var previous = node.previousSibling();
+        while (previous) |sibling| : (previous = sibling.previousSibling()) {
+            const el = sibling.is(Element) orelse break;
+            if (!self.frame._style_manager.hasDisplayNone(el) or !self.contained(sibling)) break;
+        }
+        if (previous) |prev| {
             if (self.isWrapper(prev, on)) {
-                _ = try prev.appendChild(node, frame);
+                while (prev.nextSibling()) |sibling| {
+                    _ = try prev.appendChild(sibling, frame);
+                    if (sibling == node) break;
+                }
                 if (prev.nextSibling()) |next| {
                     if (self.isWrapper(next, on)) {
                         try moveChildren(frame, next, prev, null);
@@ -1023,16 +1003,18 @@ const FormatContext = struct {
                 return;
             }
         }
-        const wrapper = if (on and !self.css)
-            try frame.document.createElement(@tagName(self.format.tag()), null, frame)
-        else blk: {
-            const span = try frame.document.createElement("span", null, frame);
-            try span.setAttributeSafe(comptime .wrap("style"), .wrap(self.format.style(on)), frame);
-            break :blk span;
-        };
+        const wrapper = try self.newWrapper(self.format, on);
         const parent = node.parentNode().?;
         _ = try parent.insertBefore(wrapper.asNode(), node, frame);
         _ = try wrapper.asNode().appendChild(node, frame);
+    }
+
+    fn newWrapper(self: *const FormatContext, format: Format, on: bool) !*Element {
+        const frame = self.frame;
+        if (on and !self.css) return frame.document.createElement(@tagName(format.tag()), null, frame);
+        const span = try frame.document.createElement("span", null, frame);
+        try span.setAttributeSafe(comptime .wrap("style"), .wrap(format.style(on)), frame);
+        return span;
     }
 
     // Whether `node` is an element wrap would create: <b> without attributes,
@@ -1052,7 +1034,7 @@ const FormatContext = struct {
         if (style.asCSSStyleDeclaration().length() != 1) {
             return false;
         }
-        return specifiedValue(el, self.format, self.frame) == on;
+        return isSimpleModifiable(el, self.frame) and specifiedValue(el, self.format, self.frame) == on;
     }
 
     // https://w3c.github.io/editing/docs/execCommand/#clear-the-value
@@ -1068,16 +1050,18 @@ const FormatContext = struct {
         if (el.getTag() == .span and !el.hasAttributes()) {
             return unwrap(frame, el.asNode());
         }
+        if (!self.format.inherited() and (el.getTag() == .span or formatTag(el, self.format))) {
+            const remaining: Format = if (self.format == .underline) .strike_through else .underline;
+            if (isSimpleModifiable(el, frame) and styleValue(el, remaining, frame) == true) {
+                return replaceWrapper(frame, el, try self.newWrapper(remaining, true));
+            }
+        }
         if (formatTag(el, self.format)) {
             const span = try frame.document.createElement("span", null, frame);
             for (el.attributeEntries()) |*entry| {
                 try span.setAttributeSafe(.wrap(entry.name()), .wrap(entry.value()), frame);
             }
-            const node = el.asNode();
-            const parent = node.parentNode().?;
-            _ = try parent.insertBefore(span.asNode(), node, frame);
-            try moveChildren(frame, node, span.asNode(), null);
-            _ = try parent.removeChild(node, frame);
+            try replaceWrapper(frame, el, span);
         }
     }
 };
@@ -1133,11 +1117,7 @@ fn styleValue(el: *Element, format: Format, frame: *Frame) ?bool {
             if (value.len == 0) {
                 return null;
             }
-            if (std.ascii.eqlIgnoreCase(value, "bold") or std.ascii.eqlIgnoreCase(value, "bolder")) {
-                return true;
-            }
-            const weight = std.fmt.parseFloat(f64, value) catch return false;
-            return weight >= 600;
+            return (inlineFontWeight(el, value, frame) orelse return null) >= 600;
         },
         .italic => {
             const value = std.mem.trim(u8, decl.getPropertyValue("font-style", frame), " ");
@@ -1155,6 +1135,26 @@ fn styleValue(el: *Element, format: Format, frame: *Frame) ?bool {
             return null;
         },
     }
+}
+
+// Relative font weights use the inherited numeric weight (CSS Fonts 4).
+fn inlineFontWeight(el: *Element, value: []const u8, frame: *Frame) ?f64 {
+    if (std.ascii.eqlIgnoreCase(value, "bold")) return 700;
+    if (std.ascii.eqlIgnoreCase(value, "normal")) return 400;
+    const bolder = std.ascii.eqlIgnoreCase(value, "bolder");
+    if (!bolder and !std.ascii.eqlIgnoreCase(value, "lighter")) return std.fmt.parseFloat(f64, value) catch null;
+    var parent = el.parentElement();
+    const inherited: f64 = while (parent) |ancestor| : (parent = ancestor.parentElement()) {
+        if (ancestor.inlineStyle(frame)) |style| {
+            const weight = style.asCSSStyleDeclaration().getPropertyValue("font-weight", frame);
+            if (weight.len != 0) {
+                if (inlineFontWeight(ancestor, weight, frame)) |w| break w;
+            }
+        }
+        if (formatTag(ancestor, .bold) or defaultValue(ancestor, .bold)) break 700;
+    } else 400;
+    if (bolder) return if (inherited < 350) 400 else if (inherited < 550) 700 else @max(900, inherited);
+    return if (inherited < 550) @min(100, inherited) else if (inherited < 750) 400 else 700;
 }
 
 fn hasToken(value: []const u8, token: []const u8) bool {
@@ -1194,7 +1194,7 @@ fn removeStyleValue(el: *Element, format: Format, frame: *Frame) !void {
             if (rest.items.len == 0) {
                 _ = try decl.removeProperty(property, frame);
             } else {
-                try decl.setProperty(property, rest.items, null, frame);
+                try decl.setProperty(property, rest.items, decl.getPropertyPriority(property, frame), frame);
             }
         },
     }
@@ -1243,6 +1243,11 @@ fn isSimpleModifiable(el: *Element, frame: *Frame) bool {
     }
     const property = decl.item(0, frame);
     const decoration = std.mem.eql(u8, property, "text-decoration") or std.mem.eql(u8, property, "text-decoration-line");
+    if (decoration) {
+        if (decl.getPropertyPriority(property, frame).len != 0) return false;
+        const value = decl.getPropertyValue(property, frame);
+        if (!std.ascii.eqlIgnoreCase(value, "underline") and !std.ascii.eqlIgnoreCase(value, "line-through")) return false;
+    }
     return switch (tag) {
         .b, .strong => std.mem.eql(u8, property, "font-weight"),
         .i, .em => std.mem.eql(u8, property, "font-style"),
@@ -1253,9 +1258,12 @@ fn isSimpleModifiable(el: *Element, frame: *Frame) bool {
 }
 
 // Text a formatting command formats, and whose formatting decides its state.
-fn isFormattableText(frame: *Frame, host: *Node, node: *Node) bool {
+fn isFormattable(frame: *Frame, host: *Node, node: *Node, require_editable: bool) bool {
+    const el = node.is(Element) orelse node.parentElement() orelse return false;
+    if ((require_editable and !el.isRichlyEditable()) or frame._style_manager.isHidden(el, .{})) return false;
+    if (node.is(Element) != null) return el.getTag() == .img or el.getTag() == .br;
     const text = node.is(Node.CData.Text) orelse return false;
-    if (text.asCData().getLength() == 0 or !editableText(node)) {
+    if (text.asCData().getLength() == 0) {
         return false;
     }
     const data = text.asCData().getData().str();
@@ -1269,8 +1277,8 @@ fn isFormattableText(frame: *Frame, host: *Node, node: *Node) bool {
     }
     for ([_]?*Node{ node.previousSibling(), node.nextSibling() }) |sibling| {
         const s = sibling orelse return false;
-        if (s.is(Element)) |el| {
-            if (!isInline(frame, el)) {
+        if (s.is(Element)) |sibling_el| {
+            if (!isInline(frame, sibling_el)) {
                 return false;
             }
         }
@@ -1285,9 +1293,14 @@ fn isInline(frame: *Frame, el: *Element) bool {
     return !style_manager.hasDisplayNone(el) and style_manager.isInlineLevel(el);
 }
 
-fn editableText(node: *Node) bool {
-    const parent = node.parentElement() orelse return false;
-    return parent.isEditable();
+// Wrapping an entire inline ancestor would style the protected island too.
+fn containsEditingBoundary(root: *Node) bool {
+    var child = root.firstChild();
+    while (child) |node| : (child = nextNode(node, root)) {
+        const el = node.is(Element) orelse continue;
+        if (el.contentEditableState() != null and !el.isRichlyEditable()) return true;
+    }
+    return false;
 }
 
 // What a selection covers is a run of leaves in tree order: text nodes and
@@ -1403,7 +1416,7 @@ fn lastLeafIn(root: *Node) ?*Node {
     return null;
 }
 
-fn boundaryBefore(leaf: *Node) struct { *Node, u32 } {
+pub fn boundaryBefore(leaf: *Node) struct { *Node, u32 } {
     if (leaf.is(Node.CData.Text) != null) {
         return .{ leaf, 0 };
     }
@@ -1411,7 +1424,7 @@ fn boundaryBefore(leaf: *Node) struct { *Node, u32 } {
     return .{ parent, parent.getChildIndex(leaf).? };
 }
 
-fn boundaryAfter(leaf: *Node) struct { *Node, u32 } {
+pub fn boundaryAfter(leaf: *Node) struct { *Node, u32 } {
     if (leaf.is(Node.CData.Text)) |text| {
         return .{ leaf, @intCast(text.asCData().getLength()) };
     }
@@ -1433,6 +1446,14 @@ fn moveChildren(frame: *Frame, from: *Node, to: *Node, before: ?*Node) !void {
     while (from.firstChild()) |child| {
         _ = try to.insertBefore(child, before, frame);
     }
+}
+
+fn replaceWrapper(frame: *Frame, old: *Element, new: *Element) !void {
+    const node = old.asNode();
+    const parent = node.parentNode().?;
+    _ = try parent.insertBefore(new.asNode(), node, frame);
+    try moveChildren(frame, node, new.asNode(), null);
+    _ = try parent.removeChild(node, frame);
 }
 
 // Replaces `node` with its children.

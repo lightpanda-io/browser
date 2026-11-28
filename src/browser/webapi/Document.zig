@@ -97,7 +97,6 @@ _close_requested: bool = false,
 // an execCommand is running: a nested one is refused
 _exec_command_running: bool = false,
 _exec_command_settings: exec_command.Settings = .{},
-_exec_command_typing_style: exec_command.TypingStyle = .{},
 _design_mode: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
