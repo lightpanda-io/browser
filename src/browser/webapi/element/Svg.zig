@@ -25,6 +25,7 @@ const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const DOMStringMap = @import("DOMStringMap.zig");
+const HtmlElement = @import("Html.zig");
 const Factory = @import("../../Factory.zig");
 const AnimatedString = @import("../svg/AnimatedString.zig");
 pub const Generic = @import("svg/Generic.zig");
@@ -173,6 +174,35 @@ fn getOwnerSvgElement(self: *Svg) ?*Graphics.Svg {
     return null;
 }
 
+// tabIndex defaults to 0 on an SVG <a> and to -1 on every other SVG element,
+// as it does for HTML elements that are not focusable by default.
+fn getTabIndex(self: *Svg) i32 {
+    if (self.asElement().getAttributeInterned("tabindex")) |attr| {
+        if (HtmlElement.parseInteger(attr)) |tab_index| {
+            return tab_index;
+        }
+    }
+    return if (self.is(Graphics.A) != null) 0 else -1;
+}
+
+fn setTabIndex(self: *Svg, value: i32, frame: *Frame) !void {
+    var buf: [12]u8 = undefined;
+    const str = std.mem.print(&buf, "{d}", .{value}) catch unreachable;
+    try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), frame);
+}
+
+fn getAutofocus(self: *Svg) bool {
+    return self.asElement().getAttributeInterned("autofocus") != null;
+}
+
+fn setAutofocus(self: *Svg, autofocus: bool, frame: *Frame) !void {
+    if (autofocus) {
+        try self.asElement().setAttributeSafe(comptime .wrap("autofocus"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("autofocus"), frame);
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Svg);
 
@@ -199,6 +229,9 @@ pub const JsApi = struct {
     fn _setNonce(self: *Svg, value: []const u8, frame: *Frame) !void {
         try self.asElement().setAttributeSafe(comptime .wrap("nonce"), .wrap(value), frame);
     }
+
+    pub const tabIndex = bridge.accessor(Svg.getTabIndex, Svg.setTabIndex, .{ .ce_reactions = true });
+    pub const autofocus = bridge.accessor(Svg.getAutofocus, Svg.setAutofocus, .{ .ce_reactions = true });
 
     pub const ownerSVGElement = bridge.accessor(Svg.getOwnerSvgElement, null, .{});
     // closest thing we can provide
