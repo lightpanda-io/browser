@@ -49,3 +49,35 @@
     });
   }
 </script>
+
+<script id="microtaskCallsIntoZig" type=module>
+  {
+    // A microtask queued by the callback runs before the delivery round
+    // ends. Its calls into Zig must not clobber the round's observer snapshot.
+    const state = await testing.async();
+    const target = document.getElementById('target');
+    const calls = [];
+    const observers = [];
+    for (let i = 0; i < 4; i += 1) {
+      const observer = new ResizeObserver(() => {
+        calls.push(i);
+        queueMicrotask(() => {
+          for (let j = 0; j < 20; j += 1) {
+            document.querySelector('#target' + 'x'.repeat(64 * j));
+          }
+        });
+      });
+      observer.observe(target);
+      observers.push(observer);
+    }
+    await testing.nextFrame();
+    for (const observer of observers) {
+      observer.disconnect();
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('0,1,2,3', calls.join(','));
+    });
+  }
+</script>
