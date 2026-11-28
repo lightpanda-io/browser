@@ -237,9 +237,13 @@ const HeaderInput = struct {
     value: storage.BytesValue,
 };
 
-// The spec's "deserialize header". Null when it isn't a valid header.
+// The spec's "deserialize header". Null when it isn't a valid header, bad
+// base64 included.
 fn deserializeHeader(arena: std.mem.Allocator, input: HeaderInput) !?http.Header {
-    const value = try input.value.decode(arena);
+    const value = input.value.decode(arena) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
     if (!Mime.isHttpToken(input.name)) {
         return null;
     }
@@ -315,7 +319,10 @@ fn continueRequest(cmd: *BiDi.Command) !void {
 
         var cookie_header: std.Io.Writer.Allocating = .init(arena);
         for (cookies, 0..) |cookie, i| {
-            const cookie_value = try cookie.value.decode(arena);
+            const cookie_value = cookie.value.decode(arena) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => return cmd.sendError("invalid argument", "invalid cookie"),
+            };
             // The spec doesn't check the cookies, but they go out in a
             // header: a CR or LF would inject another header, a ";" another
             // cookie. Chrome's cookie name and value rules refuse both.
@@ -1401,6 +1408,16 @@ test "bidi.network: continueRequest and failRequest errors" {
         .cookies = .{.{ .name = "a", .value = .{ .type = "string", .value = "1; admin=true" } }},
     } });
     try ctx.expectSentError("invalid argument", "invalid cookie", .{ .id = 22 });
+    try ctx.processMessage(.{ .id = 23, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .headers = .{.{ .name = "a", .value = .{ .type = "base64", .value = "!!" } }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid header", .{ .id = 23 });
+    try ctx.processMessage(.{ .id = 24, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .cookies = .{.{ .name = "a", .value = .{ .type = "base64", .value = "!!" } }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid cookie", .{ .id = 24 });
     try ctx.processMessage(.{ .id = 18, .method = "network.continueRequest", .params = .{} });
     try ctx.expectSentError("invalid argument", null, .{ .id = 18 });
 
