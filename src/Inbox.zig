@@ -29,6 +29,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const CDP = @import("server/cdp/CDP.zig");
+const BiDi = @import("server/bidi/BiDi.zig");
 const Link = @import("server/Link.zig");
 const http_command = @import("server/bidi/http_command.zig");
 
@@ -136,10 +137,9 @@ pub const Message = struct {
         // consumer's use of `input`.
         cdp: Cdp,
 
-        // A BiDi text/binary frame, raw (owned). Unlike CDP it isn't
-        // parsed on the Network thread — nothing on that side needs the
-        // method name yet.
-        bidi: []u8,
+        // A BiDi text/binary frame, parsed on the Network thread like
+        // CDP's: the sync-wait allowlist reads input.method.
+        bidi: Bidi,
 
         // WS ping frame body (≤125 bytes per spec). Consumer is
         // expected to echo via pong on its thread.
@@ -176,7 +176,8 @@ pub const Message = struct {
         pub fn size(self: Payload) usize {
             return switch (self) {
                 .cdp => |c| c.raw.len,
-                .bidi, .ping => |b| b.len,
+                .bidi => |b| b.raw.len,
+                .ping => |b| b.len,
                 // one at a time, it never backs up
                 .bidi_http => 0,
                 .close, .disconnect, .link, .quit => 0,
@@ -187,6 +188,14 @@ pub const Message = struct {
     pub const Cdp = struct {
         raw: []const u8,
         input: CDP.InputMessage,
+    };
+
+    // Like Cdp, except that a frame that isn't valid JSON is still pushed,
+    // with a null `input`: BiDi answers it with an error instead of
+    // disconnecting.
+    pub const Bidi = struct {
+        raw: []const u8,
+        input: ?BiDi.InputMessage,
     };
 
     pub fn deinit(self: *const Message) void {
@@ -420,7 +429,7 @@ test "Inbox: queued bytes track the payloads" {
 
     {
         const arena = try arena_pool.acquire(.tiny, "inbox test");
-        inbox.push(arena, .{ .bidi = try arena.dupe(u8, "abc") });
+        inbox.push(arena, .{ .bidi = .{ .raw = try arena.dupe(u8, "abc"), .input = null } });
     }
     try testing.expectEqual(8, inbox.queuedBytes());
 

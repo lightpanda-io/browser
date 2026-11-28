@@ -83,7 +83,7 @@ pub const TestContext = struct {
             // get a compile error, so no big deal.
             break :blk msg;
         };
-        return self.bidi().onMessage(payload);
+        return self.bidi().processMessage(payload);
     }
 
     // Starts the session every command outside the session module needs.

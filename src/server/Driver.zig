@@ -99,7 +99,7 @@ fn link(self: *const Driver) ?*Link {
 pub fn onMessage(self: *const Driver, msg: *Inbox.Message) anyerror!void {
     return switch (self.impl) {
         .cdp => |cdp| cdp.onMessage(&msg.payload.cdp),
-        .bidi => |bidi| bidi.onMessage(msg.payload.bidi),
+        .bidi => |bidi| bidi.onMessage(&msg.payload.bidi),
     };
 }
 
