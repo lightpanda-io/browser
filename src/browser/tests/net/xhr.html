@@ -473,6 +473,30 @@
   }
 </script>
 
+<script id=xhr_response_text_strips_utf8_bom type=module>
+  {
+    // Decoding drops a leading UTF-8 BOM, so JSON.parse(responseText) works
+    // the same as responseType = 'json' (jQuery and axios read responseText).
+    const state = await testing.async();
+
+    const json = new TextEncoder().encode('{"ok":true}');
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), json], { type: 'application/json' });
+    const blobUrl = URL.createObjectURL(blob);
+
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', blobUrl);
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual('{"ok":true}', req.responseText);
+      testing.expectEqual('{"ok":true}', req.response);
+      testing.expectEqual(true, JSON.parse(req.responseText).ok);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
 <script id=xhr_override_mime type=module>
   {
     // overrideMimeType is callable in state UNSENT (no open() yet)
