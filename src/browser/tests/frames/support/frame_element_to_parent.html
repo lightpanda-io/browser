@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<script>
+  let result;
+  try {
+    const element = window.frameElement;
+    result = element === null ? null : element.id;
+  } catch (e) {
+    result = 'threw ' + e.name + ': ' + e.message;
+  }
+  parent.postMessage(result, '*');
+</script>

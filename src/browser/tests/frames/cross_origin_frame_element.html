@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+window.frameElement returns null when the embedding document is not same
+origin-domain with the caller, instead of handing a cross-origin frame its
+parent's <iframe> element. localhost is cross-origin to the 127.0.0.1 test
+page, 127.0.0.1 is same-origin; each child posts back what it read.
+-->
+
+<script id="frame_element_cross_origin" type=module>
+{
+  const state = await testing.async();
+  const ALT_BASE = testing.BASE_URL.replace('127.0.0.1', 'localhost');
+  const ALT_ORIGIN = testing.ORIGIN.replace('127.0.0.1', 'localhost');
+
+  function loadAndAwait(id, src, expectedOrigin) {
+    return new Promise((resolve) => {
+      const iframe = document.createElement('iframe');
+      const onmsg = (e) => {
+        if (e.origin !== expectedOrigin) return;
+        window.removeEventListener('message', onmsg);
+        resolve(e.data);
+      };
+      window.addEventListener('message', onmsg);
+      iframe.id = id;
+      iframe.src = src;
+      document.documentElement.appendChild(iframe);
+    });
+  }
+
+  const cross = await loadAndAwait('cross', ALT_BASE + 'frames/support/frame_element_to_parent.html', ALT_ORIGIN);
+  const same = await loadAndAwait('same', testing.BASE_URL + 'frames/support/frame_element_to_parent.html', testing.ORIGIN);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(null, cross);
+    testing.expectEqual('same', same);
+  });
+}
+</script>
