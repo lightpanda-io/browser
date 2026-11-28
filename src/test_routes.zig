@@ -313,6 +313,21 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/307-echo-body")) {
+        // A 307 keeps the method and the body: /echo_body shows the body
+        // that was sent again.
+        var body_buf: [4096]u8 = undefined;
+        if (req.head.method.requestHasBody()) {
+            _ = try req.readerExpectNone(&body_buf).allocRemaining(req_allocator, .limited(body_buf.len));
+        }
+        return req.respond("", .{
+            .status = .temporary_redirect,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/echo_body" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-bad-port")) {
         return req.respond("", .{
             .status = .found,

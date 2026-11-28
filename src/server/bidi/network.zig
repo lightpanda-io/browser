@@ -333,11 +333,18 @@ fn continueRequest(cmd: *BiDi.Command) !void {
         headers = list;
     }
 
+    // In the transfer arena: the request can be sent long after the
+    // command, and sent again by a 307 or 308. A string value is a slice of
+    // the message, freed after the command.
     var body: ?[]const u8 = null;
     if (p.body) |b| {
-        body = b.decode(arena) catch |err| switch (err) {
+        const decoded = b.decode(arena) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return cmd.sendError("invalid argument", "invalid body"),
+        };
+        body = switch (b.type) {
+            .string => try arena.dupe(u8, decoded),
+            .base64 => decoded,
         };
     }
 
@@ -1290,6 +1297,29 @@ test "bidi.network: continueRequest changes the request" {
     try std.testing.expectEqualStrings("a=1; b=2", cookie.?);
 }
 
+test "bidi.network: continueRequest body outlives the command" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    _ = try startInterceptedOn(&ctx, context_id, .{"network"}, "bidi/network_intercept_post.html", "/307-echo-body");
+
+    // The escape makes the JSON parser decode the value into the message
+    // arena, and not slice the test's message, which is never freed.
+    const request = try blockedRequestIdOf(&ctx, "/307-echo-body");
+    try ctx.processMessage(.{ .id = 3, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .body = .{ .type = "string", .value = "changed\tbody" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    // Free the message's memory, as the end of a dispatch can.
+    _ = ctx.bidi().message_arena.reset(.free_all);
+    try ctx.wait();
+
+    // The 307 sent the body again, long after the command.
+    try expectResult(&ctx, context_id, "changed\tbody");
+}
+
 test "bidi.network: failRequest" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1382,10 +1412,15 @@ const echo_url = "http://127.0.0.1:9582/echo-x-hop";
 // network_intercept.html fixture until its fetch is blocked. Returns the
 // intercept id.
 fn startIntercepted(ctx: *testing.TestContext, context_id: []const u8, events: anytype) ![]const u8 {
+    return startInterceptedOn(ctx, context_id, events, "bidi/network_intercept.html", "/echo-x-hop");
+}
+
+// startIntercepted, for the request to `pathname` that `fixture` makes.
+fn startInterceptedOn(ctx: *testing.TestContext, context_id: []const u8, events: anytype, comptime fixture: []const u8, pathname: []const u8) ![]const u8 {
     try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = events } });
     try ctx.processMessage(.{ .id = 2, .method = "network.addIntercept", .params = .{
         .phases = .{"beforeRequestSent"},
-        .urlPatterns = .{.{ .type = "pattern", .pathname = "/echo-x-hop" }},
+        .urlPatterns = .{.{ .type = "pattern", .pathname = pathname }},
     } });
     const bidi = ctx.bidi();
     const intercept = try testing.arena.dupe(u8, &bidi.intercepts.items[0].id);
@@ -1396,7 +1431,7 @@ fn startIntercepted(ctx: *testing.TestContext, context_id: []const u8, events: a
         .method = "browsingContext.navigate",
         .params = .{
             .context = context_id,
-            .url = testing.test_server ++ "bidi/network_intercept.html",
+            .url = testing.test_server ++ fixture,
             .wait = "none",
         },
     });
@@ -1413,7 +1448,11 @@ fn startIntercepted(ctx: *testing.TestContext, context_id: []const u8, events: a
 
 // The request id of the blocked beforeRequestSent event.
 fn blockedRequestId(ctx: *testing.TestContext) ![]const u8 {
-    const event = (try findEvent(ctx, "network.beforeRequestSent", "/echo-x-hop")).object;
+    return blockedRequestIdOf(ctx, "/echo-x-hop");
+}
+
+fn blockedRequestIdOf(ctx: *testing.TestContext, suffix: []const u8) ![]const u8 {
+    const event = (try findEvent(ctx, "network.beforeRequestSent", suffix)).object;
     try testing.expect(event.get("isBlocked").?.bool);
     return event.get("request").?.object.get("request").?.string;
 }

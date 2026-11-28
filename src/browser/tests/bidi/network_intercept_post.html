@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>bidi network intercept post</title>
+<script>
+  window.result = 'pending';
+  fetch('/307-echo-body', {method: 'POST', body: 'original'}).then(
+    (res) => res.text().then((text) => { window.result = text; }),
+    (err) => { window.result = 'error: ' + err.name; },
+  );
+</script>
