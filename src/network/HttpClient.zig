@@ -1757,12 +1757,13 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 }
 
 // Predicate for Inbox.popIf during sync_wait drains. Always allows
-// ping/close/disconnect (control frames must be observed). CDP data
-// messages are filtered: only the four Fetch interception methods
-// are safe to dispatch from inside a JS callback (they mutate
-// transfer state via the interception gate; they don't touch page /
-// session / V8 state). The check is exact on the parsed `method`
-// field — no substring matching against raw JSON.
+// ping/close/disconnect (control frames must be observed). CDP and BiDi
+// data messages are filtered: only the Fetch interception methods, and
+// BiDi's network.continueRequest / network.failRequest, are safe to
+// dispatch from inside a JS callback (they mutate transfer state via the
+// interception gate; they don't touch page / session / V8 state). The
+// check is exact on the parsed `method` field — no substring matching
+// against raw JSON.
 //
 // Every method listed here must be safe to dispatch with
 // JS on the stack — meaning it must NO reach any other code
@@ -1772,9 +1773,9 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .ping, .close, .disconnect, .quit, .link => true,
         .cdp => |c| isFetchInterceptionMethod(c.input.method),
-        // BiDi has no request interception yet, so nothing it can send is
-        // safe to dispatch from inside a JS callback.
-        .bidi, .bidi_http => false,
+        .bidi => |b| isBidiInterceptionMethod(if (b.input) |input| input.method else null),
+        // HTTP WebDriver has no request interception.
+        .bidi_http => false,
     };
 }
 
@@ -1794,6 +1795,13 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
         std.mem.eql(u8, method, "Fetch.continueWithAuth");
 }
 
+// The BiDi network commands that release a blocked request.
+fn isBidiInterceptionMethod(method_: ?[]const u8) bool {
+    const method = method_ orelse return false;
+    return std.mem.eql(u8, method, "network.continueRequest") or
+        std.mem.eql(u8, method, "network.failRequest");
+}
+
 // True for inbox messages that mean "this page/connection is going away".
 // syncRequest uses this to bail out of a blocking-script wait promptly
 // rather than holding the worker for the per-request timeout while a
@@ -1803,8 +1811,9 @@ fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
         .close, .disconnect, .quit => true,
         .ping, .link, .bidi_http => false,
         .cdp => |c| isTeardownMethod(c.input.method),
-        // Frames aren't parsed on the Network thread for BiDi, so we
-        // can't spot a teardown command without re-parsing here.
+        // TODO: BiDi's teardown commands (browsingContext.close,
+        // session.end, browser.close) could interrupt the wait too, now
+        // that input.method is parsed on the Network thread.
         .bidi => false,
     };
 }
@@ -5271,6 +5280,35 @@ test "HttpClient: allowDuringSyncWait denies non-Fetch CDP methods" {
         };
         try testing.expect(!allowDuringSyncWait(&msg));
     }
+}
+
+test "HttpClient: allowDuringSyncWait allows only the BiDi interception methods" {
+    const test_arena = try testing.test_app.arena_pool.acquire(.tiny, "HttpClient test");
+    defer test_arena.release();
+
+    var raw_buf: [16]u8 = undefined;
+
+    const cases = [_]struct { ?[]const u8, bool }{
+        .{ "network.continueRequest", true },
+        .{ "network.failRequest", true },
+        .{ "network.addIntercept", false },
+        .{ "script.evaluate", false },
+        .{ null, false },
+    };
+    inline for (cases) |case| {
+        var msg = Inbox.Message{
+            .arena = test_arena,
+            .payload = .{ .bidi = .{ .raw = &raw_buf, .input = .{ .id = 1, .method = case[0] } } },
+        };
+        try testing.expectEqual(case[1], allowDuringSyncWait(&msg));
+    }
+
+    // A frame that isn't valid JSON.
+    var msg = Inbox.Message{
+        .arena = test_arena,
+        .payload = .{ .bidi = .{ .raw = &raw_buf, .input = null } },
+    };
+    try testing.expectEqual(false, allowDuringSyncWait(&msg));
 }
 
 test "HttpClient: isSyncWaitInterrupt matches teardown methods, close and disconnect" {

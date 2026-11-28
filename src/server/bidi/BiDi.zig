@@ -96,6 +96,11 @@ preload_scripts: std.ArrayList(script.PreloadScript) = .empty,
 // network.addIntercept registrations: the spec's intercept map.
 intercepts: std.ArrayList(@import("network.zig").Intercept) = .empty,
 
+// The requests an intercept blocks, waiting for a network command: the
+// spec's blocked request map. Transfer id (the BiDi request id) to the
+// phase it's blocked in.
+blocked_requests: std.AutoHashMapUnmanaged(u32, @import("network.zig").InterceptPhase) = .empty,
+
 // How many messages are being dispatched. More than 1 when a message is
 // dispatched during a sync wait (a blocking script or a sync XHR waiting for
 // network.continueRequest), from inside the command that runs the script.
@@ -231,6 +236,7 @@ pub fn deinit(self: *BiDi) void {
     self.pending.deinit(allocator);
     self.execute_pending.deinit(allocator);
     self.input_state.deinit(allocator);
+    self.blocked_requests.deinit(allocator);
 
     self.node_registry.deinit();
     self.notification.deinit();

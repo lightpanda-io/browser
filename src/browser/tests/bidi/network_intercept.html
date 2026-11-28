@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>bidi network intercept</title>
+<script>
+  window.result = 'pending';
+  fetch('/echo-x-hop').then(
+    (res) => res.text().then((text) => { window.result = text; }),
+    (err) => { window.result = 'error: ' + err.name; },
+  );
+</script>

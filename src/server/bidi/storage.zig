@@ -157,11 +157,11 @@ fn sameSite(cookie: *const Cookie) SameSite {
 }
 
 // network.BytesValue
-const BytesValue = struct {
+pub const BytesValue = struct {
     type: enum { string, base64 },
     value: []const u8,
 
-    fn decode(self: BytesValue, arena: Allocator) ![]const u8 {
+    pub fn decode(self: BytesValue, arena: Allocator) ![]const u8 {
         switch (self.type) {
             .string => return self.value,
             .base64 => {

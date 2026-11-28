@@ -26,6 +26,8 @@ const Notification = @import("../../Notification.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 const Cookie = @import("../../browser/webapi/storage/Cookie.zig");
 const Mime = @import("../../browser/Mime.zig");
+const URL = @import("../../browser/URL.zig");
+const http = @import("../../network/http.zig");
 
 const BiDi = @import("BiDi.zig");
 const storage = @import("storage.zig");
@@ -40,11 +42,15 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     const command = std.meta.stringToEnum(enum {
         addIntercept,
         removeIntercept,
+        continueRequest,
+        failRequest,
     }, action) orelse return error.UnknownCommand;
 
     switch (command) {
         .addIntercept => return addIntercept(cmd),
         .removeIntercept => return removeIntercept(cmd),
+        .continueRequest => return continueRequest(cmd),
+        .failRequest => return failRequest(cmd),
     }
 }
 
@@ -158,6 +164,214 @@ fn removeIntercept(cmd: *BiDi.Command) !void {
     return cmd.sendError("no such intercept", "unknown intercept");
 }
 
+// The spec's "get the network intercepts": the ids of the intercepts that
+// block the request in `phase`, in the order they were added. They point
+// into bidi.intercepts: send them before an intercept can be added or
+// removed.
+fn getIntercepts(bidi: *const BiDi, phase: InterceptPhase, transfer: *Transfer) ![]const []const u8 {
+    if (bidi.intercepts.items.len == 0) {
+        return &.{};
+    }
+    const ctx = topLevelContext(bidi, transfer);
+    const context: ?[]const u8 = if (ctx) |c| &c.id else null;
+    const url: UrlPattern.Components = .init(transfer.req.url);
+
+    var ids: std.ArrayList([]const u8) = .empty;
+    for (bidi.intercepts.items) |*intercept| {
+        if (intercept.matches(phase, context, &url)) {
+            try ids.append(transfer.arena.allocator(), &intercept.id);
+        }
+    }
+    return ids.items;
+}
+
+// A request in the spec's blocked request map, and the phase it's blocked
+// in.
+const Blocked = struct {
+    transfer: *Transfer,
+    phase: InterceptPhase,
+};
+
+// The blocked request `request_id` names. Answers `no such request` and
+// returns null when it isn't blocked, or no longer is: a blocked transfer
+// can be aborted from elsewhere (the page navigates away, the session
+// ends).
+fn blockedRequest(cmd: *BiDi.Command, request_id: []const u8) !?Blocked {
+    const bidi = cmd.bidi;
+    const id = std.fmt.parseInt(u32, request_id, 10) catch {
+        try cmd.sendError("no such request", "unknown request");
+        return null;
+    };
+    const phase = bidi.blocked_requests.get(id) orelse {
+        try cmd.sendError("no such request", "unknown request");
+        return null;
+    };
+
+    const transfer = bidi.browser.http_client.findTransfer(id) orelse {
+        _ = bidi.blocked_requests.remove(id);
+        try cmd.sendError("no such request", "unknown request");
+        return null;
+    };
+    const parked: @TypeOf(transfer.state.parked) = switch (phase) {
+        .beforeRequestSent => .intercept_request,
+        .responseStarted => .intercept_response,
+        .authRequired => .intercept_auth,
+    };
+    if (transfer.state != .parked or transfer.state.parked != parked) {
+        _ = bidi.blocked_requests.remove(id);
+        try cmd.sendError("no such request", "unknown request");
+        return null;
+    }
+    return .{ .transfer = transfer, .phase = phase };
+}
+
+// network.CookieHeader
+const CookieHeader = struct {
+    name: []const u8,
+    value: storage.BytesValue,
+};
+
+// network.Header, as the client sends it.
+const HeaderInput = struct {
+    name: []const u8,
+    value: storage.BytesValue,
+};
+
+// The spec's "deserialize header". Null when it isn't a valid header.
+fn deserializeHeader(arena: std.mem.Allocator, input: HeaderInput) !?http.Header {
+    const value = try input.value.decode(arena);
+    if (!Mime.isHttpToken(input.name)) {
+        return null;
+    }
+    // A header value has no leading or trailing whitespace, and no NUL, CR
+    // or LF.
+    if (!Mime.isHttpHeaderValue(value) or std.mem.trim(u8, value, &Mime.HTTP_WHITESPACE).len != value.len) {
+        return null;
+    }
+    return .{ .name = input.name, .value = value };
+}
+
+fn continueRequest(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        request: []const u8,
+        body: ?storage.BytesValue = null,
+        cookies: ?[]const CookieHeader = null,
+        headers: ?[]const HeaderInput = null,
+        method: ?[]const u8 = null,
+        url: ?[]const u8 = null,
+    });
+
+    const blocked = (try blockedRequest(cmd, p.request)) orelse return;
+    if (blocked.phase != .beforeRequestSent) {
+        return cmd.sendError("invalid argument", "request is not blocked in beforeRequestSent");
+    }
+    const transfer = blocked.transfer;
+    const arena = transfer.arena.allocator();
+
+    // Everything is checked before the request changes: on an error, it
+    // stays blocked as it was.
+
+    // Lightpanda only knows the methods of http.Method: any other valid
+    // method is refused too.
+    var method: ?http.Method = null;
+    if (p.method) |m| {
+        method = std.meta.stringToEnum(http.Method, m) orelse {
+            return cmd.sendError("invalid argument", "unsupported method");
+        };
+    }
+
+    var url: ?[:0]const u8 = null;
+    if (p.url) |u| {
+        url = URL.resolve(arena, "", u, .{}) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return cmd.sendError("invalid argument", "invalid url"),
+        };
+    }
+
+    // The spec replaces the whole header list with `headers`, then the
+    // Cookie header with `cookies`. Without `headers`, the cookies go into
+    // the request's current headers.
+    var headers: ?std.ArrayList(http.Header) = null;
+    if (p.headers) |inputs| {
+        var list: std.ArrayList(http.Header) = try .initCapacity(arena, inputs.len + 1);
+        for (inputs) |input| {
+            const header = (try deserializeHeader(arena, input)) orelse {
+                return cmd.sendError("invalid argument", "invalid header");
+            };
+            list.appendAssumeCapacity(header);
+        }
+        headers = list;
+    }
+
+    if (p.cookies) |cookies| {
+        var list = headers orelse blk: {
+            var current: std.ArrayList(http.Header) = try .initCapacity(arena, transfer.req_headers.items.len + 1);
+            for (transfer.req_headers.items) |hdr| {
+                current.appendAssumeCapacity(.{ .name = hdr.name, .value = hdr.value });
+            }
+            break :blk current;
+        };
+
+        var cookie_header: std.Io.Writer.Allocating = .init(arena);
+        for (cookies, 0..) |cookie, i| {
+            if (i > 0) try cookie_header.writer.writeAll("; ");
+            try cookie_header.writer.print("{s}={s}", .{ cookie.name, try cookie.value.decode(arena) });
+        }
+        const value = cookie_header.written();
+
+        var found = false;
+        for (list.items) |*hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "Cookie")) {
+                hdr.value = value;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try list.append(arena, .{ .name = "Cookie", .value = value });
+        }
+        headers = list;
+    }
+
+    var body: ?[]const u8 = null;
+    if (p.body) |b| {
+        body = b.decode(arena) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return cmd.sendError("invalid argument", "invalid body"),
+        };
+    }
+
+    const req = &transfer.req;
+    if (method) |m| req.method = m;
+    if (url) |u| req.url = u;
+    if (body) |b| req.body = b;
+    // Puts the request's headers back if it's redirected, as for CDP.
+    // Like Chrome, the jar's cookies are still added when the client sends
+    // no Cookie header.
+    if (headers) |list| try transfer.replaceRequestHeaders(list.items);
+
+    _ = cmd.bidi.blocked_requests.remove(transfer.id);
+    try cmd.bidi.browser.http_client.continueIntercepted(transfer);
+    return cmd.sendResult(struct {}{});
+}
+
+fn failRequest(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        request: []const u8,
+    });
+
+    const blocked = (try blockedRequest(cmd, p.request)) orelse return;
+    if (blocked.phase == .authRequired) {
+        return cmd.sendError("invalid argument", "request is blocked in authRequired");
+    }
+
+    _ = cmd.bidi.blocked_requests.remove(blocked.transfer.id);
+    // BiDi has no error reason: error.Failed is net::ERR_FAILED in the
+    // fetchError that follows. Aborted after the answer, as for CDP.
+    defer blocked.transfer.abortParked(error.Failed);
+    return cmd.sendResult(struct {}{});
+}
+
 // The request's top-level browsing context. Child frames have no BiDi
 // context of their own yet: their requests are reported on the top-level
 // context.
@@ -170,6 +384,7 @@ fn topLevelContext(bidi: *const BiDi, transfer: *const Transfer) ?*const browsin
 
 pub fn registerNotifications(bidi: *BiDi) !void {
     try bidi.notification.register(.http_request_start, bidi, onHttpRequestStart);
+    try bidi.notification.register(.http_request_intercept, bidi, onHttpRequestIntercept);
     try bidi.notification.register(.http_response_header_done, bidi, onHttpResponseHeaderDone);
     try bidi.notification.register(.http_request_done, bidi, onHttpRequestDone);
     try bidi.notification.register(.http_request_fail, bidi, onHttpRequestFail);
@@ -196,14 +411,35 @@ fn onHttpRequestStart(ptr: *anyopaque, msg: *const Notification.RequestStart) !v
         try sendResponseEvent(bidi, "network.responseStarted", transfer, .redirect, .started);
         try sendResponseEvent(bidi, "network.responseCompleted", transfer, .redirect, .completed);
     }
+    // beforeRequestSent is sent by onHttpRequestIntercept, which always
+    // comes right after: it can block the request.
+}
+
+// Sends beforeRequestSent, and blocks the request when an intercept
+// matches it. As the spec says, an intercept only blocks a request when the
+// session is subscribed to the phase's event.
+fn onHttpRequestIntercept(ptr: *anyopaque, msg: *const Notification.RequestIntercept) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    const transfer = msg.transfer;
 
     const method = "network.beforeRequestSent";
     if (!bidi.subscribed(method)) {
         return;
     }
+
     // The spec's "get the initiator" no longer sets anything, so the event
     // has no `initiator`.
-    return bidi.sendEvent(method, BaseParameters{ .bidi = bidi, .transfer = transfer });
+    const intercepts = try getIntercepts(bidi, .beforeRequestSent, transfer);
+    if (intercepts.len == 0) {
+        return bidi.sendEvent(method, BaseParameters{ .bidi = bidi, .transfer = transfer });
+    }
+
+    try bidi.blocked_requests.put(bidi.app.allocator, transfer.id, .beforeRequestSent);
+    errdefer _ = bidi.blocked_requests.remove(transfer.id);
+    try bidi.sendEvent(method, BaseParameters{ .bidi = bidi, .transfer = transfer, .intercepts = intercepts });
+
+    // Waits for continueRequest or failRequest.
+    msg.wait_for_interception.* = true;
 }
 
 // Sent when the response is delivered. Lightpanda has the whole body by
@@ -223,6 +459,10 @@ fn onHttpRequestDone(ptr: *anyopaque, msg: *const Notification.RequestDone) !voi
 // included, as chromium-bidi does.
 fn onHttpRequestFail(ptr: *anyopaque, msg: *const Notification.RequestFail) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    // A blocked request can be aborted from elsewhere: it's no longer
+    // blocked.
+    _ = bidi.blocked_requests.remove(msg.transfer.id);
+
     const method = "network.fetchError";
     if (!bidi.subscribed(method)) {
         return;
@@ -261,6 +501,8 @@ const Hop = enum {
 const BaseParameters = struct {
     bidi: *const BiDi,
     transfer: *Transfer,
+    // The intercepts that block the request, null when it isn't blocked.
+    intercepts: ?[]const []const u8 = null,
     hop: Hop = .current,
     response: ?ResponseData = null,
     error_text: ?[]const u8 = null,
@@ -277,7 +519,11 @@ const BaseParameters = struct {
         try jws.write(if (ctx) |c| &c.id else null);
 
         try jws.objectField("isBlocked");
-        try jws.write(false);
+        try jws.write(self.intercepts != null);
+        if (self.intercepts) |intercepts| {
+            try jws.objectField("intercepts");
+            try jws.write(intercepts);
+        }
 
         // Only the request that loads the top-level document belongs to a
         // navigation.
@@ -964,6 +1210,227 @@ test "bidi.network: unknown command" {
 }
 
 // Navigates to a fixture under testing.test_server.
+test "bidi.network: beforeRequestSent blocks, continueRequest resumes" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    const intercept = try startIntercepted(&ctx, context_id, .{"network"});
+
+    // The fetch is blocked, the document isn't.
+    try ctx.expectSentEvent("network.beforeRequestSent", .{
+        .context = context_id,
+        .isBlocked = true,
+        .intercepts = .{intercept},
+        .request = .{ .url = echo_url, .method = "GET" },
+    });
+    try ctx.expectSentEvent("network.beforeRequestSent", .{
+        .isBlocked = false,
+        .request = .{ .url = testing.test_server ++ "bidi/network_intercept.html" },
+    });
+    const document = (try findEvent(&ctx, "network.beforeRequestSent", "bidi/network_intercept.html")).object;
+    try testing.expect(document.get("intercepts") == null);
+    try testing.expectEqual(1, ctx.bidi().blocked_requests.count());
+
+    const request = try blockedRequestId(&ctx);
+    try ctx.processMessage(.{ .id = 3, .method = "network.continueRequest", .params = .{ .request = request } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.wait();
+
+    try expectResult(&ctx, context_id, "NONE");
+    try ctx.expectSentEvent("network.responseCompleted", .{
+        .isBlocked = false,
+        .request = .{ .request = request, .url = echo_url },
+        .response = .{ .status = 200 },
+    });
+    try testing.expectEqual(0, ctx.bidi().blocked_requests.count());
+
+    // It's no longer blocked.
+    try ctx.processMessage(.{ .id = 4, .method = "network.continueRequest", .params = .{ .request = request } });
+    try ctx.expectSentError("no such request", "unknown request", .{ .id = 4 });
+}
+
+test "bidi.network: continueRequest changes the request" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    _ = try startIntercepted(&ctx, context_id, .{"network"});
+
+    const request = try blockedRequestId(&ctx);
+    const url = "http://127.0.0.1:9582/echo-authorization";
+    try ctx.processMessage(.{ .id = 3, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .url = url,
+        .method = "PUT",
+        .headers = .{.{ .name = "Authorization", .value = .{ .type = "string", .value = "bidi" } }},
+        .cookies = .{
+            .{ .name = "a", .value = .{ .type = "string", .value = "1" } },
+            .{ .name = "b", .value = .{ .type = "base64", .value = "Mg==" } },
+        },
+        .body = .{ .type = "string", .value = "abc" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.wait();
+
+    // The server got the new url and header.
+    try expectResult(&ctx, context_id, "bidi");
+    try ctx.expectSentEvent("network.responseCompleted", .{
+        .request = .{ .request = request, .url = url, .method = "PUT", .bodySize = 3 },
+        .response = .{ .url = url, .status = 200 },
+    });
+
+    const completed = (try findEvent(&ctx, "network.responseCompleted", "/echo-authorization")).object;
+    var cookie: ?[]const u8 = null;
+    for (completed.get("request").?.object.get("headers").?.array.items) |header| {
+        if (std.mem.eql(u8, header.object.get("name").?.string, "Cookie")) {
+            cookie = header.object.get("value").?.object.get("value").?.string;
+        }
+    }
+    try std.testing.expectEqualStrings("a=1; b=2", cookie.?);
+}
+
+test "bidi.network: failRequest" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    _ = try startIntercepted(&ctx, context_id, .{"network"});
+
+    const request = try blockedRequestId(&ctx);
+    try ctx.processMessage(.{ .id = 3, .method = "network.failRequest", .params = .{ .request = request } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.wait();
+
+    try expectResult(&ctx, context_id, "error: TypeError");
+    try ctx.expectSentEvent("network.fetchError", .{
+        .isBlocked = false,
+        .errorText = "net::ERR_FAILED",
+        .request = .{ .request = request, .url = echo_url },
+    });
+    try testing.expectEqual(0, ctx.bidi().blocked_requests.count());
+
+    try ctx.processMessage(.{ .id = 4, .method = "network.failRequest", .params = .{ .request = request } });
+    try ctx.expectSentError("no such request", "unknown request", .{ .id = 4 });
+}
+
+test "bidi.network: continueRequest and failRequest errors" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    _ = try startIntercepted(&ctx, context_id, .{"network"});
+    const request = try blockedRequestId(&ctx);
+
+    try ctx.processMessage(.{ .id = 10, .method = "network.continueRequest", .params = .{ .request = "999999" } });
+    try ctx.expectSentError("no such request", "unknown request", .{ .id = 10 });
+    try ctx.processMessage(.{ .id = 11, .method = "network.continueRequest", .params = .{ .request = "nope" } });
+    try ctx.expectSentError("no such request", "unknown request", .{ .id = 11 });
+    try ctx.processMessage(.{ .id = 12, .method = "network.failRequest", .params = .{ .request = "999999" } });
+    try ctx.expectSentError("no such request", "unknown request", .{ .id = 12 });
+
+    try ctx.processMessage(.{ .id = 13, .method = "network.continueRequest", .params = .{ .request = request, .method = "FOO" } });
+    try ctx.expectSentError("invalid argument", "unsupported method", .{ .id = 13 });
+    try ctx.processMessage(.{ .id = 14, .method = "network.continueRequest", .params = .{ .request = request, .url = "not a url" } });
+    try ctx.expectSentError("invalid argument", "invalid url", .{ .id = 14 });
+    try ctx.processMessage(.{ .id = 15, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .headers = .{.{ .name = "a b", .value = .{ .type = "string", .value = "1" } }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid header", .{ .id = 15 });
+    try ctx.processMessage(.{ .id = 16, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .headers = .{.{ .name = "a", .value = .{ .type = "string", .value = "1\r\nb: 2" } }},
+    } });
+    try ctx.expectSentError("invalid argument", "invalid header", .{ .id = 16 });
+    try ctx.processMessage(.{ .id = 17, .method = "network.continueRequest", .params = .{
+        .request = request,
+        .body = .{ .type = "base64", .value = "!!" },
+    } });
+    try ctx.expectSentError("invalid argument", "invalid body", .{ .id = 17 });
+    try ctx.processMessage(.{ .id = 18, .method = "network.continueRequest", .params = .{} });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 18 });
+
+    // None of them released it, or changed it.
+    try testing.expectEqual(1, ctx.bidi().blocked_requests.count());
+    try ctx.processMessage(.{ .id = 19, .method = "network.continueRequest", .params = .{ .request = request } });
+    try ctx.expectSentResult(null, .{ .id = 19 });
+    try ctx.wait();
+    try expectResult(&ctx, context_id, "NONE");
+}
+
+test "bidi.network: an intercept doesn't block without a beforeRequestSent subscription" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = .{"network.responseCompleted"} } });
+    try ctx.processMessage(.{ .id = 2, .method = "network.addIntercept", .params = .{ .phases = .{"beforeRequestSent"} } });
+    try navigate(&ctx, context_id, "bidi/network_intercept.html");
+
+    try expectResult(&ctx, context_id, "NONE");
+    try testing.expectEqual(0, ctx.bidi().blocked_requests.count());
+    try ctx.expectSentEvent("network.responseCompleted", .{
+        .isBlocked = false,
+        .request = .{ .url = echo_url },
+    });
+}
+
+const echo_url = "http://127.0.0.1:9582/echo-x-hop";
+
+// Subscribes to `events`, adds an intercept for echo_url, and loads the
+// network_intercept.html fixture until its fetch is blocked. Returns the
+// intercept id.
+fn startIntercepted(ctx: *testing.TestContext, context_id: []const u8, events: anytype) ![]const u8 {
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = events } });
+    try ctx.processMessage(.{ .id = 2, .method = "network.addIntercept", .params = .{
+        .phases = .{"beforeRequestSent"},
+        .urlPatterns = .{.{ .type = "pattern", .pathname = "/echo-x-hop" }},
+    } });
+    const bidi = ctx.bidi();
+    const intercept = try testing.arena.dupe(u8, &bidi.intercepts.items[0].id);
+    try ctx.expectSentResult(.{ .intercept = intercept }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 100,
+        .method = "browsingContext.navigate",
+        .params = .{
+            .context = context_id,
+            .url = testing.test_server ++ "bidi/network_intercept.html",
+            .wait = "none",
+        },
+    });
+
+    // Runs the page until the fetch is blocked.
+    const frame_id = bidi.browsing_context.?.frame_id;
+    var runner = bidi.user_context.session.runner(.{});
+    for (0..100) |_| {
+        if (bidi.blocked_requests.count() > 0) return intercept;
+        _ = try runner.tickForFrame(frame_id, 20, .{});
+    }
+    return error.NeverBlocked;
+}
+
+// The request id of the blocked beforeRequestSent event.
+fn blockedRequestId(ctx: *testing.TestContext) ![]const u8 {
+    const event = (try findEvent(ctx, "network.beforeRequestSent", "/echo-x-hop")).object;
+    try testing.expect(event.get("isBlocked").?.bool);
+    return event.get("request").?.object.get("request").?.string;
+}
+
+// The fixture's window.result.
+fn expectResult(ctx: *testing.TestContext, context_id: []const u8, expected: []const u8) !void {
+    try ctx.processMessage(.{ .id = 200, .method = "script.evaluate", .params = .{
+        .expression = "window.result",
+        .target = .{ .context = context_id },
+        .awaitPromise = false,
+    } });
+    try ctx.expectSentResult(.{
+        .type = "success",
+        .result = .{ .type = "string", .value = expected },
+    }, .{ .id = 200 });
+}
+
 fn navigate(ctx: *testing.TestContext, context_id: []const u8, path: []const u8) !void {
     return navigateUrl(ctx, context_id, try testing.arena.print(testing.test_server ++ "{s}", .{path}));
 }
