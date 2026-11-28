@@ -27,7 +27,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 const zenai = @import("zenai");
-const Config = lp.Config;
 const codex = @import("codex.zig");
 
 /// Wall-clock ms since the Unix epoch.
@@ -68,7 +67,7 @@ pub const TokenSet = struct {
 /// Per-provider login/refresh implementations; OAuth endpoints and client ids
 /// live in the implementing file.
 pub const Descriptor = struct {
-    provider: Config.AiProvider,
+    provider: zenai.provider.Tag,
     /// Provider key in the models.dev catalog (subscription backends have no
     /// entry of their own; codex's models are listed under "openai").
     models_dev_id: []const u8,
@@ -83,7 +82,7 @@ pub const Descriptor = struct {
 
 pub const registry = [_]*const Descriptor{&codex.descriptor};
 
-pub fn descriptorFor(provider: Config.AiProvider) ?*const Descriptor {
+pub fn descriptorFor(provider: zenai.provider.Tag) ?*const Descriptor {
     for (registry) |d| if (d.provider == provider) return d;
     return null;
 }
@@ -105,20 +104,7 @@ fn storePath(arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
 
 /// The parsed store; empty on any failure (absent, unreadable, malformed).
 fn readStoreFile(arena: std.mem.Allocator, path: []const u8) std.json.ArrayHashMap(StoredToken) {
-    const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024)) catch return .{};
-    return std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch .{};
-}
-
-/// Serialize `value` as JSON to `path` via temp+rename, so a failed write
-/// can't corrupt an existing file.
-pub fn writeJsonAtomic(path: []const u8, value: anytype, permissions: std.Io.File.Permissions) !void {
-    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .permissions = permissions, .replace = true });
-    defer af.deinit(lp.io);
-    var buf: [1024]u8 = undefined;
-    var w = af.file.writer(lp.io, &buf);
-    try std.json.Stringify.value(value, .{}, &w.interface);
-    try w.end();
-    try af.replace(lp.io);
+    return zenai.json.readFile(std.json.ArrayHashMap(StoredToken), lp.io, arena, path, 64 * 1024) orelse .{};
 }
 
 fn storeLoadAt(allocator: std.mem.Allocator, dir: []const u8, id: []const u8) !?TokenSet {
@@ -140,14 +126,14 @@ fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens
         .account_id = tokens.account_id,
     });
     // Secrets file: owner-only perms.
-    try writeJsonAtomic(path, map, .fromMode(0o600));
+    try zenai.json.writeFileAtomic(lp.io, path, map, .fromMode(0o600));
 }
 
 fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) !void {
     const path = try storePath(arena, dir);
     var map = readStoreFile(arena, path);
     if (!map.map.swapRemove(id)) return;
-    try writeJsonAtomic(path, map, .fromMode(0o600));
+    try zenai.json.writeFileAtomic(lp.io, path, map, .fromMode(0o600));
 }
 
 /// Remove the stored token for `id`. No-op when absent.
@@ -219,7 +205,7 @@ pub const Session = struct {
 };
 
 /// Load a stored session for `provider`, or null when the user hasn't logged in.
-pub fn sessionFor(allocator: std.mem.Allocator, provider: Config.AiProvider) !?Session {
+pub fn sessionFor(allocator: std.mem.Allocator, provider: zenai.provider.Tag) !?Session {
     const desc = descriptorFor(provider) orelse return null;
     const tokens = (try storeLoad(allocator, @tagName(provider))) orelse return null;
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
@@ -242,7 +228,7 @@ pub fn logout(allocator: std.mem.Allocator, desc: *const Descriptor) !void {
 /// Is a stored credential available for `provider` — unexpired, or refreshable
 /// (`ensureFresh` runs before the first request)? Lets the picker offer the
 /// subscription without an API-key env var.
-pub fn subscriptionAvailable(provider: Config.AiProvider) bool {
+pub fn subscriptionAvailable(provider: zenai.provider.Tag) bool {
     if (descriptorFor(provider) == null) return false;
     var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena.deinit();

@@ -26,6 +26,7 @@ comptime {
 pub const log = @import("log.zig");
 pub const mcp = @import("mcp.zig");
 pub const App = @import("App.zig");
+pub const Cloud = @import("Cloud.zig");
 pub const Arena = @import("Arena.zig");
 pub const Regex = @import("Regex.zig");
 pub const Config = @import("Config.zig");

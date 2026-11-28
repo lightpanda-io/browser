@@ -28,6 +28,7 @@ const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const screenshot = @import("browser/screenshot.zig");
 const Sanitizer = @import("browser/webapi/Sanitizer.zig");
+const Cloud = @import("Cloud.zig");
 
 const Network = @import("network/Network.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
@@ -63,9 +64,14 @@ http_client: std.http.Client,
 
 /// Clients for asking a decision model (Gemini or TypeSafe Jev), pooled so
 /// concurrent calls each get their own and keep its connection warm. It reads
-/// the provider and its API key from the environment on every ask. Usable
+/// the provider and its API key from the environment on every ask, unless
+/// LIGHTPANDA_TOKEN routes it through the Lightpanda Cloud gateway. Usable
 /// from any thread: it touches no browser state.
 decisions: zenai.decisions.Pool,
+
+/// Lightpanda Cloud as its gateway describes it; null without
+/// LIGHTPANDA_TOKEN or when the gateway can't be reached. Routes `decisions`.
+cloud: ?Cloud = null,
 
 /// Picks the decision model's provider, "gemini" or "typesafe". Unset,
 /// TypeSafe answers: a Google key alone never sends page content to Gemini.
@@ -119,6 +125,8 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
             .http_client = &app.http_client,
         }),
     };
+    errdefer app.decisions.deinit();
+
     try app.watchdog.start();
     errdefer app.watchdog.deinit();
 
@@ -126,6 +134,15 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     errdefer app.network.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);
+    // After the app dir exists, so the gateway config cache can be written.
+    if (!lp.IS_TEST) {
+        app.cloud = Cloud.load(allocator, app.app_dir_path) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.GatewayUnavailable => null,
+        };
+    }
+    errdefer if (app.cloud) |*c| c.deinit();
+    if (app.cloud) |*c| try c.routeDecisions(&app.decisions, decision_provider_env_var_name);
 
     app.telemetry = try Telemetry.init(app);
     errdefer app.telemetry.deinit(allocator);
@@ -136,6 +153,11 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.default_sanitizer = try .initDefault(&app.arena_pool);
 
     return app;
+}
+
+/// `cloud`, for code that may run without an `App`.
+pub fn loadedCloud(self: *const App) ?*const Cloud {
+    return if (self.cloud) |*c| c else null;
 }
 
 pub fn deinit(self: *App) void {
@@ -158,6 +180,7 @@ pub fn deinit(self: *App) void {
     self.arena_pool.deinit();
 
     self.decisions.deinit();
+    if (self.cloud) |*c| c.deinit();
     self.http_client.deinit();
 
     allocator.destroy(self);
