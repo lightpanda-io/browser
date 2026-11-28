@@ -1822,6 +1822,7 @@ fn ownValuesChanged(self: *StyleManager, el: *Element, groups: Memos) ?OwnChange
                 .geometry => self.geometryProps(el),
                 .touch_action => self.touchActionProps(el),
                 .text => self.text.ownProps(self.arena.allocator(), el, frame),
+                .text_wrap => self.textWrapProps(el),
                 .flow => self.flowProps(el),
                 .grid => self.gridProps(el),
                 .layout, .heights => comptime unreachable,
@@ -3569,7 +3570,7 @@ pub fn ownKeepsSpaces(self: *StyleManager, el: *Element) ?bool {
     self.rebuildIfDirty() catch return null;
     if (self.text_wrap.hasRules() or el._flags.has_inline_style) {
         // Resolved: the parent's is memoized by now
-        return self.text_wrap.inheritedProps(self.arena.allocator(), el, self.frame).white_space_collapse.keepsSpaces();
+        return self.textWrapProps(el).white_space_collapse.keepsSpaces();
     }
     const ua = WhiteSpace.uaDefault(el.getTag()) orelse return null;
     return ua.collapse.keepsSpaces();
@@ -3579,14 +3580,14 @@ pub fn ownKeepsSpaces(self: *StyleManager, el: *Element) ?bool {
 // up the ancestors without the cascade, up to one with an inline style.
 fn textWrap(self: *StyleManager, el: *Element) TextWrap.Computed {
     if (self.text_wrap.hasRules()) {
-        return self.text_wrap.inheritedProps(self.arena.allocator(), el, self.frame);
+        return self.textWrapProps(el);
     }
     var own: TextWrap.Cascaded = .{};
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
         const above: TextWrap.Cascaded = if (elem._flags.has_inline_style) blk: {
             // Resolved, so it ends the walk
-            const p = self.text_wrap.inheritedProps(self.arena.allocator(), elem, self.frame);
+            const p = self.textWrapProps(elem);
             break :blk .{ .text_wrap_mode = p.text_wrap_mode, .white_space_collapse = p.white_space_collapse };
         } else blk: {
             const ua = WhiteSpace.uaDefault(elem.getTag()) orelse continue;
@@ -4817,6 +4818,10 @@ fn freshLayoutMemo(self: *StyleManager) ?*LayoutMemo {
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn visibilityProps(self: *StyleManager, el: *Element) Visibility.Computed {
     return self.visibility.inheritedProps(self.arena.allocator(), el, self.frame);
+}
+
+fn textWrapProps(self: *StyleManager, el: *Element) TextWrap.Computed {
+    return self.text_wrap.inheritedProps(self.arena.allocator(), el, self.frame);
 }
 
 /// Callers must have run rebuildIfDirty, which resets the memo.
